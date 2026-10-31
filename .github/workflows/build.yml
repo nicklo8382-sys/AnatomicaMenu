@@ -1,0 +1,53 @@
+name: Build AnatomicaMenu
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}\vcpkg
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\vcpkg-cache
+      COMMONLIB_SSE_FOLDER: ${{ github.workspace }}\CommonLibVR
+      SKYRIM_MODS_FOLDER: ${{ github.workspace }}\stage
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get CommonLibSSE-NG (CommonLibVR ng branch)
+        run: git clone --recursive --depth 1 --branch ng https://github.com/alandtse/CommonLibVR.git "$env:COMMONLIB_SSE_FOLDER"
+
+      - name: Get vcpkg
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git "$env:VCPKG_ROOT"
+          & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
+          New-Item -ItemType Directory -Force "$env:VCPKG_DEFAULT_BINARY_CACHE" | Out-Null
+          New-Item -ItemType Directory -Force "$env:SKYRIM_MODS_FOLDER" | Out-Null
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}\vcpkg-cache
+          key: vcpkg-${{ hashFiles('vcpkg.json', 'cmake/ports/**') }}
+          restore-keys: vcpkg-
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure
+        run: cmake --preset release
+
+      - name: Build
+        run: cmake --build build/release
+
+      - name: Upload plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: AnatomicaMenu
+          path: |
+            stage/**
+            build/release/*.dll
+            build/release/*.pdb
+          if-no-files-found: error
