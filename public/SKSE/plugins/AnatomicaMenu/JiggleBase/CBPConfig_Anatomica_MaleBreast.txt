@@ -1,0 +1,33 @@
+# [Anatomica jiggle preset: Chest - Normal] Anatomica - male-only breast physics (lowest jiggle)
+# Aliases are mapped for males only in CBPCMasterConfig_HIMBO.txt; females keep LBreast/RBreast.
+# Raise MaleLBreast/MaleRBreast.amplitude (0.0-1.0) for more movement.
+
+MaleLBreast.stiffness 0.01 0.01
+MaleLBreast.stiffness2 0.005 0.005
+MaleLBreast.damping 0.0175 0.0175
+MaleLBreast.maxoffset 1 1
+MaleLBreast.timetick 2.0 2.0
+MaleLBreast.linearX 1.4 0.7
+MaleLBreast.linearY 0.7 0.35
+MaleLBreast.linearZ 1.225 0.6125
+MaleLBreast.rotationalX 0.08 0.04
+MaleLBreast.rotationalY 0.10 0.05
+MaleLBreast.rotationalZ -0.12 -0.06
+MaleLBreast.timeStep 0.7 0.7
+MaleLBreast.collisionMultipler 2.0 2.0
+MaleLBreast.amplitude 0.1 0.1
+
+MaleRBreast.stiffness 0.01 0.01
+MaleRBreast.stiffness2 0.005 0.005
+MaleRBreast.damping 0.0175 0.0175
+MaleRBreast.maxoffset 1 1
+MaleRBreast.timetick 2.0 2.0
+MaleRBreast.linearX 1.4 0.7
+MaleRBreast.linearY 0.7 0.35
+MaleRBreast.linearZ 1.225 0.6125
+MaleRBreast.rotationalX 0.08 0.04
+MaleRBreast.rotationalY 0.10 0.05
+MaleRBreast.rotationalZ 0.12 0.06
+MaleRBreast.timeStep 0.7 0.7
+MaleRBreast.collisionMultipler 2.0 2.0
+MaleRBreast.amplitude 0.1 0.1

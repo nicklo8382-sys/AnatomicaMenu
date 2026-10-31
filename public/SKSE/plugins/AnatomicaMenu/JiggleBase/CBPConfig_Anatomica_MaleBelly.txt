@@ -1,0 +1,55 @@
+# [Anatomica jiggle preset: Belly - Normal] Anatomica - male-only belly jiggle at 50% of HIMBO's Belly.
+# Copied from HIMBO V5 CBPConfig_belly.txt; only amplitude changed (0.5 -> 0.25).
+# Mapped for males only in CBPCMasterConfig_HIMBO.txt. Females keep Belly.
+
+MaleBelly.stiffnessX 0.020 0.020
+MaleBelly.stiffnessY 0.020 0.020
+MaleBelly.stiffnessZ 0.020 0.020
+MaleBelly.stiffnessXRot 0.020 0.020
+MaleBelly.stiffnessYRot 0.020 0.020
+MaleBelly.stiffnessZRot 0.020 0.020
+MaleBelly.stiffness2X 0.0055 0.0055
+MaleBelly.stiffness2Y 0.0055 0.0055
+MaleBelly.stiffness2Z 0.0055 0.0055
+MaleBelly.stiffness2XRot 0.0055 0.0055
+MaleBelly.stiffness2YRot 0.0055 0.0055
+MaleBelly.stiffness2ZRot 0.0055 0.0055
+MaleBelly.dampingX 0.020 0.020
+MaleBelly.dampingY 0.020 0.020
+MaleBelly.dampingZ 0.020 0.020
+MaleBelly.dampingXRot 0.020 0.020
+MaleBelly.dampingYRot 0.020 0.020
+MaleBelly.dampingZRot 0.020 0.020
+MaleBelly.Xmaxoffset 3 3
+MaleBelly.Xminoffset -3 -3
+MaleBelly.Ymaxoffset 1 1
+MaleBelly.Yminoffset -1 -1
+MaleBelly.Zmaxoffset 3 3
+MaleBelly.Zminoffset -3 -3
+MaleBelly.XmaxoffsetRot 3 3
+MaleBelly.XminoffsetRot -3 -3
+MaleBelly.YmaxoffsetRot 1 1
+MaleBelly.YminoffsetRot -1 -1
+MaleBelly.ZmaxoffsetRot 3 3
+MaleBelly.ZminoffsetRot -3 -3
+MaleBelly.timetick 1.0 1.0
+MaleBelly.timetickRot 1.0 1.0
+MaleBelly.linearX 1.4 1.4
+MaleBelly.linearY 0.7 0.7
+MaleBelly.linearZ 1.4 1.4
+MaleBelly.rotationalX 0.1 0.1
+MaleBelly.rotationalY 0.1 0.1
+MaleBelly.rotationalZ 0.1 0.1
+MaleBelly.timeStep 0.5 0.5
+MaleBelly.timeStepRot 0.5 0.5
+MaleBelly.collisionFriction 0.0 0.0
+MaleBelly.collisionElastic 0.0 0.0
+MaleBelly.collisionMultipler 3.0 3.0
+MaleBelly.collisionMultiplerRot 0 0
+MaleBelly.collisionXmaxoffset 0.5 0.5
+MaleBelly.collisionXminoffset -0.5 -0.5
+MaleBelly.collisionYmaxoffset 100 100
+MaleBelly.collisionYminoffset -0.5 -0.5
+MaleBelly.collisionZmaxoffset 1.0 1.0
+MaleBelly.collisionZminoffset -1.0 -1.0
+MaleBelly.amplitude 0.25 0.25
