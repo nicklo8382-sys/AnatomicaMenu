@@ -11,6 +11,9 @@ namespace UI {
     namespace Gape {
         void __stdcall Render();
     }
+    namespace Motion {
+        void __stdcall Render();
+    }
     namespace Jiggle {
         void __stdcall Render();
     }

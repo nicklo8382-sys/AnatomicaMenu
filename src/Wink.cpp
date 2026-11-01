@@ -4,22 +4,24 @@
 #include <chrono>
 #include <cmath>
 #include <mutex>
+#include <random>
 #include <thread>
 #include <unordered_map>
 
 // ---------------------------------------------------------------------------
-//  Smooth wink, done with the anus bones every frame (like an eyelid blink)
+//  After-sex motion of the open anus, done with the anus bones every frame.
 //
-//  The gape itself is the "Anatomica Gape" body morph, which the Papyrus script can only update a
-//  few times a second (that is why the old morph-based wink looked like a slideshow). The gape
-//  morph is exactly "the four NPC xx Anus2 bones moved outward by 2 units x gape" (that is how it
-//  was built), so moving those bones INWARD by 2 x gape x closure cancels it precisely - and bones
-//  can be moved every frame. The script tells us the current gape (SetGape) and when to blink
-//  (Blink); everything else happens here at frame rate.
+//  The gape is the "Anatomica Gape" body morph, which is exactly "the four NPC xx Anus2 bones moved
+//  outward by 2 units x gape". Moving those bones INWARD by 2 x gape x closure narrows it smoothly,
+//  at frame rate (the Papyrus script can only change morphs a few times a second).
 //
-//  Blink: the sides (LB/RB) close to a slit, the slit (LT/RT) shuts, a short hold, then it reopens
-//  in reverse - but only to 75% of what was open before, so every blink leaves it a bit tighter.
-//  The step-down resets when the gape is gone (closed or penetrated again).
+//  Two layers, both scaled by the current gape (so they fade out as it closes):
+//   * breathing - a slow, irregular tighten/relax of ~15% (three out-of-step sine waves; the sides
+//                 and the top/bottom slightly out of sync so the shape changes a little)
+//   * clench    - every few seconds (the script decides when) a quick partial squeeze (~40% closed
+//                 in 0.25 s) that lets go slowly over ~1.6 s, like a muscle twitch
+//  Only after the scene: the script sends gape 0 while the actor is in a scene (PPA owns the bones
+//  then). When there is nothing to do the bones are put back exactly where they were.
 // ---------------------------------------------------------------------------
 namespace {
     using clock = std::chrono::steady_clock;
@@ -42,50 +44,62 @@ namespace {
     }
 
     struct State {
-        float gTarget = 0.0f;    // gape from the script
+        float gTarget = 0.0f;    // gape from the script (0 while in a scene)
         float g = 0.0f;          // smoothed gape used for the bones
-        float residual = 0.0f;   // closure kept from earlier blinks (0 = full gape, 1 = shut)
-        float blinkT = -1.0f;    // seconds into the current blink, -1 = none
-        float r0 = 0.0f, r1 = 0.0f;
+        float time = 0.0f;       // running clock for the breathing
+        float phase[3] = {};     // per-actor random phases, so actors don't breathe in sync
+        float clenchT = -1.0f;   // seconds into the current clench, -1 = none
+        float clenchAmp = 0.0f;
         float sinceSet = 0.0f;   // seconds since the script last sent the gape
         bool touched = false;    // bones currently offset by us
+        bool logged = false;
         RE::NiPoint3 rest[kBones];
-        bool haveRest = false;
     };
 
     std::mutex g_lock;
     std::unordered_map<RE::FormID, State> g_states;
+    std::mt19937 g_rng{std::random_device{}()};
 
-    constexpr float kOpen = 0.6f, kShut = 0.95f, kHold = 1.15f, kSlit = 1.5f, kEnd = 2.2f;
+    constexpr float kAttack = 0.25f, kHoldTop = 0.08f, kRelease = 1.6f;
+    constexpr float kClenchEnd = kAttack + kHoldTop + kRelease;
 
     float SmootherStep(float x) {
         x = std::clamp(x, 0.0f, 1.0f);
         return x * x * x * (x * (x * 6.0f - 15.0f) + 10.0f);
     }
 
+    // settings from AnatomicaGape.esp (written by the menu)
+    float GlobalOr(RE::FormID id, float def) {
+        if (auto* dh = RE::TESDataHandler::GetSingleton())
+            if (auto* g = dh->LookupForm<RE::TESGlobal>(id, "AnatomicaGape.esp")) return g->value;
+        return def;
+    }
+
+    // slow irregular 0..1 wave: three sines that never line up
+    float Breath(const State& s, float offset) {
+        constexpr float tau = 6.2831853f;
+        const float t = s.time;
+        const float v = 0.5f * std::sin(tau * 0.21f * t + s.phase[0] + offset) +
+                        0.3f * std::sin(tau * 0.34f * t + s.phase[1] + 1.7f * offset) +
+                        0.2f * std::sin(tau * 0.09f * t + s.phase[2]);
+        return 0.5f + 0.5f * v;
+    }
+
+    float Clench(const State& s) {
+        if (s.clenchT < 0.0f) return 0.0f;
+        const float t = s.clenchT;
+        if (t < kAttack) return s.clenchAmp * SmootherStep(t / kAttack);
+        if (t < kAttack + kHoldTop) return s.clenchAmp;
+        return s.clenchAmp * (1.0f - SmootherStep((t - kAttack - kHoldTop) / kRelease));
+    }
+
     // closure per bone (0 = as the gape morph has it, 1 = fully shut)
-    void Closure(const State& s, float out[kBones]) {
-        float side = s.residual, slit = s.residual;
-        if (s.blinkT >= 0.0f) {
-            const float t = s.blinkT;
-            if (t < kOpen) {
-                side = s.r0 + (1.0f - s.r0) * SmootherStep(t / kOpen);
-                slit = s.r0;
-            } else if (t < kShut) {
-                side = 1.0f;
-                slit = s.r0 + (1.0f - s.r0) * SmootherStep((t - kOpen) / (kShut - kOpen));
-            } else if (t < kHold) {
-                side = slit = 1.0f;
-            } else if (t < kSlit) {
-                side = 1.0f;
-                slit = 1.0f - (1.0f - s.r1) * SmootherStep((t - kHold) / (kSlit - kHold));
-            } else {
-                slit = s.r1;
-                side = 1.0f - (1.0f - s.r1) * SmootherStep((t - kSlit) / (kEnd - kSlit));
-            }
-        }
-        out[LB] = out[RB] = side;
-        out[LT] = out[RT] = slit;
+    void Closure(const State& s, float breathAmp, float out[kBones]) {
+        const float cl = Clench(s);
+        const float side = breathAmp * Breath(s, 0.0f);
+        const float slit = breathAmp * Breath(s, 0.6f);   // top/bottom a little out of step with the sides
+        out[LB] = out[RB] = std::min(0.95f, side + cl);
+        out[LT] = out[RT] = std::min(0.95f, slit + cl * 0.85f);
     }
 
     RE::NiPoint3 Mul(const RE::NiMatrix3& m, const RE::NiPoint3& v) {
@@ -101,26 +115,25 @@ namespace {
 
     // runs on the game thread
     void Apply(float dt) {
+        const float breathAmp = std::clamp(GlobalOr(0x812, 0.15f), 0.0f, 0.6f);
+        const float breathSpeed = std::clamp(GlobalOr(0x813, 1.0f), 0.1f, 4.0f);
         std::lock_guard lk(g_lock);
         for (auto it = g_states.begin(); it != g_states.end();) {
             auto& s = it->second;
             s.sinceSet += dt;
+            s.time += dt * breathSpeed;
             // follow the script's gape smoothly (it only updates a few times a second)
-            const float k = 1.0f - std::exp(-dt / 0.12f);
+            const float k = 1.0f - std::exp(-dt / 0.15f);
             s.g += (s.gTarget - s.g) * k;
-            if (s.blinkT >= 0.0f) {
-                s.blinkT += dt;
-                if (s.blinkT >= kEnd) {
-                    s.blinkT = -1.0f;
-                    s.residual = s.r1;
-                }
+            if (s.clenchT >= 0.0f) {
+                s.clenchT += dt;
+                if (s.clenchT >= kClenchEnd) s.clenchT = -1.0f;
             }
-            if (s.gTarget < 0.01f && s.blinkT < 0.0f) s.residual = 0.0f;   // gape gone: start fresh
-            const bool stale = s.sinceSet > 3.0f;                             // script stopped talking to us
-            if (stale) s.gTarget = 0.0f, s.blinkT = -1.0f, s.residual = 0.0f;
+            const bool stale = s.sinceSet > 3.0f;   // script stopped talking to us
+            if (stale) s.gTarget = 0.0f, s.clenchT = -1.0f;
 
             float c[kBones];
-            Closure(s, c);
+            Closure(s, breathAmp, c);
             const bool active = s.g > 0.002f && (c[LB] > 0.0005f || c[LT] > 0.0005f);
             if (!active && !s.touched) {          // nothing to do: don't even look the bones up
                 if (stale) { it = g_states.erase(it); continue; }
@@ -136,16 +149,19 @@ namespace {
                 ok = nodes[b] && nodes[b]->parent;
             }
             if (!ok) {
+                if (!s.logged) {
+                    logger::warn("Anatomica motion: {:08X} has no 3D or no NPC xx Anus2 bones", it->first);
+                    s.logged = true;
+                }
                 s.touched = false;
-                s.haveRest = false;
                 if (stale || !actor) { it = g_states.erase(it); continue; }
                 ++it;
                 continue;
             }
             if (active) {
                 if (!s.touched) {
+                    logger::info("Anatomica motion: moving the anus bones of {} (gape {:.2f})", actor->GetName(), s.g);
                     for (int b = 0; b < kBones; ++b) s.rest[b] = nodes[b]->local.translate;
-                    s.haveRest = true;
                     s.touched = true;
                 }
                 const auto& rw = root->world;
@@ -162,6 +178,7 @@ namespace {
             } else if (s.touched) {
                 for (int b = 0; b < kBones; ++b) nodes[b]->local.translate = s.rest[b];
                 s.touched = false;
+                logger::info("Anatomica motion: anus bones of {} back at rest", actor->GetName());
             }
             if (stale && !s.touched) { it = g_states.erase(it); continue; }
             ++it;
@@ -191,28 +208,38 @@ namespace {
         if (!a) return;
         std::lock_guard lk(g_lock);
         auto found = g_states.find(a->GetFormID());
-        if (found == g_states.end() && g < 0.01f) return;   // closed and never blinked: nothing to track
+        if (found == g_states.end() && g < 0.01f) return;   // closed and untracked: nothing to do
+        if (found == g_states.end()) {
+            logger::info("Anatomica motion: after-sex gape {:.2f} on {}", g, a->GetName());
+            auto& n = g_states[a->GetFormID()];
+            std::uniform_real_distribution<float> ph(0.0f, 6.2831853f);
+            for (auto& p : n.phase) p = ph(g_rng);
+        }
         auto& s = g_states[a->GetFormID()];
         s.gTarget = std::max(0.0f, g);
         s.sinceSet = 0.0f;
     }
+    // "Blink" from the script = time for a clench
     void Blink(RE::StaticFunctionTag*, RE::Actor* a) {
         if (!a) return;
         std::lock_guard lk(g_lock);
-        auto& s = g_states[a->GetFormID()];
-        if (s.blinkT >= 0.0f) return;
-        s.r0 = s.residual;
-        s.r1 = 1.0f - (1.0f - s.r0) * 0.75f;   // reopens to 75% of what was open
-        s.blinkT = 0.0f;
-        s.sinceSet = 0.0f;
+        auto it = g_states.find(a->GetFormID());
+        if (it == g_states.end()) return;
+        auto& s = it->second;
+        if (s.clenchT >= 0.0f) return;
+        const float strength = std::clamp(GlobalOr(0x811, 0.4f), 0.0f, 0.9f);
+        std::uniform_real_distribution<float> var(0.7f, 1.0f);
+        s.clenchAmp = strength * var(g_rng);
+        s.clenchT = 0.0f;
+        logger::info("Anatomica motion: clench on {} ({:.0f}% closed)", a->GetName(), s.clenchAmp * 100.0f);
     }
     bool IsBlinking(RE::StaticFunctionTag*, RE::Actor* a) {
         if (!a) return false;
         std::lock_guard lk(g_lock);
         auto it = g_states.find(a->GetFormID());
-        return it != g_states.end() && it->second.blinkT >= 0.0f;
+        return it != g_states.end() && it->second.clenchT >= 0.0f;
     }
-    int Version(RE::StaticFunctionTag*) { return 1; }
+    int Version(RE::StaticFunctionTag*) { return 2; }
 
     bool RegisterFuncs(RE::BSScript::IVirtualMachine* vm) {
         vm->RegisterFunction("SetGape"sv, "AnatomicaNative"sv, SetGape);
@@ -225,7 +252,8 @@ namespace {
 
 namespace Wink {
     void Register() {
-        SKSE::GetPapyrusInterface()->Register(RegisterFuncs);
+        const bool ok = SKSE::GetPapyrusInterface()->Register(RegisterFuncs);
+        logger::info("Anatomica motion: Papyrus functions (AnatomicaNative) {}", ok ? "registered" : "FAILED to register");
         std::thread(Loop).detach();
     }
     void Reset() {

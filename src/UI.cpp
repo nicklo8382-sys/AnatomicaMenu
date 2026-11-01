@@ -47,6 +47,16 @@ namespace {
          "Seconds to go from fully open to closed (one partner)."},
         {"Multi", 0x807, "After sex: open/close time multiplier per extra partner", 2.0f, 1.0f, 4.0f, "x%.2f",
          "Each extra partner in a row multiplies both the open time and the closing time by this (up to 3 extra partners)."},
+        {"WinkMin", 0x80F, "After sex: shortest wait between clenches", 2.5f, 0.5f, 30.0f, "%.1f s",
+         "Every so often the open anus gives a quick squeeze and slowly lets go. Clenches come at random between the shortest and longest wait."},
+        {"WinkMax", 0x810, "After sex: longest wait between clenches", 7.0f, 0.5f, 60.0f, "%.1f s",
+         "Clenches come at random between the shortest and longest wait. Set both the same for a steady rhythm."},
+        {"Clench", 0x811, "After sex: clench strength (% it closes)", 0.4f, 0.0f, 0.9f, "pct",
+         "How far each clench squeezes the gape shut (varies a little each time). 0% = no clenching."},
+        {"Breath", 0x812, "After sex: breathing strength (% it pulses)", 0.15f, 0.0f, 0.6f, "pct",
+         "A slow, uneven tighten-and-relax of the open anus, so it never sits frozen. 0% = still."},
+        {"BreathSpeed", 0x813, "After sex: breathing speed", 1.0f, 0.25f, 3.0f, "x%.2f",
+         "How fast the breathing goes. x1 = one slow tighten-and-relax about every 3-5 s; x2 = twice as fast, x0.5 = half as fast."},
         {"Radius", 0x808, "No-OStim detection: max distance of partner's schlong bones from the canal", 3.0f, 1.0f, 8.0f, "%.1f units",
          "Only used when OStim is not installed. Counts as penetration when any of the partner's schlong bones (NPC Genitals01-06) is within this distance of the canal's centre line, inside its first 8 units. The canal is located from this actor's pelvis, thigh and spine bones."},
         {"Who", 0x80E, "Who gets the gape (0 = only you, 1 = you + followers, 2 = everyone)", 2.0f, 0.0f, 2.0f, "%.0f",
@@ -161,20 +171,18 @@ void UI::Register() {
     LoadIni();
     SKSEMenuFramework::SetSection("Anatomica");
     SKSEMenuFramework::AddSectionItem("Gape", Gape::Render);
+    SKSEMenuFramework::AddSectionItem("Movement", Motion::Render);
     SKSEMenuFramework::AddSectionItem("Jiggle", Jiggle::Render);
     SKSEMenuFramework::AddSectionItem("About", About::Render);
 }
 
-void __stdcall UI::Gape::Render() {
-    if (!GetGlobal(kEnabledId)) {
-        ImGuiMCP::TextWrapped("AnatomicaGape.esp is not loaded. Install the \"After-sex gape and dilation\" option and enable the plugin.");
-        return;
+namespace {
+    bool IsMotionKey(const char* key) {
+        const std::string_view k(key);
+        return k == "WinkMin" || k == "WinkMax" || k == "Clench" || k == "Breath" || k == "BreathSpeed";
     }
-    bool changed = false;
-    changed |= ImGuiMCP::Checkbox("Enable gape (after sex, and during sex if set above 0%)", &g_enabled);
-    changed |= ImGuiMCP::Checkbox("After sex: winking (the open anus blinks shut like an eyelid every few seconds, reopening a little smaller each time)", &g_wink);
-    ImGuiMCP::Separator();
-    for (size_t i = 0; i < std::size(kGape); ++i) {
+    bool SliderFor(size_t i) {
+        bool changed = false;
         if (std::string_view(kGape[i].fmt) == "pct") {
             float pct = g_values[i] * 100.0f;
             if (ImGuiMCP::SliderFloat(kGape[i].label, &pct, kGape[i].lo * 100.0f, kGape[i].hi * 100.0f, "%.0f%%")) {
@@ -185,11 +193,52 @@ void __stdcall UI::Gape::Render() {
             changed |= ImGuiMCP::SliderFloat(kGape[i].label, &g_values[i], kGape[i].lo, kGape[i].hi, kGape[i].fmt);
         }
         HelpMarker(kGape[i].help);
+        return changed;
     }
+}
+
+void __stdcall UI::Gape::Render() {
+    if (!GetGlobal(kEnabledId)) {
+        ImGuiMCP::TextWrapped("AnatomicaGape.esp is not loaded. Install the \"After-sex gape and dilation\" option and enable the plugin.");
+        return;
+    }
+    bool changed = false;
+    changed |= ImGuiMCP::Checkbox("Enable gape (after sex, and during sex if set above 0%)", &g_enabled);
+    ImGuiMCP::Separator();
+    for (size_t i = 0; i < std::size(kGape); ++i)
+        if (!IsMotionKey(kGape[i].key)) changed |= SliderFor(i);
     ImGuiMCP::Spacing();
     if (ImGuiMCP::Button("Reset to defaults")) {
-        for (size_t i = 0; i < std::size(kGape); ++i) g_values[i] = kGape[i].def;
+        for (size_t i = 0; i < std::size(kGape); ++i)
+            if (!IsMotionKey(kGape[i].key)) g_values[i] = kGape[i].def;
         g_enabled = true;
+        changed = true;
+    }
+    if (changed) {
+        PushGlobals();
+        SaveIni();
+    }
+    ImGuiMCP::Spacing();
+    ImGuiMCP::TextDisabled("Changes apply immediately and are kept for every save.");
+}
+
+void __stdcall UI::Motion::Render() {
+    if (!GetGlobal(kEnabledId)) {
+        ImGuiMCP::TextWrapped("AnatomicaGape.esp is not loaded. Install the \"After-sex gape and dilation\" option and enable the plugin.");
+        return;
+    }
+    ImGuiMCP::TextWrapped("After sex, while the anus is still gaping, it can keep moving: a slow, uneven breathing "
+                          "(tighten and relax) and now and then a quick clench that lets go slowly. Both fade out as the gape closes. "
+                          "Only after the scene - during sex PPA moves the anus.");
+    ImGuiMCP::Separator();
+    bool changed = false;
+    changed |= ImGuiMCP::Checkbox("Enable after-sex movement", &g_wink);
+    for (size_t i = 0; i < std::size(kGape); ++i)
+        if (IsMotionKey(kGape[i].key)) changed |= SliderFor(i);
+    ImGuiMCP::Spacing();
+    if (ImGuiMCP::Button("Reset movement to defaults")) {
+        for (size_t i = 0; i < std::size(kGape); ++i)
+            if (IsMotionKey(kGape[i].key)) g_values[i] = kGape[i].def;
         g_wink = true;
         changed = true;
     }
