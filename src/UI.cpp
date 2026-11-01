@@ -1,3 +1,4 @@
+#include <string_view>
 #include "UI.h"
 
 #include <SimpleIni.h>
@@ -32,22 +33,22 @@ namespace {
 
     // Same order / defaults as AnatomicaGape.esp
     GlobalSetting kGape[] = {
-        {"Max", 0x801, "Gape after sex", 0.8f, 0.0f, 1.0f, "%.2f",
-         "How wide it stays open right after sex at full dilation (0-1 = 0-100% of the Anatomica Gape morph)."},
-        {"During", 0x805, "Gape while penetrated", 0.15f, 0.0f, 0.6f, "%.2f",
-         "Extra gape morph while being penetrated (PPA opens the entrance itself on top of this). 0 = none."},
-        {"Build", 0x802, "Time to fully dilate", 30.0f, 2.0f, 300.0f, "%.0f s",
-         "How long penetration has to last before the after-sex gape reaches its full size."},
-        {"Hold", 0x803, "Stays fully open for", 5.0f, 1.0f, 300.0f, "%.0f s",
+        {"Max", 0x801, "After sex: how open (% of full gape)", 0.8f, 0.0f, 1.0f, "pct",
+         "How wide the anus stays open once sex ends, if penetration lasted long enough to fully dilate. 100% = the full Anatomica Gape shape."},
+        {"During", 0x805, "During sex: extra opening on top of PPA (%)", 0.0f, 0.0f, 0.6f, "pct",
+         "Adds the gape shape WHILE being penetrated. PPA already opens the entrance around the schlong, so 0% (off) is recommended; raise only if you play without PPA."},
+        {"Build", 0x802, "During sex: seconds of penetration for full after-sex gape", 30.0f, 2.0f, 300.0f, "%.0f s",
+         "How long penetration has to last before the after-sex gape reaches its full size. Shorter sex = smaller gape afterwards."},
+        {"Hold", 0x803, "After sex: stays fully open for", 5.0f, 1.0f, 300.0f, "%.0f s",
          "Seconds the gape stays at full size after sex before it starts closing (1 s - 5 min)."},
-        {"Decay", 0x804, "Time to close (100% to 0)", 30.0f, 5.0f, 60.0f, "%.0f s",
-         "Seconds to close from fully open to shut after one partner."},
-        {"Multi", 0x807, "Gape opening multiplier by partner", 2.0f, 1.0f, 4.0f, "x%.2f",
-         "For every extra partner, how long it stays open and how long it takes to close are multiplied by this (up to 3 extra partners)."},
-        {"Radius", 0x808, "Detection radius", 3.0f, 1.0f, 8.0f, "%.1f",
-         "How close to the canal's centre line another actor's schlong has to be to count as penetration."},
-        {"IdleTick", 0x809, "Idle check interval", 1.0f, 0.25f, 5.0f, "%.2f s",
-         "How often the script looks for penetration when nothing is happening. Higher = less load."},
+        {"Decay", 0x804, "After sex: time to close completely", 30.0f, 5.0f, 60.0f, "%.0f s",
+         "Seconds to go from fully open to closed (one partner)."},
+        {"Multi", 0x807, "After sex: open/close time multiplier per extra partner", 2.0f, 1.0f, 4.0f, "x%.2f",
+         "Each extra partner in a row multiplies both the open time and the closing time by this (up to 3 extra partners)."},
+        {"Radius", 0x808, "Detection without OStim: schlong distance from canal", 3.0f, 1.0f, 8.0f, "%.1f units",
+         "Only used when OStim is not installed: how close another actor's schlong has to be to the canal's centre line to count as penetration."},
+        {"IdleTick", 0x809, "Detection: check interval when idle", 1.0f, 0.25f, 5.0f, "%.2f s",
+         "How often the script looks for sex when nothing is happening. Higher = less script load."},
     };
     constexpr RE::FormID kEnabledId = 0x806;
 
@@ -160,10 +161,18 @@ void __stdcall UI::Gape::Render() {
         return;
     }
     bool changed = false;
-    changed |= ImGuiMCP::Checkbox("Enable after-sex gape", &g_enabled);
+    changed |= ImGuiMCP::Checkbox("Enable gape (after sex, and during sex if set above 0%)", &g_enabled);
     ImGuiMCP::Separator();
     for (size_t i = 0; i < std::size(kGape); ++i) {
-        changed |= ImGuiMCP::SliderFloat(kGape[i].label, &g_values[i], kGape[i].lo, kGape[i].hi, kGape[i].fmt);
+        if (std::string_view(kGape[i].fmt) == "pct") {
+            float pct = g_values[i] * 100.0f;
+            if (ImGuiMCP::SliderFloat(kGape[i].label, &pct, kGape[i].lo * 100.0f, kGape[i].hi * 100.0f, "%.0f%%")) {
+                g_values[i] = pct / 100.0f;
+                changed = true;
+            }
+        } else {
+            changed |= ImGuiMCP::SliderFloat(kGape[i].label, &g_values[i], kGape[i].lo, kGape[i].hi, kGape[i].fmt);
+        }
         HelpMarker(kGape[i].help);
     }
     ImGuiMCP::Spacing();
