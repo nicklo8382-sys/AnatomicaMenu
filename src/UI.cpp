@@ -172,7 +172,7 @@ void __stdcall UI::Gape::Render() {
     }
     bool changed = false;
     changed |= ImGuiMCP::Checkbox("Enable gape (after sex, and during sex if set above 0%)", &g_enabled);
-    changed |= ImGuiMCP::Checkbox("Winking (the open anus twitches shut and back every few seconds)", &g_wink);
+    changed |= ImGuiMCP::Checkbox("After sex: winking (the open anus blinks shut like an eyelid every few seconds, reopening a little smaller each time)", &g_wink);
     ImGuiMCP::Separator();
     for (size_t i = 0; i < std::size(kGape); ++i) {
         if (std::string_view(kGape[i].fmt) == "pct") {
