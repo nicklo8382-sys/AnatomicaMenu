@@ -35,22 +35,27 @@ namespace {
     GlobalSetting kGape[] = {
         {"Max", 0x801, "After sex: how open (% of full gape)", 0.8f, 0.0f, 1.0f, "pct",
          "How wide the anus stays open once sex ends, if penetration lasted long enough to fully dilate. 100% = the full Anatomica Gape shape."},
-        {"During", 0x805, "During sex: extra opening on top of PPA (%)", 0.0f, 0.0f, 0.6f, "pct",
-         "Adds the gape shape WHILE being penetrated. PPA already opens the entrance around the schlong, so 0% (off) is recommended; raise only if you play without PPA."},
+        {"During", 0x805, "During sex: gape left when the schlong pulls out (%)", 0.5f, 0.0f, 1.0f, "pct",
+         "While the schlong is inside, PPA holds the ring open. When it slides out but the anal sex goes on, the anus stays this open (x how dilated it is so far), holds for the time below, then closes slowly with the closing time - so slow pull-outs close gradually instead of snapping shut. 0% = off."},
         {"Build", 0x802, "During sex: seconds of penetration for full after-sex gape", 30.0f, 2.0f, 300.0f, "%.0f s",
          "How long penetration has to last before the after-sex gape reaches its full size. Shorter sex = smaller gape afterwards."},
+        {"DuringHold", 0x80C, "During sex: stays open after the schlong leaves for", 2.0f, 0.0f, 10.0f, "%.1f s",
+         "When penetration pauses but the scene goes on (position change, non-anal action), the gape holds this long, then closes with the closing time below. After the scene ends the after-sex time is used instead."},
         {"Hold", 0x803, "After sex: stays fully open for", 5.0f, 1.0f, 300.0f, "%.0f s",
          "Seconds the gape stays at full size after sex before it starts closing (1 s - 5 min)."},
         {"Decay", 0x804, "After sex: time to close completely", 30.0f, 5.0f, 60.0f, "%.0f s",
          "Seconds to go from fully open to closed (one partner)."},
         {"Multi", 0x807, "After sex: open/close time multiplier per extra partner", 2.0f, 1.0f, 4.0f, "x%.2f",
          "Each extra partner in a row multiplies both the open time and the closing time by this (up to 3 extra partners)."},
-        {"Radius", 0x808, "Detection without OStim: schlong distance from canal", 3.0f, 1.0f, 8.0f, "%.1f units",
-         "Only used when OStim is not installed: how close another actor's schlong has to be to the canal's centre line to count as penetration."},
+        {"Radius", 0x808, "No-OStim detection: max distance of partner's schlong bones from the canal", 3.0f, 1.0f, 8.0f, "%.1f units",
+         "Only used when OStim is not installed. Counts as penetration when any of the partner's schlong bones (NPC Genitals01-06) is within this distance of the canal's centre line, inside its first 8 units. The canal is located from this actor's pelvis, thigh and spine bones."},
+        {"Who", 0x80E, "Who gets the gape (0 = only you, 1 = you + followers, 2 = everyone)", 2.0f, 0.0f, 2.0f, "%.0f",
+         "Fewer actors = less script work. 'You + followers' uses the game's follower/teammate flag. Partners are still detected for everyone."},
         {"IdleTick", 0x809, "Detection: check interval when idle", 1.0f, 0.25f, 5.0f, "%.2f s",
          "How often the script looks for sex when nothing is happening. Higher = less script load."},
     };
     constexpr RE::FormID kEnabledId = 0x806;
+    constexpr RE::FormID kWinkId = 0x80D;
 
     struct JigglePart {
         const char* key;
@@ -66,6 +71,7 @@ namespace {
 
     float g_values[std::size(kGape)];
     bool g_enabled = true;
+    bool g_wink = true;
     bool g_loaded = false;
     std::string g_status;
 
@@ -82,6 +88,7 @@ namespace {
                 g_values[i] = std::clamp(static_cast<float>(ini.GetDoubleValue("Gape", kGape[i].key, kGape[i].def)),
                                          kGape[i].lo, kGape[i].hi);
             g_enabled = ini.GetBoolValue("Gape", "Enabled", true);
+            g_wink = ini.GetBoolValue("Gape", "Wink", true);
             for (auto& p : kJiggle) p.mult = static_cast<float>(ini.GetDoubleValue("Jiggle", p.key, 1.0));
         }
         g_loaded = true;
@@ -92,14 +99,17 @@ namespace {
         ini.LoadFile(kIni);
         for (size_t i = 0; i < std::size(kGape); ++i) ini.SetDoubleValue("Gape", kGape[i].key, g_values[i]);
         ini.SetBoolValue("Gape", "Enabled", g_enabled);
+        ini.SetBoolValue("Gape", "Wink", g_wink);
         for (auto& p : kJiggle) ini.SetDoubleValue("Jiggle", p.key, p.mult);
         ini.SaveFile(kIni);
     }
 
     void PushGlobals() {
         for (size_t i = 0; i < std::size(kGape); ++i)
-            if (auto* g = GetGlobal(kGape[i].id)) g->value = g_values[i];
+            if (auto* g = GetGlobal(kGape[i].id))
+                g->value = (std::string_view(kGape[i].key) == "Who") ? std::round(g_values[i]) : g_values[i];
         if (auto* g = GetGlobal(kEnabledId)) g->value = g_enabled ? 1.0f : 0.0f;
+        if (auto* g = GetGlobal(kWinkId)) g->value = g_wink ? 1.0f : 0.0f;
     }
 
     // Scale a CBPC bounce config: amplitude * m, movement ranges * max(1, sqrt(m)).
@@ -162,6 +172,7 @@ void __stdcall UI::Gape::Render() {
     }
     bool changed = false;
     changed |= ImGuiMCP::Checkbox("Enable gape (after sex, and during sex if set above 0%)", &g_enabled);
+    changed |= ImGuiMCP::Checkbox("Winking (the open anus twitches shut and back every few seconds)", &g_wink);
     ImGuiMCP::Separator();
     for (size_t i = 0; i < std::size(kGape); ++i) {
         if (std::string_view(kGape[i].fmt) == "pct") {
@@ -179,6 +190,7 @@ void __stdcall UI::Gape::Render() {
     if (ImGuiMCP::Button("Reset to defaults")) {
         for (size_t i = 0; i < std::size(kGape); ++i) g_values[i] = kGape[i].def;
         g_enabled = true;
+        g_wink = true;
         changed = true;
     }
     if (changed) {
