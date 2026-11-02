@@ -1,4 +1,5 @@
 #include "Colour.h"
+#include "SKSEMenuFramework.h"
 
 #include <SimpleIni.h>
 
