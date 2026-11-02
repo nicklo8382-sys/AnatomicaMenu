@@ -1,4 +1,5 @@
 #include "Wink.h"
+#include "Colour.h"
 
 #include <algorithm>
 #include <chrono>
@@ -185,6 +186,7 @@ namespace {
         }
     }
 
+
     void Loop() {
         auto last = clock::now();
         for (;;) {
@@ -246,6 +248,7 @@ namespace {
         vm->RegisterFunction("Blink"sv, "AnatomicaNative"sv, Blink);
         vm->RegisterFunction("IsBlinking"sv, "AnatomicaNative"sv, IsBlinking);
         vm->RegisterFunction("Version"sv, "AnatomicaNative"sv, Version);
+        Colour::RegisterFuncs(vm);
         return true;
     }
 }
@@ -258,7 +261,10 @@ namespace Wink {
     }
     void Reset() {
         // a save was loaded: bones come fresh from the new 3D, forget everything
-        std::lock_guard lk(g_lock);
-        g_states.clear();
+        {
+            std::lock_guard lk(g_lock);
+            g_states.clear();
+        }
+        Colour::Reset();
     }
 }

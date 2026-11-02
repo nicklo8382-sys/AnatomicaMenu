@@ -1,5 +1,6 @@
 #include <string_view>
 #include "UI.h"
+#include "Colour.h"
 
 #include <SimpleIni.h>
 
@@ -174,6 +175,11 @@ void UI::Register() {
     SKSEMenuFramework::AddSectionItem("Movement", Motion::Render);
     SKSEMenuFramework::AddSectionItem("Jiggle", Jiggle::Render);
     SKSEMenuFramework::AddSectionItem("About", About::Render);
+    SKSEMenuFramework::SetSection("Anatomica Colour");
+    SKSEMenuFramework::AddSectionItem("Colours", Colour::RenderColours);
+    SKSEMenuFramework::AddSectionItem("Per race", Colour::RenderRaces);
+    SKSEMenuFramework::AddSectionItem("Skin rules", Colour::RenderRules);
+    SKSEMenuFramework::AddSectionItem("After sex", Colour::RenderAfter);
 }
 
 namespace {
