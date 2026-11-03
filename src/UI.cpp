@@ -173,13 +173,12 @@ void UI::Register() {
     SKSEMenuFramework::SetSection("Anatomica");
     SKSEMenuFramework::AddSectionItem("Gape", Gape::Render);
     SKSEMenuFramework::AddSectionItem("Movement", Motion::Render);
-    SKSEMenuFramework::AddSectionItem("Jiggle", Jiggle::Render);
-    SKSEMenuFramework::AddSectionItem("About", About::Render);
-    SKSEMenuFramework::SetSection("Anatomica Colour");
     SKSEMenuFramework::AddSectionItem("Colours", Colour::RenderColours);
     SKSEMenuFramework::AddSectionItem("Per race", Colour::RenderRaces);
     SKSEMenuFramework::AddSectionItem("Skin rules", Colour::RenderRules);
     SKSEMenuFramework::AddSectionItem("After sex", Colour::RenderAfter);
+    SKSEMenuFramework::AddSectionItem("Jiggle", Jiggle::Render);
+    SKSEMenuFramework::AddSectionItem("About", About::Render);
 }
 
 namespace {
@@ -214,7 +213,7 @@ void __stdcall UI::Gape::Render() {
     for (size_t i = 0; i < std::size(kGape); ++i)
         if (!IsMotionKey(kGape[i].key)) changed |= SliderFor(i);
     ImGuiMCP::Spacing();
-    if (ImGuiMCP::Button("Reset to defaults")) {
+    if (Colour::ConfirmButton("Reset to defaults")) {
         for (size_t i = 0; i < std::size(kGape); ++i)
             if (!IsMotionKey(kGape[i].key)) g_values[i] = kGape[i].def;
         g_enabled = true;
@@ -242,7 +241,7 @@ void __stdcall UI::Motion::Render() {
     for (size_t i = 0; i < std::size(kGape); ++i)
         if (IsMotionKey(kGape[i].key)) changed |= SliderFor(i);
     ImGuiMCP::Spacing();
-    if (ImGuiMCP::Button("Reset movement to defaults")) {
+    if (Colour::ConfirmButton("Reset movement to defaults")) {
         for (size_t i = 0; i < std::size(kGape); ++i)
             if (IsMotionKey(kGape[i].key)) g_values[i] = kGape[i].def;
         g_wink = true;
@@ -270,7 +269,7 @@ void __stdcall UI::Jiggle::Render() {
                        : "Could not write the CBPC files (is the Anatomica CBPC option installed?).";
     }
     ImGuiMCP::SameLine();
-    if (ImGuiMCP::Button("Reset")) {
+    if (Colour::ConfirmButton("Reset jiggle")) {
         for (auto& p : kJiggle) p.mult = 1.0f;
         changed = true;
     }

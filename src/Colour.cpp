@@ -52,11 +52,141 @@ namespace {
 
     // average colour (0-255) of each pre-made anus texture and of its skin-blend overlay
     // (measured from the shipped textures - the tint method reproduces these)
-    constexpr float kAnusRGB[kPresets][3] = {
-        {123.3f, 66.3f, 71.7f}, {159.4f, 106.6f, 120.0f}, {99.2f, 38.2f, 46.1f}, {87.1f, 57.6f, 55.4f}, {118.2f, 94.4f, 83.5f}};
     constexpr float kBlendRGB[kPresets][3] = {
         {233.5f, 148.3f, 157.4f}, {241.7f, 178.0f, 194.7f}, {192.6f, 99.5f, 110.6f}, {168.1f, 122.9f, 122.4f}, {227.2f, 190.6f, 176.1f}};
-    constexpr float kNeutralMean = 170.0f;   // colours\neutral.dds is grey with this mean
+    // average colour (0-255) of each preset on the rim (the outer face, 3BA_AnusRim)
+    constexpr float kRimRGB[kPresets][3] = {
+        {142.3f, 86.9f, 92.1f}, {173.3f, 126.3f, 138.1f}, {115.4f, 55.6f, 63.5f}, {99.7f, 72.4f, 69.9f}, {139.1f, 113.1f, 103.8f}};
+
+    // ---- generated rim textures --------------------------------------------------------------
+    // Any colour / strength / reddening is baked into a small DXT1 texture (rim detail x colour),
+    // written once to Data\textures\...\Anatomica\gen\ and reused. The game then applies the
+    // character's skin tone on top (the rim shape is skin-tinted).
+    constexpr const char* kGenDir = "textures\\actors\\character\\male\\Anatomica\\gen\\";
+    std::vector<std::uint8_t> g_detail;   // 512x512, 128 = 1.0
+    int g_detailW = 0, g_detailH = 0;
+    bool g_detailTried = false;
+
+    bool LoadDetail() {
+        if (g_detailTried) return !g_detail.empty();
+        g_detailTried = true;
+        std::ifstream f("Data/SKSE/Plugins/AnatomicaMenu/rim_detail.bin", std::ios::binary);
+        char magic[4]{};
+        std::uint32_t w = 0, h = 0;
+        if (!f.read(magic, 4) || std::string_view(magic, 4) != "ARD1") return false;
+        f.read(reinterpret_cast<char*>(&w), 4);
+        f.read(reinterpret_cast<char*>(&h), 4);
+        if (w == 0 || h == 0 || w > 4096 || h > 4096 || (w & 3) || (h & 3)) return false;
+        g_detail.resize(static_cast<size_t>(w) * h);
+        if (!f.read(reinterpret_cast<char*>(g_detail.data()), static_cast<std::streamsize>(g_detail.size()))) {
+            g_detail.clear();
+            return false;
+        }
+        g_detailW = static_cast<int>(w);
+        g_detailH = static_cast<int>(h);
+        return true;
+    }
+
+    std::uint16_t To565(float r, float gg, float b) {
+        auto q = [](float v, int bits) { return static_cast<std::uint16_t>(std::lround(std::clamp(v, 0.0f, 1.0f) * ((1 << bits) - 1))); };
+        return static_cast<std::uint16_t>((q(r, 5) << 11) | (q(gg, 6) << 5) | q(b, 5));
+    }
+
+    // one DXT1 mip level of (colour x detail): every 4x4 block is a line between two shades of
+    // the same colour, which DXT1 stores exactly
+    void EncodeLevel(const std::vector<float>& lum, int w, int h, const float c[3], std::string& out) {
+        const int bw = std::max(1, (w + 3) / 4), bh = std::max(1, (h + 3) / 4);
+        for (int by = 0; by < bh; ++by) {
+            for (int bx = 0; bx < bw; ++bx) {
+                float l[16], lo = 1e9f, hi = -1e9f;
+                for (int k = 0; k < 16; ++k) {
+                    const int x = std::min(bx * 4 + (k & 3), w - 1), y = std::min(by * 4 + (k >> 2), h - 1);
+                    l[k] = lum[static_cast<size_t>(y) * w + x];
+                    lo = std::min(lo, l[k]);
+                    hi = std::max(hi, l[k]);
+                }
+                std::uint16_t c0 = To565(c[0] * hi, c[1] * hi, c[2] * hi), c1 = To565(c[0] * lo, c[1] * lo, c[2] * lo);
+                std::uint32_t idx = 0;
+                if (c0 != c1) {
+                    bool swapped = false;
+                    if (c0 < c1) { std::swap(c0, c1); swapped = true; }
+                    for (int k = 0; k < 16; ++k) {
+                        float t = hi > lo ? (l[k] - lo) / (hi - lo) : 1.0f;   // 1 = bright end
+                        if (swapped) t = 1.0f - t;
+                        // palette order: 0 = c0 (t 1), 2 = 2/3, 3 = 1/3, 1 = c1 (t 0)
+                        const std::uint32_t code = t > 0.833f ? 0u : t > 0.5f ? 2u : t > 0.167f ? 3u : 1u;
+                        idx |= code << (2 * k);
+                    }
+                } else if (c0 == 0 && c1 == 0) {
+                    c0 = 1;   // keep 4-colour mode (c0 > c1): index 1 = c1 = black
+                    idx = 0x55555555u;
+                } else {
+                    c1 = static_cast<std::uint16_t>(c0 - 1);   // c0 > c1 keeps 4-colour mode
+                }
+                out.append(reinterpret_cast<const char*>(&c0), 2);
+                out.append(reinterpret_cast<const char*>(&c1), 2);
+                out.append(reinterpret_cast<const char*>(&idx), 4);
+            }
+        }
+    }
+
+    // colour 0-1 (before the skin tone) -> texture path, written on first use
+    std::string GenRimTexture(const float colour[3]) {
+        if (!LoadDetail()) return {};
+        int q[3];
+        for (int i = 0; i < 3; ++i) q[i] = std::clamp(static_cast<int>(std::lround(colour[i] * 31.0f)), 0, 31);   // 32 steps
+        const std::string rel = std::format("{}rim_{:02d}{:02d}{:02d}.dds", kGenDir, q[0], q[1], q[2]);
+        const std::filesystem::path file = std::filesystem::path("Data") / std::filesystem::path(std::string(rel));
+        std::error_code ec;
+        if (std::filesystem::exists(file, ec)) return rel;
+        const float c[3] = {q[0] / 31.0f, q[1] / 31.0f, q[2] / 31.0f};
+        int w = g_detailW, h = g_detailH, levels = 1;
+        while ((w >> levels) >= 1 && (h >> levels) >= 1) ++levels;
+        std::string data;
+        std::vector<float> lum(g_detail.size());
+        for (size_t i = 0; i < lum.size(); ++i) lum[i] = g_detail[i] / 128.0f;
+        for (int lv = 0; lv < levels; ++lv) {
+            EncodeLevel(lum, w, h, c, data);
+            if (w == 1 && h == 1) break;
+            const int nw = std::max(1, w / 2), nh = std::max(1, h / 2);
+            std::vector<float> nl(static_cast<size_t>(nw) * nh);
+            for (int y = 0; y < nh; ++y)
+                for (int x = 0; x < nw; ++x) {
+                    const int x0 = std::min(2 * x, w - 1), x1 = std::min(2 * x + 1, w - 1), y0 = std::min(2 * y, h - 1), y1 = std::min(2 * y + 1, h - 1);
+                    nl[static_cast<size_t>(y) * nw + x] = 0.25f * (lum[static_cast<size_t>(y0) * w + x0] + lum[static_cast<size_t>(y0) * w + x1] +
+                                                                   lum[static_cast<size_t>(y1) * w + x0] + lum[static_cast<size_t>(y1) * w + x1]);
+                }
+            lum.swap(nl);
+            w = nw;
+            h = nh;
+        }
+        // DDS header (DXT1, mipmapped)
+        std::uint32_t hdr[32]{};
+        hdr[0] = 0x20534444u;                        // "DDS "
+        hdr[1] = 124;                                 // header size
+        hdr[2] = 0x1 | 0x2 | 0x4 | 0x1000 | 0x20000 | 0x80000;   // caps|height|width|pixelformat|mipmapcount|linearsize
+        hdr[3] = static_cast<std::uint32_t>(g_detailH);
+        hdr[4] = static_cast<std::uint32_t>(g_detailW);
+        hdr[5] = static_cast<std::uint32_t>(std::max(1, g_detailW / 4) * std::max(1, g_detailH / 4) * 8);
+        hdr[7] = static_cast<std::uint32_t>(levels);
+        hdr[19] = 32;                                 // pixel format size
+        hdr[20] = 0x4;                                // DDPF_FOURCC
+        hdr[21] = 0x31545844u;                        // "DXT1"
+        hdr[27] = 0x1000 | 0x8 | 0x400000;            // texture | complex | mipmap
+        std::filesystem::create_directories(file.parent_path(), ec);
+        const auto tmp = std::filesystem::path(file).concat(".tmp");
+        {
+            std::ofstream o(tmp, std::ios::binary | std::ios::trunc);
+            if (!o) return {};
+            o.write(reinterpret_cast<const char*>(hdr), sizeof(hdr));
+            o.write(data.data(), static_cast<std::streamsize>(data.size()));
+            if (!o) return {};
+        }
+        std::filesystem::rename(tmp, file, ec);
+        if (ec) return {};
+        logger::info("Anatomica colour: made {}", rel);
+        return rel;
+    }
 
     const char* kDefaultItems[] = {"Installed colour (no change)", "Pink", "Light pink", "Rose / deep red",
                                    "Mauve brown", "Skin matched", "Custom", "Random", "Smart random (fits his skin)"};
@@ -67,7 +197,7 @@ namespace {
                                   "Rose / deep red", "Mauve brown", "Skin matched", "Custom", "Random",
                                   "Smart random (fits his skin)"};
     const char* kScopeItems[] = {"Everyone", "You and your followers", "Only you"};
-    const char* kMethodItems[] = {"Tint - any colour + strength (experimental)", "Textures - the 5 fixed shades"};
+    const char* kMethodItems[] = {"Any colour + strength", "Only the 5 fixed shades"};
 
     struct Settings {
         bool enabled = true;
@@ -495,7 +625,7 @@ namespace {
             return f.gcount() == static_cast<std::streamsize>(out.size());
         };
         std::string inst, other;
-        if (!sample("textures\\actors\\character\\male\\Anatomica\\anatomica.dds", inst)) return g_installed;
+        if (!sample("textures\\actors\\character\\male\\Anatomica\\anatomica_rim.dds", inst)) return g_installed;
         for (int i = 0; i < kPresets; ++i) {
             if (sample(std::string(kDir) + kColourFiles[i], other) && other == inst) {
                 g_installed = i;
@@ -577,7 +707,7 @@ namespace {
         if (choice == kCustom) {
             for (int i = 0; i < 3; ++i) out[i] = custom[i] * 255.0f;
         } else {
-            for (int i = 0; i < 3; ++i) out[i] = kAnusRGB[choice][i];
+            for (int i = 0; i < 3; ++i) out[i] = kRimRGB[choice][i];
         }
     }
     void BlendTarget(int choice, const float* custom, float out[3]) {  // 0-255
@@ -632,23 +762,19 @@ namespace {
         }
         const float red[3] = {1.0f, 1.0f - 0.40f * tender, 1.0f - 0.35f * tender};
 
-        const bool useTint = choice >= 0 && (g.method == 0 || choice == kCustom);
-        if (choice >= 0 && !useTint) L.tex = std::string(kDir) + kColourFiles[choice];
-        if (useTint) L.tex = std::string(kDir) + "neutral.dds";
-
-        // anus tint
-        if (useTint) {
-            const float s = g.method == 0 ? pk.strength : 1.0f;
+        // rim texture: a shipped shade, or a generated one (any colour / strength / reddening).
+        // The game puts the character's skin tone on top, so no shader tint is needed.
+        const bool any = choice >= 0 && (g.method == 0 || choice == kCustom);
+        if ((choice >= 0 || tender > 0.0f) && (any || tender > 0.0f)) {
+            const int col = choice >= 0 ? choice : InstalledPreset();
+            const float s = (g.method == 0 && choice >= 0) ? pk.strength : 1.0f;
             float pick[3], base[3], c[3];
-            AnusTarget(choice, pk.rgb, pick);
+            AnusTarget(col, pk.rgb, pick);
             AnusTarget(kSkinPreset, pk.rgb, base);
-            for (int i = 0; i < 3; ++i) c[i] = std::min(1.0f, skin[i] * (base[i] + (pick[i] - base[i]) * s) / kNeutralMean * red[i]);
-            L.tint = PackRGB(c);
-        } else if (tender > 0.0f) {
-            float c[3];
-            for (int i = 0; i < 3; ++i) c[i] = skin[i] * red[i];
-            L.tint = PackRGB(c);
+            for (int i = 0; i < 3; ++i) c[i] = (base[i] + (pick[i] - base[i]) * s) / 255.0f * red[i];
+            L.tex = GenRimTexture(c);
         }
+        if (L.tex.empty() && choice >= 0) L.tex = std::string(kDir) + kColourFiles[std::min(choice, kPresets - 1)];
 
         // skin-blend overlay (the game skin-tones the anus, so the ring follows the skin tone too)
         const bool npcRing = g.autoRing && !a->IsPlayerRef();
@@ -812,6 +938,25 @@ namespace {
 }
 
 namespace Colour {
+    // a button that asks "Are you sure?" before it counts as pressed
+    bool ConfirmButton(const char* label) {
+        static std::string pending;
+        if (pending == label) {
+            ImGuiMCP::TextUnformatted("Are you sure?");
+            ImGuiMCP::SameLine();
+            const std::string yes = std::string("Yes##") + label, no = std::string("No##") + label;
+            if (ImGuiMCP::Button(yes.c_str())) {
+                pending.clear();
+                return true;
+            }
+            ImGuiMCP::SameLine();
+            if (ImGuiMCP::Button(no.c_str())) pending.clear();
+            return false;
+        }
+        if (ImGuiMCP::Button(label)) pending = label;
+        return false;
+    }
+
     void RegisterFuncs(RE::BSScript::IVirtualMachine* vm) {
         vm->RegisterFunction("ColourFor"sv, "AnatomicaNative"sv, ColourFor);
         vm->RegisterFunction("LookFor"sv, "AnatomicaNative"sv, LookFor);
@@ -841,9 +986,9 @@ namespace Colour {
              "less script work. A man who already looks right costs almost nothing, so 3 s is fine for most games.");
         changed |= ComboValue("Applies to", &g.scope, 0, kScopeItems, 3);
         changed |= ComboValue("Method", &g.method, 0, kMethodItems, 2);
-        Help("Tint: one grey anus texture coloured by the game's skin shader with the character's own skin tone, so any "
-             "colour and any strength works and it follows each man's skin. Experimental - if colours look wrong, switch "
-             "to Textures (the five fixed shades, always works).");
+        Help("Any colour: Custom, your colours, Smart random, colour strength and reddening all work - each colour is "
+             "made once as a small texture (textures\\...\\Anatomica\\gen, safe to delete) and reused. "
+             "Fixed shades: only the five shipped textures. Either way the game adds the man's own skin tone on top.");
         if (g.method == 0) {
             changed |= Pct(g.randStrength ? "Colour strength from" : "Colour strength", &g.strength);
             Help("100% = the full picked colour. 0% = the character's own skin tone (no pink). Values between blend the two.");
@@ -878,7 +1023,7 @@ namespace Colour {
              "deeper. Neighbouring = hues next to his on the colour wheel (a red argonian gets reds, oranges, magentas - "
              "never green). Contrasting = the opposite side of the wheel, for bold looks.");
         ImGuiMCP::TextDisabled("Random and Smart random are fixed per man until you re-roll.");
-        if (ImGuiMCP::Button("Re-roll everyone")) {
+        if (ConfirmButton("Re-roll everyone")) {
             ++g.seed;
             changed = true;
         }
@@ -895,7 +1040,7 @@ namespace Colour {
             Help("Open the console (~) and click a man to select him, then press this to give just him a new random colour.");
         }
         ImGuiMCP::Spacing();
-        if (ImGuiMCP::Button("Reset colour settings")) {
+        if (ConfirmButton("Reset colour settings")) {
             const Settings d;
             g.enabled = d.enabled;
             g.interval = d.interval;
@@ -973,7 +1118,7 @@ namespace Colour {
             ImGuiMCP::PopID();
         }
         ImGuiMCP::Spacing();
-        if (ImGuiMCP::Button("Reset all races")) {
+        if (ConfirmButton("Reset all races")) {
             g_races.clear();
             for (const auto& [k, v] : g_raceDefaults) g_races[k].choice = v;   // back to the installer's picks
             changed = true;
@@ -1056,7 +1201,7 @@ namespace Colour {
         changed |= ImGuiMCP::Checkbox("Also redden the skin-blend area", &g.tenderBlend);
         Help("Reddens the RaceMenu \"Anatomica Blend\" paint around the anus too (characters who have it applied).");
         ImGuiMCP::Spacing();
-        if (ImGuiMCP::Button("Reset after-sex settings")) {
+        if (ConfirmButton("Reset after-sex settings")) {
             const Settings d;
             g.wet = d.wet;
             g.wetStrength = d.wetStrength;
