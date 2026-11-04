@@ -187,8 +187,10 @@ void UI::Register() {
     SKSEMenuFramework::AddSectionItem("After sex", Colour::RenderAfter);
     SKSEMenuFramework::AddSectionItem("Cum & drips", Drip::RenderPage);
     SKSEMenuFramework::AddSectionItem("Status", Colour::RenderStatus);
+    SKSEMenuFramework::AddSectionItem("Testing", Colour::RenderTesting);
     SKSEMenuFramework::AddSectionItem("Jiggle", Jiggle::Render);
     SKSEMenuFramework::AddSectionItem("About", About::Render);
+    Colour::RegisterWindow();
 }
 
 namespace {

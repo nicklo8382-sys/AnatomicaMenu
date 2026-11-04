@@ -14,6 +14,7 @@ namespace Drip {
     bool Film(RE::FormID id, float rgb[3], float& amt);    // cum film for the rim texture (false = none)
     float Froth(RE::FormID id);                            // froth on the rim texture right now (0-1)
     float HoldOpen(RE::FormID id);                         // gape closes this many times slower (1 = normal)
+    void RenderTests(RE::Actor* who);                     // the cum part of the Testing page
     std::string Status(RE::Actor* a);                      // one line for the Status page
     void __stdcall RenderPage();
 }

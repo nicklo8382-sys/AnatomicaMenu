@@ -8,4 +8,6 @@ namespace Wink {
     void Reset();
     // current after-sex gape the movement code is following (0 if untracked) - for the Status page
     float GapeOf(RE::FormID id);
+    // Testing page: a clench right now (only for a man the movement code is already following)
+    bool TestClench(RE::Actor* a);
 }

@@ -38,7 +38,7 @@ namespace {
     double Now() { return std::chrono::duration<double>(clock_t_::now().time_since_epoch()).count(); }
 
     constexpr const char* kEsp = "AnatomicaGape.esp";
-    constexpr RE::FormID kStrandArmo = 0x830;   // + (tier-1)*4 + (stage-1)
+    constexpr RE::FormID kStrandArmo = 0x830;   // + (tier-1)*4: one armor per size; the 4 lengths are shown/hidden inside it
     constexpr RE::FormID kSquirtArmo = 0x84C;   // frames 1-3; frames 4-6 at 0x8A0 (see SquirtArmo)
     constexpr int kSquirtFrames = 6;
     constexpr RE::FormID SquirtArmo(int frame) { return frame <= 3 ? kSquirtArmo + frame - 1 : 0x8A0 + frame - 4; }
@@ -447,23 +447,50 @@ namespace {
     // ---------------------------------------------------------------- worker
     // the strand root follows the lower lip as he gapes (the gape is a morph, not a bone), and the cum pooled
     // in the canal is hidden while something is inside him
+    // by name - SMP renames the bones it merges from an armor ("hdtSSEPhysics_AutoRename_... AD2_R"), so a plain
+    // lookup can miss them: fall back to a name that ENDS with the one asked for
+    RE::NiAVObject* FindNode(RE::NiAVObject* root, const std::string& name) {
+        if (auto* o = root->GetObjectByName(RE::BSFixedString(name.c_str()))) return o;
+        RE::NiAVObject* hit = nullptr;
+        RE::BSVisit::TraverseScenegraphObjects(root, [&](RE::NiAVObject* o) {
+            const char* n = o ? o->name.c_str() : nullptr;
+            if (n) {
+                const std::string_view sv(n);
+                if (sv.size() > name.size() && sv.substr(sv.size() - name.size()) == name && (sv[sv.size() - name.size() - 1] == ' ' || sv[sv.size() - name.size() - 1] == '_')) {
+                    hit = o;
+                    return RE::BSVisit::BSVisitControl::kStop;
+                }
+            }
+            return RE::BSVisit::BSVisitControl::kContinue;
+        });
+        return hit;
+    }
+
     void AdjustNodes(RE::Actor* a, State& s, double now) {
         auto* root = a->Get3D(false);
         if (!root) return;
         if (s.worn >= kStrandArmo && s.worn < kStrandArmo + 12) {
             const int idx = static_cast<int>(s.worn - kStrandArmo);
-            const std::string name = std::format("AD{}{}_R", idx / 4 + 1, idx % 4 + 1);
-            if (auto* node = root->GetObjectByName(RE::BSFixedString(name.c_str()))) {
+            const std::string name = std::format("AD{}_R", idx / 4 + 1);
+            // the length that is growing now: one group shown, the others hidden (no re-equip, so the physics never resets)
+            for (int k = 1; k <= 4; ++k) {
+                const std::string gname = std::format("ADStage{}", k);
+                if (auto* grp = FindNode(root, gname)) {
+                    if (k == std::max(s.stage, 1)) grp->GetFlags().reset(RE::NiAVObject::Flag::kHidden);
+                    else grp->GetFlags().set(RE::NiAVObject::Flag::kHidden);
+                }
+            }
+            if (auto* node = FindNode(root, name)) {
                 const float gp = std::clamp(Wink::GapeOf(a->GetFormID()), 0.0f, 1.5f);
-                // rest position (under the pelvis), then down along the lip
-                node->local.translate = RE::NiPoint3(0.0f, -5.4715f + 0.59f * 1.3f * gp, -6.2495f - 0.81f * 1.3f * gp);
+                // rest: the bottom of the closed slit (under the pelvis); as he gapes, down the opening to the lower lip
+                node->local.translate = RE::NiPoint3(0.0f, -4.9759f + 0.59f * 0.75f * gp, -6.9299f - 0.81f * 0.75f * gp);
             }
         }
-        if (auto* film = root->GetObjectByName(RE::BSFixedString("AnatomicaFilm"))) {
+        if (auto* film = FindNode(root, "AnatomicaFilm")) {
             if (g.film) film->GetFlags().reset(RE::NiAVObject::Flag::kHidden);
             else film->GetFlags().set(RE::NiAVObject::Flag::kHidden);
         }
-        if (auto* pool = root->GetObjectByName(RE::BSFixedString("AnatomicaPool"))) {
+        if (auto* pool = FindNode(root, "AnatomicaPool")) {
             const bool inside = now - s.lastWorked < 2.5;
             if (inside) pool->GetFlags().set(RE::NiAVObject::Flag::kHidden);
             else pool->GetFlags().reset(RE::NiAVObject::Flag::kHidden);
@@ -645,18 +672,19 @@ namespace {
                     // the drip falls
                     s.vol -= s.dropAmt; s.leaked += s.dropAmt;
                     if (g.puddles) PlacePuddle(id, s.dropAmt, CumTex(s.rgb, g.opacity, true));
-                    s.cycleStart = 0.0; s.stage = 0;
-                    if (s.worn) { EquipStrand(id, 0, s.worn, {}); s.worn = 0; }
+                    s.cycleStart = 0.0; s.stage = 0;   // the strand stays on: the next drip starts short
                 } else {
                     s.stage = f < 0.2f ? 1 : (f < 0.45f ? 2 : (f < 0.75f ? 3 : 4));
-                    const RE::FormID want = kStrandArmo + (s.tier - 1) * 4 + (s.stage - 1);
+                    const RE::FormID want = kStrandArmo + (s.tier - 1) * 4;   // only changes when he gets fuller / emptier
                     if (want != s.worn) {
                         EquipStrand(id, want, s.worn, tex);
                         s.worn = want; s.lastWornCheck = now;
-                    } else if (s.worn && now - s.lastWornCheck > 5.0) {
-                        // something (a framework undressing him) took it off: put it back
+                    } else if (s.worn && now - s.lastWornCheck > 10.0) {
+                        // something (a framework undressing him) really took it off: put it back
                         s.lastWornCheck = now;
-                        if (a->GetWornArmor(RE::BGSBipedObjectForm::BipedObjectSlot::kModChestSecondary) != Armo(s.worn)) EquipStrand(id, s.worn, 0, tex);
+                        auto* on = a->GetWornArmor(RE::BGSBipedObjectForm::BipedObjectSlot::kModChestSecondary);
+                        auto* mine = Armo(s.worn);
+                        if (mine && on != mine) EquipStrand(id, s.worn, 0, tex);
                     }
                 }
                 // walking: drops on the way
@@ -855,6 +883,10 @@ namespace {
 }
 
 namespace Drip {
+    void DripTestNative(RE::StaticFunctionTag*, RE::BSFixedString what);
+    RE::Actor* TestTarget();
+    std::string RunTest(RE::Actor* a, std::string what);
+
     void Install() {
         if (auto* s = SKSE::GetSerializationInterface()) {
             s->SetUniqueID('ANDR');
@@ -869,6 +901,7 @@ namespace Drip {
         vm->RegisterFunction("DripClimax"sv, "AnatomicaNative"sv, DripClimax);
         vm->RegisterFunction("NeedEvents"sv, "AnatomicaNative"sv, NeedEvents);
         vm->RegisterFunction("DripTrail"sv, "AnatomicaNative"sv, DripTrail);
+        vm->RegisterFunction("DripTest"sv, "AnatomicaNative"sv, DripTestNative);
     }
 
     void Reset() {
@@ -952,6 +985,65 @@ namespace Drip {
         auto it = g_st.find(id);
         if (it == g_st.end()) return 1.0f;
         return 1.0f + g.fullOpenAmt * std::clamp(it->second.vol / std::max(g.vol * 2.0f, 0.1f), 0.0f, 1.0f);
+    }
+
+    // ---- testing: make any effect happen now on the console-selected man (or you)
+    RE::Actor* TestTarget() {
+        if (auto sel = RE::Console::GetSelectedRef()) if (auto* a = sel->As<RE::Actor>()) return a;
+        return RE::PlayerCharacter::GetSingleton();
+    }
+    std::string RunTest(RE::Actor* a, std::string what) {
+        if (!a) return "nobody to test on";
+        for (auto& c : what) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        float col[3]; GiverColour(nullptr, col);
+        std::lock_guard lk(g_mx);
+        auto& s = g_st[a->GetFormID()];
+        const double now = Now();
+        auto ensure = [&](float v) { if (s.vol < v) { if (s.vol <= 0.01f) for (int i = 0; i < 3; ++i) s.rgb[i] = col[i]; s.vol = v; s.volStart = std::max(s.volStart, v); if (s.loads == 0) s.loads = 1; } };
+        auto freeSlot = [&]() { s.squirtFrame = 0; s.ofFrame = 0; s.strFrame = 0; };
+        if (what == "load") { AddLoad(a->GetFormID(), col, 0, g.vol); return "one load added"; }
+        if (what == "fill") { while (s.loads < g.loadCap) AddLoad(a->GetFormID(), col, 0, g.vol); return "filled to the cap"; }
+        if (what == "squirt") { ensure(1.0f); freeSlot(); s.lastWorked = 0.0; s.squirtFrame = 1; s.squirtNext = now; s.squirtAmt = s.vol * 0.35f; s.vol -= s.squirtAmt; return "squirt"; }
+        if (what == "spray") { ensure(1.0f); freeSlot(); StartSpray(s, 0.4f, now); return "spray around the schlong"; }
+        if (what == "ooze") { ensure(1.0f); freeSlot(); StartOverflow(s, 0.3f, now); return "ooze around the schlong"; }
+        if (what == "gush") { ensure(1.5f); freeSlot(); const float amt = s.vol * g.gushFrac; s.vol -= amt; StartOverflow(s, amt, now, 3.0f); return "gush"; }
+        if (what == "string") { ensure(0.5f); freeSlot(); s.strFrame = 1; s.strNext = now; return "string to the partner"; }
+        if (what == "froth") { s.frothLevel = 1.0f; s.frothStart = now; return "froth (needs the colour feature on)"; }
+        if (what == "trail") { ensure(0.5f); s.leaked = 3.0f; s.emptySince = 0.0; if (s.legSide == 0) s.legSide = 1; return "full leg trail"; }
+        if (what == "tip") { Tip& t = g_tips[a->GetFormID()]; t.start = now; t.stage = -1; for (int i = 0; i < 3; ++i) t.rgb[i] = col[i]; return "left on his tip"; }
+        if (what == "clear") { ClearActor(a->GetFormID(), s); s.leaked = 0.0f; s.emptySince = 0.0; s.frothLevel = 0.0f;
+            if (auto it = g_tips.find(a->GetFormID()); it != g_tips.end()) { if (it->second.stage > 0) EquipStrand(a->GetFormID(), 0, kTipArmo + it->second.stage - 1, {}); g_tips.erase(it); }
+            return "cleared"; }
+        return "unknown test: load fill squirt spray ooze gush string froth trail tip clear";
+    }
+    // console: cgf "AnatomicaNative.DripTest" "squirt"   (on the console-selected man, or you)
+    void DripTestNative(RE::StaticFunctionTag*, RE::BSFixedString what) {
+        const std::string r = RunTest(TestTarget(), what.c_str() ? what.c_str() : "");
+        RE::ConsoleLog::GetSingleton()->Print("Anatomica: %s", r.c_str());
+    }
+
+    void RenderTests(RE::Actor* who) {
+        static std::string last;
+        const char* tests[][3] = {
+            {"Add a load", "load", "one load in him (strands, film, ooze)"},
+            {"Fill him up", "fill", "loads up to the cap"},
+            {"Squirt", "squirt", "the 6-frame squirt out of the open hole"},
+            {"Spray around schlong", "spray", "the squirt while something is still inside him"},
+            {"Ooze around schlong", "ooze", "overflow around the shaft"},
+            {"Gush", "gush", "a gush as when he stands up"},
+            {"String", "string", "the string to the partner, snapping"},
+            {"Froth", "froth", "bubbles on the rim (colour feature on)"},
+            {"Leg trail", "trail", "the full trail down his leg"},
+            {"Tip (as giver)", "tip", "the pearl and strand on his tip"},
+            {"Clear all cum", "clear", "removes all of it"}};
+        int n = 0;
+        for (auto& t : tests) {
+            if (n++ % 4) ImGuiMCP::SameLine();
+            if (ImGuiMCP::Button(t[0])) last = RunTest(who, t[1]);
+            if (ImGuiMCP::IsItemHovered()) { ImGuiMCP::BeginTooltip(); ImGuiMCP::TextUnformatted(t[2]); ImGuiMCP::EndTooltip(); }
+        }
+        if (!last.empty()) ImGuiMCP::TextDisabled("Cum: %s", last.c_str());
+        ImGuiMCP::TextDisabled("Console: cgf \"AnatomicaNative.DripTest\" \"squirt\"  (load fill squirt spray ooze gush string froth trail tip clear)");
     }
 
     std::string Status(RE::Actor* a) {
@@ -1128,6 +1220,8 @@ namespace Drip {
             if (ch) { Colour::SaveNow(); ch = false; }   // save before the race list (it saves on its own)
             Colour::RenderCumColours();
             if (ImGuiMCP::Button("Back to defaults")) { s = Settings{}; ch = true; }
+
+            ImGuiMCP::TextDisabled("Test every cum effect on the Testing page.");
         });
         if (ch) Colour::SaveNow();
     }

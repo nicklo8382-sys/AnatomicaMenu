@@ -18,5 +18,7 @@ namespace Colour {
     void __stdcall RenderRaces();
     void __stdcall RenderRules();
     void __stdcall RenderAfter();
-    void __stdcall RenderStatus();   // stats of the man selected in the console + his own colour
+    void __stdcall RenderStatus();
+    void __stdcall RenderTesting();    // the Testing page: every effect on demand
+    void RegisterWindow();             // the live status window + hotkey input (call after the menu sections)
 }

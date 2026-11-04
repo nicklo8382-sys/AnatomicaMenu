@@ -273,6 +273,15 @@ namespace Wink {
         logger::info("Anatomica motion: Papyrus functions (AnatomicaNative) {}", ok ? "registered" : "FAILED to register");
         std::thread(Loop).detach();
     }
+    bool TestClench(RE::Actor* a) {
+        if (!a) return false;
+        {
+            std::lock_guard lk(g_lock);
+            if (g_states.find(a->GetFormID()) == g_states.end()) return false;
+        }
+        Blink(nullptr, a);
+        return true;
+    }
     float GapeOf(RE::FormID id) {
         std::lock_guard lk(g_lock);
         auto it = g_states.find(id);

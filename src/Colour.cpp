@@ -7,6 +7,7 @@
 #include <SimpleIni.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -365,7 +366,10 @@ namespace {
         float dripLifeMin = 200.0f, dripLifeMax = 220.0f;
         float dripFallMin = 60.0f, dripFallMax = 80.0f;
         bool dripTrail = true;
-        int statusKey = 0;           // hotkey (DirectX scan code), 0 = none
+        int statusKey = 0;           // status window hotkey: DirectX scan code (mouse buttons 256+), 0 = none
+        int statusMods = 0;          // modifiers held with it: 1 Ctrl, 2 Shift, 4 Alt
+        int moveKey = 0, moveMods = 0;   // unlock the window to move it (mouse cursor), press again to lock
+        bool statusMsg = false;      // also show the one-line message
         float skinOnRim = 1.0f;      // how much of the man's skin tone goes into the rim colour
         int follower = kUseDefault;
     };
@@ -508,7 +512,8 @@ namespace {
         B("Rested", g.rested); F("RestedMinutes", g.restedMinutes, 5.0f, 600.0f); F("RestedExtra", g.restedExtra, 0.0f, 1.0f);
         B("Loose", g.loose); F("LooseAdd", g.looseAdd, 0.0f, 0.2f); F("LooseCap", g.looseCap, 0.0f, 0.6f);
         F("LooseRecover", g.looseRecover, 0.0f, 1.0f);
-        I("StatusKey", g.statusKey, 0, 255);
+        I("StatusKey", g.statusKey, 0, 300); I("StatusMods", g.statusMods, 0, 7);
+        I("MoveKey", g.moveKey, 0, 300); I("MoveMods", g.moveMods, 0, 7); B("StatusMsg", g.statusMsg);
     }
 
     void LoadRaceDefaults() {
@@ -1439,39 +1444,210 @@ namespace {
     }
     RE::FormID g_inspect = 0;   // last man looked at with the hotkey
 
+    // ---- hotkeys: any key or mouse button with any of Ctrl / Shift / Alt, bound by pressing it ------------
+    std::atomic<int> g_capture{0};            // 1 = the next key press becomes the status hotkey, 2 = the move hotkey
+    std::atomic<int> g_modsDown{0};           // Ctrl 1 / Shift 2 / Alt 4 held right now
+    std::atomic<bool> g_winOpen{false}, g_winMove{false};
+    double g_lastCombo = 0.0;
+    SKSEMenuFramework::Model::WindowInterface* g_statusWin = nullptr;
+
+    int ModBit(std::uint32_t code) {
+        switch (code) {
+            case 0x1D: case 0x9D: return 1;   // Ctrl
+            case 0x2A: case 0x36: return 2;   // Shift
+            case 0x38: case 0xB8: return 4;   // Alt
+            default: return 0;
+        }
+    }
+    std::string KeyLabel(int code, int mods) {
+        if (code <= 0) return "None";
+        static const std::map<int, const char*> names = {
+            {0x01, "Esc"}, {0x0E, "Backspace"}, {0x0F, "Tab"}, {0x1C, "Enter"}, {0x39, "Space"}, {0x3A, "Caps Lock"},
+            {0x29, "`"}, {0x0C, "-"}, {0x0D, "="}, {0x1A, "["}, {0x1B, "]"}, {0x27, ";"}, {0x28, "'"}, {0x2B, "\\"},
+            {0x33, ","}, {0x34, "."}, {0x35, "/"}, {0x45, "Num Lock"}, {0x46, "Scroll Lock"}, {0xC5, "Pause"},
+            {0xD2, "Insert"}, {0xD3, "Delete"}, {0xC7, "Home"}, {0xCF, "End"}, {0xC9, "Page Up"}, {0xD1, "Page Down"},
+            {0xC8, "Up"}, {0xD0, "Down"}, {0xCB, "Left"}, {0xCD, "Right"}, {0x52, "Num 0"}, {0x4F, "Num 1"},
+            {0x50, "Num 2"}, {0x51, "Num 3"}, {0x4B, "Num 4"}, {0x4C, "Num 5"}, {0x4D, "Num 6"}, {0x47, "Num 7"},
+            {0x48, "Num 8"}, {0x49, "Num 9"}, {0xB5, "Num /"}, {0x37, "Num *"}, {0x4A, "Num -"}, {0x4E, "Num +"},
+            {0x53, "Num ."}, {0x9C, "Num Enter"}, {0x57, "F11"}, {0x58, "F12"}};
+        static const char* row1 = "1234567890", * q = "QWERTYUIOP", * a = "ASDFGHJKL", * z = "ZXCVBNM";
+        std::string k;
+        if (code >= 256) k = std::format("Mouse {}", code - 256 + 1);
+        else if (auto it = names.find(code); it != names.end()) k = it->second;
+        else if (code >= 0x02 && code <= 0x0B) k = std::string(1, row1[code - 0x02]);
+        else if (code >= 0x10 && code <= 0x19) k = std::string(1, q[code - 0x10]);
+        else if (code >= 0x1E && code <= 0x26) k = std::string(1, a[code - 0x1E]);
+        else if (code >= 0x2C && code <= 0x32) k = std::string(1, z[code - 0x2C]);
+        else if (code >= 0x3B && code <= 0x44) k = std::format("F{}", code - 0x3B + 1);
+        else k = std::format("Key {:02X}", code);
+        std::string m;
+        if (mods & 1) m += "Ctrl + ";
+        if (mods & 2) m += "Shift + ";
+        if (mods & 4) m += "Alt + ";
+        return m + k;
+    }
+
+    // who the window shows: the man under the crosshair, else the console selection, else the last one, else you
+    void PickInspect() {
+        RE::Actor* a = nullptr;
+        if (auto* pick = RE::CrosshairPickData::GetSingleton()) {
+            auto ref = pick->GetActiveTarget().get();
+            if (ref) a = ref->As<RE::Actor>();
+        }
+        if (!a) if (auto sel = RE::Console::GetSelectedRef()) a = sel->As<RE::Actor>();
+        if (!a && g_inspect) a = RE::TESForm::LookupByID<RE::Actor>(g_inspect);
+        if (!a) a = RE::PlayerCharacter::GetSingleton();
+        if (a) g_inspect = a->GetFormID();
+    }
+
+    void ApplyWindowState() {
+        if (!g_statusWin) return;
+        g_statusWin->IsOpen = g_winOpen.load();
+        g_statusWin->BlockUserInput = g_winOpen.load() && g_winMove.load();   // cursor only while moving it
+    }
+
+    // one button event: track the modifiers, take a binding, or fire a hotkey. Returns true if it was used.
+    bool HandleButton(const RE::ButtonEvent* b) {
+        if (!b) return false;
+        const auto dev = b->GetDevice();
+        if (dev != RE::INPUT_DEVICE::kKeyboard && dev != RE::INPUT_DEVICE::kMouse) return false;
+        const std::uint32_t raw = b->GetIDCode();
+        const int code = dev == RE::INPUT_DEVICE::kMouse ? 256 + static_cast<int>(raw) : static_cast<int>(raw);
+        if (dev == RE::INPUT_DEVICE::kKeyboard) {
+            if (const int mb = ModBit(raw)) {
+                if (b->IsPressed()) g_modsDown |= mb; else g_modsDown &= ~mb;
+                return false;   // a modifier alone is never the key
+            }
+        }
+        if (!b->IsDown()) return false;
+        const int mods = g_modsDown.load();
+        if (const int cap = g_capture.load()) {
+            if (code == 256) return false;   // left click: the menu's own button
+            std::lock_guard lk(g_lock);
+            if (code != 0x01) {   // Esc cancels
+                if (cap == 1) g.statusKey = code, g.statusMods = mods;
+                else g.moveKey = code, g.moveMods = mods;
+                SaveIni();
+            }
+            g_capture = 0;
+            return true;
+        }
+        int sk, sm, mk, mm;
+        {
+            std::lock_guard lk(g_lock);
+            sk = g.statusKey, sm = g.statusMods, mk = g.moveKey, mm = g.moveMods;
+        }
+        const double now = Now();
+        if (now - g_lastCombo < 0.2) return false;   // the same press seen twice (game + menu input)
+        if (sk > 0 && code == sk && mods == sm) {
+            g_lastCombo = now;
+            if (!g_winOpen) {
+                PickInspect();
+                g_winOpen = true;
+            } else {
+                // looking at someone else: switch to him; looking at the same man (or nobody): close
+                const RE::FormID before = g_inspect;
+                PickInspect();
+                if (g_inspect == before) { g_winOpen = false; g_winMove = false; }
+            }
+            ApplyWindowState();
+            if (g.statusMsg && g_winOpen) {
+                if (auto* a = RE::TESForm::LookupByID<RE::Actor>(g_inspect)) {
+                    std::string line;
+                    {
+                        std::lock_guard lk(g_lock);
+                        if (!g_loaded) LoadIni();
+                        line = StatusLine(StatusOf(a));
+                    }
+                    RE::SendHUDMessage::ShowHUDMessage(line.c_str());
+                }
+            }
+            return true;
+        }
+        if (mk > 0 && code == mk && mods == mm && g_winOpen) {
+            g_lastCombo = now;
+            g_winMove = !g_winMove;
+            ApplyWindowState();
+            return true;
+        }
+        return false;
+    }
+
     struct KeySink : RE::BSTEventSink<RE::InputEvent*> {
         RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* ev, RE::BSTEventSource<RE::InputEvent*>*) override {
             if (!ev) return RE::BSEventNotifyControl::kContinue;
-            int key = 0;
-            {
-                std::lock_guard lk(g_lock);
-                key = g.statusKey;
-            }
-            if (key <= 0) return RE::BSEventNotifyControl::kContinue;
             for (auto* e = *ev; e; e = e->next) {
                 if (e->GetEventType() != RE::INPUT_EVENT_TYPE::kButton) continue;
                 const auto* b = e->AsButtonEvent();
-                if (!b || b->GetDevice() != RE::INPUT_DEVICE::kKeyboard || !b->IsDown() || static_cast<int>(b->GetIDCode()) != key) continue;
-                if (auto* ui = RE::UI::GetSingleton(); ui && ui->GameIsPaused()) continue;
-                RE::Actor* a = nullptr;
-                if (auto* pick = RE::CrosshairPickData::GetSingleton()) {
-                    auto ref = pick->GetActiveTarget().get();
-                    if (ref) a = ref->As<RE::Actor>();
-                }
-                if (!a) a = RE::PlayerCharacter::GetSingleton();
-                if (!a) continue;
-                std::string line;
-                {
-                    std::lock_guard lk(g_lock);
-                    if (!g_loaded) LoadIni();
-                    g_inspect = a->GetFormID();
-                    line = StatusLine(StatusOf(a));
-                }
-                RE::SendHUDMessage::ShowHUDMessage(line.c_str());
+                if (!b) continue;
+                // in menus only the binding is taken (not the hotkeys)
+                auto* ui = RE::UI::GetSingleton();
+                if (ui && ui->GameIsPaused() && !g_capture && !(b->GetDevice() == RE::INPUT_DEVICE::kKeyboard && ModBit(b->GetIDCode()))) continue;
+                HandleButton(b);
             }
             return RE::BSEventNotifyControl::kContinue;
         }
     };
+    // the menu framework's own input hook: sees keys while its windows are open (binding, unlocking the window)
+    bool __stdcall FrameworkInput(RE::InputEvent* ev) {
+        for (auto* e = ev; e; e = e->next) {
+            if (e->GetEventType() != RE::INPUT_EVENT_TYPE::kButton) continue;
+            HandleButton(e->AsButtonEvent());
+        }
+        return false;
+    }
+
+    // ---- the status window: movable, live, over the game -------------------------------------------
+    void Bar(const char* label, float v) {
+        char buf[64];
+        std::snprintf(buf, sizeof buf, "%s %.0f%%", label, v * 100.0f);
+        ImGuiMCP::ProgressBar(std::clamp(v, 0.0f, 1.0f), ImGuiMCP::ImVec2{ImGuiMCP::GetFontSize() * 14.0f, 0.0f}, buf);
+    }
+    void __stdcall RenderStatusWindow() {
+        if (!g_winOpen) return;
+        const bool moving = g_winMove;
+        int flags = ImGuiMCP::ImGuiWindowFlags_AlwaysAutoResize | ImGuiMCP::ImGuiWindowFlags_NoCollapse | ImGuiMCP::ImGuiWindowFlags_NoFocusOnAppearing;
+        if (!moving) flags |= ImGuiMCP::ImGuiWindowFlags_NoInputs | ImGuiMCP::ImGuiWindowFlags_NoNav;
+        ImGuiMCP::SetNextWindowPos(ImGuiMCP::ImVec2{40.0f, 200.0f}, ImGuiMCP::ImGuiCond_FirstUseEver);
+        ImGuiMCP::SetNextWindowBgAlpha(moving ? 0.9f : 0.6f);
+        bool open = true;
+        if (ImGuiMCP::Begin("Anatomica status", moving ? &open : nullptr, flags)) {
+            RE::Actor* a = g_inspect ? RE::TESForm::LookupByID<RE::Actor>(g_inspect) : nullptr;
+            if (!a) {
+                ImGuiMCP::TextUnformatted("Look at a man and press the status hotkey.");
+            } else {
+                Status st;
+                {
+                    std::lock_guard lk(g_lock);
+                    if (!g_loaded) LoadIni();
+                    st = StatusOf(a);
+                }
+                ImGuiMCP::Text("%s  (%s)", st.name.c_str(), st.race.c_str());
+                ImGuiMCP::ColorButton("##rim", ImGuiMCP::ImVec4{st.rim[0], st.rim[1], st.rim[2], 1.0f});
+                ImGuiMCP::SameLine();
+                ImGuiMCP::Text("%s%s", st.colour.c_str(), st.own ? " (his own)" : "");
+                Bar("Gape", st.gape);
+                Bar("Looseness", st.loose / 0.6f);
+                Bar("Wet", st.wet);
+                Bar("Red", st.tender);
+                Bar("Bruise", st.bruise);
+                Bar("Swelling", st.swell);
+                if (st.schlong > 0.01f) Bar("Schlong shine", st.schlong);
+                ImGuiMCP::Text("This round: %d partner(s), %.0f s", st.partners, st.secs);
+                ImGuiMCP::TextUnformatted(Drip::Status(a).c_str());
+            }
+            if (moving) {
+                ImGuiMCP::Separator();
+                ImGuiMCP::TextDisabled("Drag the title bar to move it.");
+                if (ImGuiMCP::Button("Lock in place")) { g_winMove = false; ApplyWindowState(); }
+                ImGuiMCP::SameLine();
+                if (ImGuiMCP::Button("Close")) open = false;
+            }
+        }
+        ImGuiMCP::End();
+        if (!open) { g_winOpen = false; g_winMove = false; ApplyWindowState(); }
+    }
+
     KeySink g_keySink;
 
     // ---- healing: sleeping / waiting and healing magic clear the after-sex looks ---------------
@@ -1998,19 +2174,38 @@ namespace Colour {
         std::lock_guard lk(g_lock);
         if (!g_loaded) LoadIni();
         bool changed = false;
-        // hotkey
-        {
-            int idx = 0;
-            for (int i = 0; i < static_cast<int>(std::size(kKeys)); ++i)
-                if (kKeys[i].code == g.statusKey) idx = i;
-            std::vector<const char*> names;
-            for (const auto& k : kKeys) names.push_back(k.name);
-            if (ImGuiMCP::Combo("Status hotkey", &idx, names.data(), static_cast<int>(names.size()))) {
-                g.statusKey = kKeys[idx].code;
-                changed = true;
+        // hotkeys: bound by pressing them (any key or mouse button, with Ctrl / Shift / Alt if you like)
+        auto bindRow = [&](const char* what, int which, int& key, int& mods) {
+            ImGuiMCP::PushID(which);
+            ImGuiMCP::Text("%s:", what);
+            ImGuiMCP::SameLine();
+            if (g_capture == which) {
+                ImGuiMCP::TextColored(ImGuiMCP::ImVec4{1.0f, 0.85f, 0.3f, 1.0f}, "press the keys now... (Esc = cancel)");
+                ImGuiMCP::SameLine();
+                if (ImGuiMCP::Button("Cancel")) g_capture = 0;
+            } else {
+                ImGuiMCP::TextUnformatted(KeyLabel(key, mods).c_str());
+                ImGuiMCP::SameLine();
+                if (ImGuiMCP::Button("Set")) g_capture = which;
+                ImGuiMCP::SameLine();
+                if (ImGuiMCP::Button("Clear")) { key = 0; mods = 0; changed = true; }
             }
-            Help("Look at a man and press it: his colour, wetness, redness, gape and looseness show as a message, and he "
-                 "becomes the man shown on this page. None = no hotkey.");
+            ImGuiMCP::PopID();
+        };
+        bindRow("Status window hotkey", 1, g.statusKey, g.statusMods);
+        Help("Press Set, then the key you want - hold Ctrl, Shift and/or Alt with it for a combination (e.g. Ctrl + Shift + "
+             "Alt + F1). Mouse buttons work too. In game: look at a man and press it to open a live window with his stats; "
+             "press it on another man to switch to him, on the same man to close it.");
+        bindRow("Move the window", 2, g.moveKey, g.moveMods);
+        Help("While the window is open: press it to unlock the window (mouse cursor, game paused for input), drag it by "
+             "its title bar, then press it again or click Lock in place. The position is remembered.");
+        changed |= ImGuiMCP::Checkbox("Also show a one-line message when the hotkey is pressed", &g.statusMsg);
+        {
+            bool open = g_winOpen;
+            if (ImGuiMCP::Checkbox("Show the status window now", &open)) {
+                if (open) PickInspect();
+                g_winOpen = open; g_winMove = false; ApplyWindowState();
+            }
         }
         ImGuiMCP::Separator();
         RE::Actor* a = nullptr;
@@ -2055,6 +2250,95 @@ namespace Colour {
         if (changed) SaveIni();
         ImGuiMCP::Spacing();
         ImGuiMCP::TextDisabled("Values update every \"Check every\" seconds (Colours page).");
+    }
+
+    // ---------------------------------------------------------------- Testing page: make anything happen now
+    // a Papyrus global (NiOverride) from the game thread
+    template <class... Args>
+    void CallStatic(const char* cls, const char* fn, Args... args) {
+        if (auto* t = SKSE::GetTaskInterface())
+            t->AddTask([=]() {
+                auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+                if (!vm) return;
+                auto* fa = RE::MakeFunctionArguments(Args(args)...);
+                RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb;
+                vm->DispatchStaticCall(cls, fn, fa, cb);
+            });
+    }
+    void SetMorph(RE::Actor* a, const char* morph, const char* key, float v) {
+        RE::TESObjectREFR* ref = a;
+        CallStatic("NiOverride", "SetBodyMorph", ref, RE::BSFixedString(morph), RE::BSFixedString(key), v);
+        CallStatic("NiOverride", "UpdateModelWeight", ref);
+    }
+    RE::Actor* TestWho() {
+        if (auto sel = RE::Console::GetSelectedRef()) if (auto* a = sel->As<RE::Actor>()) return a;
+        return RE::PlayerCharacter::GetSingleton();
+    }
+    // a whole round of sex that just ended: dil = how rough (0-1), partners, seconds
+    void FakeRound(RE::Actor* a, float dil, int partners, float secs) {
+        Worked(nullptr, a, dil, static_cast<float>(partners), nullptr);
+        std::lock_guard lk(g_lock);
+        auto& w = g_work[a->GetFormID()];
+        w.peak = std::clamp(dil, 0.0f, 1.0f);
+        w.wetPeak = g.wetBuild ? std::min(g.wetCap, w.wetBase + dil) : dil;
+        w.partners = partners;
+        w.workSecs = secs;
+        w.last = w.wetLast = Now() - 3.5;   // the round is over (looseness, drips etc. react to that)
+        g_sent.erase(a->GetFormID());       // send the whole look on the next pass
+    }
+
+    void __stdcall RenderTesting() {
+        RE::Actor* a = TestWho();
+        static std::string last;
+        auto act = [&](const char* label, auto&& fn) {
+            if (ImGuiMCP::Button(label)) last = std::string(label) + ": " + fn();
+        };
+        ImGuiMCP::TextWrapped("Everything here happens to the man you click in the console (~), or to you if nobody is "
+                              "selected. Close the menu to see it. Looks (colour, wetness, redness...) appear on the next "
+                              "check (Colours page, \"Check every\").");
+        ImGuiMCP::SeparatorText(a ? a->GetName() : "nobody");
+        if (!a) return;
+
+        ImGuiMCP::SeparatorText("Colour and ring");
+        act("Re-roll his colour", [&] { std::lock_guard lk(g_lock); ++g_reroll[RefKey(a)]; g_ringReset.insert(a->GetFormID()); SaveIni(); return std::string("new random / Skin-fit colour, ring redone"); });
+        ImGuiMCP::SameLine();
+        act("Re-apply his look now", [&] { std::lock_guard lk(g_lock); g_sent.erase(a->GetFormID()); return std::string("sent again on the next check"); });
+        ImGuiMCP::SameLine();
+        act("Reset his ring", [&] { std::lock_guard lk(g_lock); g_ringReset.insert(a->GetFormID()); return std::string("ring taken off and redone"); });
+
+        ImGuiMCP::SeparatorText("After sex");
+        act("Gentle round", [&] { FakeRound(a, 0.35f, 1, 45.0f); return std::string("1 partner, 45 s, gentle"); });
+        ImGuiMCP::SameLine();
+        act("Rough round", [&] { FakeRound(a, 1.0f, std::max(3, g.bruisePartners), std::max(240.0f, g.bruiseLong + 10.0f)); return std::string("rough, several partners: wet, red, bruised, swollen"); });
+        ImGuiMCP::SameLine();
+        act("Wet only", [&] { FakeRound(a, 0.6f, 1, 20.0f); std::lock_guard lk(g_lock); g_work[a->GetFormID()].peak = 0.0f; return std::string("wet, not red"); });
+        act("First time in a while", [&] { std::lock_guard lk(g_lock); g_lastRound.erase(a->GetFormID()); return std::string("his next round counts as rested (redder)"); });
+        ImGuiMCP::SameLine();
+        act("Schlong shine (as giver)", [&] { std::lock_guard lk(g_lock); auto& sw = g_schlong[a->GetFormID()]; sw.peak = 1.0f; sw.last = Now(); g_sent.erase(a->GetFormID()); return std::string("his schlong is wet"); });
+        ImGuiMCP::SameLine();
+        act("Clear after-sex looks", [&] { std::lock_guard lk(g_lock); g_work.erase(a->GetFormID()); g_schlong.erase(a->GetFormID()); g_sent.erase(a->GetFormID()); return std::string("back to normal on the next check"); });
+
+        ImGuiMCP::SeparatorText("Gape and movement");
+        act("Gape him open", [&] { SetMorph(a, "Anatomica Gape", "AnatomicaGape", 0.8f); return std::string("opened; it closes on its own (Gape page timings)"); });
+        ImGuiMCP::SameLine();
+        act("Clench now", [&] { return std::string(Wink::TestClench(a) ? "clenched" : "only works while he is gaping (the movement code follows him then)"); });
+        act("Loosen to the cap", [&] { std::lock_guard lk(g_lock); const float v = g.looseCap; SetMorph(a, "Anatomica Gape", "AnatomicaLoose", v); return std::format("lasting looseness {:.0f}%", v * 100.0f); });
+        ImGuiMCP::SameLine();
+        act("Remove looseness", [&] { SetMorph(a, "Anatomica Gape", "AnatomicaLoose", 0.0f); return std::string("tight again"); });
+
+        ImGuiMCP::SeparatorText("Cum");
+        Drip::RenderTests(a);
+
+        ImGuiMCP::SeparatorText("Status");
+        act("Open the status window on him", [&] { g_inspect = a->GetFormID(); g_winOpen = true; g_winMove = false; ApplyWindowState(); return std::string("open"); });
+
+        if (!last.empty()) { ImGuiMCP::Spacing(); ImGuiMCP::TextDisabled("Last: %s", last.c_str()); }
+    }
+
+    void RegisterWindow() {
+        g_statusWin = SKSEMenuFramework::AddWindow(RenderStatusWindow, false);
+        if (g_statusWin) { g_statusWin->IsOpen = false; g_statusWin->BlockUserInput = false; }
+        SKSEMenuFramework::AddInputEvent(FrameworkInput);
     }
 
     void __stdcall RenderAfter() {
