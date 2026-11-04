@@ -1,5 +1,8 @@
 #include "Colour.h"
+#include "Drip.h"
 #include "SKSEMenuFramework.h"
+#include "UI.h"
+#include "Wink.h"
 
 #include <SimpleIni.h>
 
@@ -11,7 +14,9 @@
 #include <filesystem>
 #include <fstream>
 #include <format>
+#include <iterator>
 #include <map>
+#include <random>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -64,6 +69,7 @@ namespace {
     // character's skin tone on top (the rim shape is skin-tinted).
     constexpr const char* kGenDir = "textures\\actors\\character\\male\\Anatomica\\gen\\";
     std::vector<std::uint8_t> g_detail;   // 512x512, 128 = 1.0
+    std::vector<std::uint8_t> g_edge;     // 0 at the opening, 255 toward the outer edge of the rim
     int g_detailW = 0, g_detailH = 0;
     bool g_detailTried = false;
 
@@ -73,55 +79,64 @@ namespace {
         std::ifstream f("Data/SKSE/Plugins/AnatomicaMenu/rim_detail.bin", std::ios::binary);
         char magic[4]{};
         std::uint32_t w = 0, h = 0;
-        if (!f.read(magic, 4) || std::string_view(magic, 4) != "ARD1") return false;
+        if (!f.read(magic, 4)) return false;
+        const std::string_view m(magic, 4);
+        if (m != "ARD1" && m != "ARD2") return false;
         f.read(reinterpret_cast<char*>(&w), 4);
         f.read(reinterpret_cast<char*>(&h), 4);
         if (w == 0 || h == 0 || w > 4096 || h > 4096 || (w & 3) || (h & 3)) return false;
-        g_detail.resize(static_cast<size_t>(w) * h);
-        if (!f.read(reinterpret_cast<char*>(g_detail.data()), static_cast<std::streamsize>(g_detail.size()))) {
+        const size_t n = static_cast<size_t>(w) * h;
+        g_detail.resize(n);
+        if (!f.read(reinterpret_cast<char*>(g_detail.data()), static_cast<std::streamsize>(n))) {
             g_detail.clear();
             return false;
         }
+        g_edge.assign(n, 255);
+        if (m == "ARD2") f.read(reinterpret_cast<char*>(g_edge.data()), static_cast<std::streamsize>(n));
         g_detailW = static_cast<int>(w);
         g_detailH = static_cast<int>(h);
         return true;
     }
 
-    std::uint16_t To565(float r, float gg, float b) {
+    std::uint16_t To565(const float c[3]) {
         auto q = [](float v, int bits) { return static_cast<std::uint16_t>(std::lround(std::clamp(v, 0.0f, 1.0f) * ((1 << bits) - 1))); };
-        return static_cast<std::uint16_t>((q(r, 5) << 11) | (q(gg, 6) << 5) | q(b, 5));
+        return static_cast<std::uint16_t>((q(c[0], 5) << 11) | (q(c[1], 6) << 5) | q(c[2], 5));
     }
 
-    // one DXT1 mip level of (colour x detail): every 4x4 block is a line between two shades of
-    // the same colour, which DXT1 stores exactly
-    void EncodeLevel(const std::vector<float>& lum, int w, int h, const float c[3], std::string& out) {
+    // one DXT1 mip level from an RGB float image: per 4x4 block the two end colours are the
+    // darkest and brightest texel, the rest are put on the line between them
+    void EncodeLevel(const std::vector<float>& rgb, int w, int h, std::string& out) {
         const int bw = std::max(1, (w + 3) / 4), bh = std::max(1, (h + 3) / 4);
         for (int by = 0; by < bh; ++by) {
             for (int bx = 0; bx < bw; ++bx) {
-                float l[16], lo = 1e9f, hi = -1e9f;
+                float px[16][3];
+                int lo = 0, hi = 0;
+                float llo = 1e9f, lhi = -1e9f;
                 for (int k = 0; k < 16; ++k) {
                     const int x = std::min(bx * 4 + (k & 3), w - 1), y = std::min(by * 4 + (k >> 2), h - 1);
-                    l[k] = lum[static_cast<size_t>(y) * w + x];
-                    lo = std::min(lo, l[k]);
-                    hi = std::max(hi, l[k]);
+                    const float* src = &rgb[(static_cast<size_t>(y) * w + x) * 3];
+                    for (int c = 0; c < 3; ++c) px[k][c] = std::clamp(src[c], 0.0f, 1.0f);
+                    const float l = 0.299f * px[k][0] + 0.587f * px[k][1] + 0.114f * px[k][2];
+                    if (l < llo) { llo = l; lo = k; }
+                    if (l > lhi) { lhi = l; hi = k; }
                 }
-                std::uint16_t c0 = To565(c[0] * hi, c[1] * hi, c[2] * hi), c1 = To565(c[0] * lo, c[1] * lo, c[2] * lo);
+                std::uint16_t c0 = To565(px[hi]), c1 = To565(px[lo]);
                 std::uint32_t idx = 0;
-                if (c0 != c1) {
-                    bool swapped = false;
-                    if (c0 < c1) { std::swap(c0, c1); swapped = true; }
+                if (c0 == c1) {
+                    if (c0 == 0) { c0 = 1; idx = 0x55555555u; }   // all black: every texel = c1
+                    else c1 = static_cast<std::uint16_t>(c0 - 1);
+                } else {
+                    const bool swapped = c0 < c1;
+                    if (swapped) std::swap(c0, c1);
+                    const float* A = swapped ? px[lo] : px[hi];   // colour of c0
+                    const float* B = swapped ? px[hi] : px[lo];   // colour of c1
+                    float d[3] = {A[0] - B[0], A[1] - B[1], A[2] - B[2]};
+                    const float dd = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
                     for (int k = 0; k < 16; ++k) {
-                        float t = hi > lo ? (l[k] - lo) / (hi - lo) : 1.0f;   // 1 = bright end
-                        if (swapped) t = 1.0f - t;
-                        // palette order: 0 = c0 (t 1), 2 = 2/3, 3 = 1/3, 1 = c1 (t 0)
+                        float t = dd > 1e-8f ? ((px[k][0] - B[0]) * d[0] + (px[k][1] - B[1]) * d[1] + (px[k][2] - B[2]) * d[2]) / dd : 1.0f;
                         const std::uint32_t code = t > 0.833f ? 0u : t > 0.5f ? 2u : t > 0.167f ? 3u : 1u;
                         idx |= code << (2 * k);
                     }
-                } else if (c0 == 0 && c1 == 0) {
-                    c0 = 1;   // keep 4-colour mode (c0 > c1): index 1 = c1 = black
-                    idx = 0x55555555u;
-                } else {
-                    c1 = static_cast<std::uint16_t>(c0 - 1);   // c0 > c1 keeps 4-colour mode
                 }
                 out.append(reinterpret_cast<const char*>(&c0), 2);
                 out.append(reinterpret_cast<const char*>(&c1), 2);
@@ -130,49 +145,91 @@ namespace {
         }
     }
 
-    // colour 0-1 (before the skin tone) -> texture path, written on first use
-    std::string GenRimTexture(const float colour[3]) {
+    // everything that goes into one rim texture (all 0-1)
+    struct RimTex {
+        float colour[3];            // rim colour x skin tone
+        float lube[3] = {1, 1, 1};  // wetness colour laid over it
+        float lubeAmt = 0.0f;
+        float bruise[3] = {1, 1, 1};
+        float bruiseAmt = 0.0f;     // toward the outer edge
+    };
+
+    void CleanGenFolder() {
+        static bool done = false;
+        if (done) return;
+        done = true;
+        std::error_code ec;
+        const std::filesystem::path dir = std::filesystem::path("Data") / std::filesystem::path(std::string(kGenDir));
+        std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>> files;
+        for (const auto& e : std::filesystem::directory_iterator(dir, ec))
+            if (e.is_regular_file(ec)) files.emplace_back(e.last_write_time(ec), e.path());
+        if (files.size() <= 400) return;
+        std::sort(files.begin(), files.end());
+        for (size_t i = 0; i + 300 < files.size(); ++i) std::filesystem::remove(files[i].second, ec);   // keep the newest 300
+        logger::info("Anatomica colour: tidied the gen folder ({} old textures removed)", files.size() - 300);
+    }
+
+    // look -> texture path, written on first use
+    std::string GenRimTexture(const RimTex& t) {
         if (!LoadDetail()) return {};
-        int q[3];
-        for (int i = 0; i < 3; ++i) q[i] = std::clamp(static_cast<int>(std::lround(colour[i] * 31.0f)), 0, 31);   // 32 steps
-        const std::string rel = std::format("{}rim_{:02d}{:02d}{:02d}.dds", kGenDir, q[0], q[1], q[2]);
+        CleanGenFolder();
+        auto q = [](float v, int steps) { return std::clamp(static_cast<int>(std::lround(v * steps)), 0, steps); };
+        int k[11] = {q(t.colour[0], 31), q(t.colour[1], 31), q(t.colour[2], 31), 0, 0, 0, 0, 0, 0, 0, 0};
+        const int la = q(t.lubeAmt, 10), ba = q(t.bruiseAmt, 10);
+        if (la) { k[3] = q(t.lube[0], 15); k[4] = q(t.lube[1], 15); k[5] = q(t.lube[2], 15); k[6] = la; }
+        if (ba) { k[7] = q(t.bruise[0], 15); k[8] = q(t.bruise[1], 15); k[9] = q(t.bruise[2], 15); k[10] = ba; }
+        std::string key = "rim";
+        for (int v : k) key += std::format("_{}", v);
+        if (!la && !ba) key = std::format("rim_{:02d}{:02d}{:02d}", k[0], k[1], k[2]);
+        const std::string rel = std::format("{}{}.dds", kGenDir, key);
         const std::filesystem::path file = std::filesystem::path("Data") / std::filesystem::path(std::string(rel));
         std::error_code ec;
         if (std::filesystem::exists(file, ec)) return rel;
-        const float c[3] = {q[0] / 31.0f, q[1] / 31.0f, q[2] / 31.0f};
+        // the quantised values, so the file always matches its name
+        const float c[3] = {k[0] / 31.0f, k[1] / 31.0f, k[2] / 31.0f};
+        const float L[3] = {k[3] / 15.0f, k[4] / 15.0f, k[5] / 15.0f}, Lamt = la / 10.0f;
+        const float Bc[3] = {k[7] / 15.0f, k[8] / 15.0f, k[9] / 15.0f}, Bamt = ba / 10.0f;
         int w = g_detailW, h = g_detailH, levels = 1;
         while ((w >> levels) >= 1 && (h >> levels) >= 1) ++levels;
+        std::vector<float> rgb(static_cast<size_t>(w) * h * 3);
+        for (size_t i = 0; i < g_detail.size(); ++i) {
+            const float det = g_detail[i] / 128.0f, edge = g_edge[i] / 255.0f;
+            for (int ch = 0; ch < 3; ++ch) {
+                float v = c[ch] * det;
+                if (Bamt > 0.0f) v *= 1.0f + (Bc[ch] - 1.0f) * Bamt * edge;
+                if (Lamt > 0.0f) v += (L[ch] * (0.75f + 0.25f * det) - v) * Lamt;
+                rgb[i * 3 + ch] = v;
+            }
+        }
         std::string data;
-        std::vector<float> lum(g_detail.size());
-        for (size_t i = 0; i < lum.size(); ++i) lum[i] = g_detail[i] / 128.0f;
         for (int lv = 0; lv < levels; ++lv) {
-            EncodeLevel(lum, w, h, c, data);
+            EncodeLevel(rgb, w, h, data);
             if (w == 1 && h == 1) break;
             const int nw = std::max(1, w / 2), nh = std::max(1, h / 2);
-            std::vector<float> nl(static_cast<size_t>(nw) * nh);
+            std::vector<float> n2(static_cast<size_t>(nw) * nh * 3);
             for (int y = 0; y < nh; ++y)
-                for (int x = 0; x < nw; ++x) {
-                    const int x0 = std::min(2 * x, w - 1), x1 = std::min(2 * x + 1, w - 1), y0 = std::min(2 * y, h - 1), y1 = std::min(2 * y + 1, h - 1);
-                    nl[static_cast<size_t>(y) * nw + x] = 0.25f * (lum[static_cast<size_t>(y0) * w + x0] + lum[static_cast<size_t>(y0) * w + x1] +
-                                                                   lum[static_cast<size_t>(y1) * w + x0] + lum[static_cast<size_t>(y1) * w + x1]);
-                }
-            lum.swap(nl);
+                for (int x = 0; x < nw; ++x)
+                    for (int ch = 0; ch < 3; ++ch) {
+                        const int x0 = std::min(2 * x, w - 1), x1 = std::min(2 * x + 1, w - 1), y0 = std::min(2 * y, h - 1), y1 = std::min(2 * y + 1, h - 1);
+                        auto at = [&](int xx, int yy) { return rgb[(static_cast<size_t>(yy) * w + xx) * 3 + ch]; };
+                        n2[(static_cast<size_t>(y) * nw + x) * 3 + ch] = 0.25f * (at(x0, y0) + at(x1, y0) + at(x0, y1) + at(x1, y1));
+                    }
+            rgb.swap(n2);
             w = nw;
             h = nh;
         }
-        // DDS header (DXT1, mipmapped)
         std::uint32_t hdr[32]{};
-        hdr[0] = 0x20534444u;                        // "DDS "
-        hdr[1] = 124;                                 // header size
-        hdr[2] = 0x1 | 0x2 | 0x4 | 0x1000 | 0x20000 | 0x80000;   // caps|height|width|pixelformat|mipmapcount|linearsize
+        hdr[0] = 0x20534444u;
+        hdr[1] = 124;
+        hdr[2] = 0x1 | 0x2 | 0x4 | 0x1000 | 0x20000 | 0x80000;
         hdr[3] = static_cast<std::uint32_t>(g_detailH);
         hdr[4] = static_cast<std::uint32_t>(g_detailW);
         hdr[5] = static_cast<std::uint32_t>(std::max(1, g_detailW / 4) * std::max(1, g_detailH / 4) * 8);
         hdr[7] = static_cast<std::uint32_t>(levels);
-        hdr[19] = 32;                                 // pixel format size
-        hdr[20] = 0x4;                                // DDPF_FOURCC
-        hdr[21] = 0x31545844u;                        // "DXT1"
-        hdr[27] = 0x1000 | 0x8 | 0x400000;            // texture | complex | mipmap
+        hdr[19] = 32;
+        hdr[20] = 0x4;
+        hdr[21] = 0x31545844u;   // DXT1
+        hdr[27] = 0x1000 | 0x8 | 0x400000;
         std::filesystem::create_directories(file.parent_path(), ec);
         const auto tmp = std::filesystem::path(file).concat(".tmp");
         {
@@ -189,19 +246,24 @@ namespace {
     }
 
     const char* kDefaultItems[] = {"Installed colour (no change)", "Pink", "Light pink", "Rose / deep red",
-                                   "Mauve brown", "Skin matched", "Custom", "Random", "Smart random (fits his skin)"};
+                                   "Mauve brown", "Skin matched", "Custom", "Random", "Skin-fit (follows Skin rules)"};
     const char* kRaceItems[] = {"Use the default", "Installed colour (no change)", "Pink", "Light pink",
                                 "Rose / deep red", "Mauve brown", "Skin matched", "Custom", "Random",
-                                "Smart random (fits his skin)"};
+                                "Skin-fit (follows Skin rules)"};
     const char* kPlayerItems[] = {"Same as your race", "Installed colour (no change)", "Pink", "Light pink",
                                   "Rose / deep red", "Mauve brown", "Skin matched", "Custom", "Random",
-                                  "Smart random (fits his skin)"};
+                                  "Skin-fit (follows Skin rules)"};
+    const char* kFollowerItems[] = {"Same as their race", "Installed colour (no change)", "Pink", "Light pink",
+                                    "Rose / deep red", "Mauve brown", "Skin matched", "Custom", "Random",
+                                    "Skin-fit (follows Skin rules)"};
     const char* kScopeItems[] = {"Everyone", "You and your followers", "Only you"};
     const char* kMethodItems[] = {"Any colour + strength", "Only the 5 fixed shades"};
 
     struct Settings {
         bool enabled = true;
         float interval = 3.0f;
+        float loadDelay = 10.0f;     // seconds Anatomica's script waits after a loading screen
+        float radius = 2100.0f;      // colour men within this distance of the player (game units, ~70 per metre)
         int scope = 0;
         int method = 0;              // 0 tint, 1 textures
         float strength = 1.0f;
@@ -221,10 +283,61 @@ namespace {
         bool wet = true;
         float wetStrength = 0.8f;
         float wetTime = 180.0f;
+        bool wetBuild = true;        // every new round adds to the wetness (up to wetCap)
+        float wetCap = 2.0f;
+        bool wetColourOn = false;    // lube / cum colour on the rim
+        float wetColour[3] = {0.95f, 0.93f, 0.88f};
+        float wetColourAmt = 0.4f;
+        bool waterDry = true;        // swimming / rain dries it faster
+        float waterDryMul = 4.0f;
+        bool schlongWet = true;      // the partner's schlong gets the shine too
+        float schlongStrength = 0.8f;
+        float schlongTime = 120.0f;
         bool tender = true;
         float tenderStrength = 0.6f;
         float tenderTime = 600.0f;
         bool tenderBlend = true;
+        bool tenderStages = true;    // bright red first, deep red later
+        float tenderCol1[3] = {1.0f, 0.55f, 0.6f};
+        float tenderCol2[3] = {0.78f, 0.45f, 0.52f};
+        float tenderSplit = 0.35f;   // part of the fade time spent going from colour 1 to colour 2
+        bool tenderPartners = true;  // more partners in a row = redder
+        float tenderPerPartner = 0.25f;
+        bool bruise = true;          // purple toward the edge after very long sex or many partners
+        int bruisePartners = 3;
+        float bruiseLong = 180.0f;   // seconds of penetration in one go
+        float bruiseCol[3] = {0.62f, 0.48f, 0.78f};
+        float bruiseStrength = 0.6f;
+        bool swell = true;           // puffy rim (needs the body built with morphs)
+        float swellStrength = 0.6f;
+        bool sensitive = true;       // sharper clench, slower breathing while tender
+        float sensClench = 0.5f;
+        float sensBreath = 0.4f;
+        bool healSleep = true;       // sleeping / waiting clears it
+        bool healMagic = true;       // healing spells and potions clear it
+        bool wetBurst = true;        // extra gloss for the first moments after a round
+        float wetBurstSecs = 20.0f;
+        float wetBurstBoost = 0.5f;
+        bool cumByRace = true;       // the wetness colour follows the giver's race (Cum & drips page)
+        bool slowClose = true;       // the gape closes slower while he is tender
+        float slowCloseAmt = 0.5f;
+        bool rested = true;          // first time in a while = redder
+        float restedMinutes = 30.0f;
+        float restedExtra = 0.3f;
+        bool loose = true;           // lasting looseness: a little gape that stays and recovers over days
+        float looseAdd = 0.03f;      // per round
+        float looseCap = 0.2f;
+        float looseRecover = 0.05f;  // per game day
+        bool drip = true;            // SMP Cum Drip: anal strands on men after sex
+        float dripChance = 1.0f;
+        float dripMinSecs = 20.0f;   // penetration needed in the round
+        bool dripCfg = true;         // write the anal_ settings below into SMPCumDrip.json
+        float dripLifeMin = 200.0f, dripLifeMax = 220.0f;
+        float dripFallMin = 60.0f, dripFallMax = 80.0f;
+        bool dripTrail = true;
+        int statusKey = 0;           // hotkey (DirectX scan code), 0 = none
+        float skinOnRim = 1.0f;      // how much of the man's skin tone goes into the rim colour
+        int follower = kUseDefault;
     };
 
     std::mutex g_lock;
@@ -236,10 +349,17 @@ namespace {
         float strength = -1.0f;                 // own colour strength (from), < 0 = use the Colours page one
         float strengthMax = -1.0f;              // own strength (to); same as from = fixed
         int pool = -1;                          // own random colours (bits as the Colours page), -1 = use those
+        bool cumOwn = false;                    // own wetness colour when a man of this race is the giver
+        float cum[3] = {0.95f, 0.93f, 0.88f};
         float palette[6][3] = {{0.45f, 0.22f, 0.30f}, {0.60f, 0.35f, 0.38f}, {0.38f, 0.26f, 0.22f},
                                {0.50f, 0.28f, 0.45f}, {0.30f, 0.32f, 0.40f}, {0.55f, 0.40f, 0.30f}};
     };
     std::map<std::string, RaceSet> g_races;    // "Plugin.esp|00ABCD" -> settings
+    struct ManSet {
+        int choice = kCustom;
+        float rgb[3] = {0.55f, 0.30f, 0.32f};
+    };
+    std::map<std::string, ManSet> g_perMan;     // one man's own colour (Status page), by reference
     int g_installed = -2;                       // installer colour (preset index), -2 = not checked yet
     std::map<std::string, int> g_raceDefaults;  // race picks made in the installer (SKSE/Plugins/AnatomicaMenu/Races/*.ini)
     std::map<std::string, int> g_reroll;        // "Plugin|refID" -> times re-rolled
@@ -263,7 +383,7 @@ namespace {
         float tol = 35.0f;           // degrees on the colour wheel
         float anus[3] = {0.25f, 0.30f, 0.55f};
     };
-    constexpr int kMaxRules = 16;
+    constexpr int kMaxRules = 48;
     std::vector<Rule> g_rules;
     std::vector<RaceRow> g_raceRows;
     std::map<std::string, bool> g_raceTouched;  // race colour picked this session (don't overwrite)
@@ -273,16 +393,35 @@ namespace {
     struct Sent {
         std::string tex;   // "" = no texture override
         int tint = -1, blend = -1, swap = 0, gloss = -1, spec = -1, add = -1;
+        int swell = 0, sgloss = -1;
     };
     std::unordered_map<RE::FormID, Sent> g_sent;
     std::unordered_map<RE::FormID, std::string> g_pendingTex;
 
     // after-sex: how worked each actor was and when
     struct Work {
+        float peak = 0.0f;       // how worked (0-1), for reddening
+        double last = 0.0;       // last time he was penetrated
+        float wetPeak = 0.0f;    // wetness (0 - WetCap)
+        float wetBase = 0.0f;    // wetness left over when this round started
+        double wetLast = 0.0;
+        double dryShift = 0.0;   // extra drying (water / rain)
+        double lastEval = 0.0;
+        int partners = 0;        // partners in a row this round
+        float workSecs = 0.0f;   // seconds of penetration this round
+        std::string giverRace;   // race of the last man giving (wetness colour)
+        bool dripDone = false;   // SMP Cum Drip already started for this round
+        bool looseDone = false;  // looseness already added for this round
+        float restedBoost = 0.0f;
+    };
+    std::unordered_map<RE::FormID, Work> g_work;
+    std::unordered_map<RE::FormID, double> g_lastRound;   // when his last round was (for "first time in a while")
+    std::unordered_map<RE::FormID, float> g_looseSeen;    // looseness the script last reported (Status page)
+    struct SchlongWork {
         float peak = 0.0f;
         double last = 0.0;
     };
-    std::unordered_map<RE::FormID, Work> g_work;
+    std::unordered_map<RE::FormID, SchlongWork> g_schlong;
 
     double Now() {
         using namespace std::chrono;
@@ -300,6 +439,47 @@ namespace {
         return static_cast<float>(ini.GetDoubleValue(sec, key, def));
     }
 
+    // the newer after-sex settings, read (save = false) or written (save = true)
+    void AfterSexIni(CSimpleIniA& ini, bool save) {
+        constexpr const char* S = "AfterSex";
+        auto B = [&](const char* k, bool& v) { if (save) ini.SetBoolValue(S, k, v); else v = ini.GetBoolValue(S, k, v); };
+        auto F = [&](const char* k, float& v, float lo, float hi) {
+            if (save) ini.SetDoubleValue(S, k, v);
+            else v = std::clamp(static_cast<float>(ini.GetDoubleValue(S, k, v)), lo, hi);
+        };
+        auto I = [&](const char* k, int& v, int lo, int hi) {
+            if (save) ini.SetLongValue(S, k, v);
+            else v = std::clamp(static_cast<int>(ini.GetLongValue(S, k, v)), lo, hi);
+        };
+        auto C = [&](const char* k, float* c) {
+            if (save) {
+                ini.SetValue(S, k, std::format("{:.3f},{:.3f},{:.3f}", c[0], c[1], c[2]).c_str());
+            } else if (const char* v = ini.GetValue(S, k, nullptr)) {
+                std::sscanf(v, "%f,%f,%f", &c[0], &c[1], &c[2]);
+                for (int i = 0; i < 3; ++i) c[i] = std::clamp(c[i], 0.0f, 1.0f);
+            }
+        };
+        B("WetBuild", g.wetBuild); F("WetCap", g.wetCap, 1.0f, 3.0f);
+        B("WetColourOn", g.wetColourOn); C("WetColour", g.wetColour); F("WetColourAmt", g.wetColourAmt, 0.0f, 1.0f);
+        B("WaterDry", g.waterDry); F("WaterDryMul", g.waterDryMul, 1.0f, 10.0f);
+        B("SchlongWet", g.schlongWet); F("SchlongStrength", g.schlongStrength, 0.0f, 1.0f); F("SchlongTime", g.schlongTime, 10.0f, 3600.0f);
+        B("TenderStages", g.tenderStages); C("TenderColour1", g.tenderCol1); C("TenderColour2", g.tenderCol2);
+        F("TenderSplit", g.tenderSplit, 0.05f, 0.95f);
+        B("TenderPartners", g.tenderPartners); F("TenderPerPartner", g.tenderPerPartner, 0.0f, 1.0f);
+        B("Bruise", g.bruise); I("BruisePartners", g.bruisePartners, 2, 6); F("BruiseLong", g.bruiseLong, 30.0f, 1800.0f);
+        C("BruiseColour", g.bruiseCol); F("BruiseStrength", g.bruiseStrength, 0.0f, 1.0f);
+        B("Swell", g.swell); F("SwellStrength", g.swellStrength, 0.0f, 1.0f);
+        B("Sensitive", g.sensitive); F("SensClench", g.sensClench, 0.0f, 1.0f); F("SensBreath", g.sensBreath, 0.0f, 0.8f);
+        B("HealSleep", g.healSleep); B("HealMagic", g.healMagic);
+        B("WetBurst", g.wetBurst); F("WetBurstSecs", g.wetBurstSecs, 5.0f, 120.0f); F("WetBurstBoost", g.wetBurstBoost, 0.0f, 1.0f);
+        B("CumByRace", g.cumByRace);
+        B("SlowClose", g.slowClose); F("SlowCloseAmt", g.slowCloseAmt, 0.0f, 2.0f);
+        B("Rested", g.rested); F("RestedMinutes", g.restedMinutes, 5.0f, 600.0f); F("RestedExtra", g.restedExtra, 0.0f, 1.0f);
+        B("Loose", g.loose); F("LooseAdd", g.looseAdd, 0.0f, 0.2f); F("LooseCap", g.looseCap, 0.0f, 0.6f);
+        F("LooseRecover", g.looseRecover, 0.0f, 1.0f);
+        I("StatusKey", g.statusKey, 0, 255);
+    }
+
     void LoadRaceDefaults() {
         g_raceDefaults.clear();
         std::error_code ec;
@@ -315,13 +495,53 @@ namespace {
         if (!g_raceDefaults.empty()) logger::info("Anatomica colour: {} race picks from the installer", g_raceDefaults.size());
     }
 
+    // [ColourRules] Count = n, RuleN = on;race;r,g,b;tolerance;r,g,b
+    std::vector<Rule> ParseRules(CSimpleIniA& ini) {
+        std::vector<Rule> out;
+        const int nr = std::clamp(static_cast<int>(ini.GetLongValue("ColourRules", "Count", 0)), 0, kMaxRules);
+        for (int i = 0; i < nr; ++i) {
+            const char* v = ini.GetValue("ColourRules", std::format("Rule{}", i).c_str(), nullptr);
+            if (!v) continue;
+            std::string str(v);
+            std::vector<std::string> parts;
+            size_t pos = 0;
+            for (size_t q; (q = str.find(';', pos)) != std::string::npos; pos = q + 1) parts.push_back(str.substr(pos, q - pos));
+            parts.push_back(str.substr(pos));
+            if (parts.size() != 5) continue;
+            Rule r;
+            r.on = parts[0] == "1";
+            r.race = parts[1];
+            std::sscanf(parts[2].c_str(), "%f,%f,%f", &r.skin[0], &r.skin[1], &r.skin[2]);
+            r.tol = std::clamp(static_cast<float>(std::atof(parts[3].c_str())), 5.0f, 90.0f);
+            std::sscanf(parts[4].c_str(), "%f,%f,%f", &r.anus[0], &r.anus[1], &r.anus[2]);
+            out.push_back(r);
+        }
+        return out;
+    }
+    // default rules shipped with the mod: Data/SKSE/Plugins/AnatomicaMenu/Rules/*.ini (e.g. Argonian.ini)
+    std::vector<Rule> DefaultRules() {
+        std::vector<Rule> out;
+        std::error_code ec;
+        for (const auto& e : std::filesystem::directory_iterator("Data/SKSE/Plugins/AnatomicaMenu/Rules", ec)) {
+            if (!e.is_regular_file() || e.path().extension() != ".ini") continue;
+            CSimpleIniA f;
+            if (f.LoadFile(e.path().string().c_str()) < 0) continue;
+            for (auto& r : ParseRules(f))
+                if (static_cast<int>(out.size()) < kMaxRules) out.push_back(r);
+        }
+        return out;
+    }
+
     void LoadIni() {
         LoadRaceDefaults();
+        bool rulesFromUser = false;
         CSimpleIniA ini;
         if (ini.LoadFile(kIni) >= 0) {
             const long ver = ini.GetLongValue("Colour", "Version", 1);
             g.enabled = ini.GetBoolValue("Colour", "Enabled", g.enabled);
             g.interval = GetF(ini, "Colour", "Interval", g.interval);
+            g.radius = GetF(ini, "Colour", "Radius", g.radius);
+            g.loadDelay = GetF(ini, "Colour", "LoadDelay", g.loadDelay);
             g.scope = static_cast<int>(ini.GetLongValue("Colour", "Scope", g.scope));
             g.method = static_cast<int>(ini.GetLongValue("Colour", "Method", g.method));
             g.strength = GetF(ini, "Colour", "Strength", g.strength);
@@ -375,24 +595,25 @@ namespace {
                 for (int i = 0; i < 18; ++i) f[i] = std::clamp(f[i], 0.0f, 1.0f);
             }
             g_rules.clear();
-            const int nr = std::clamp(static_cast<int>(ini.GetLongValue("ColourRules", "Count", 0)), 0, kMaxRules);
-            for (int i = 0; i < nr; ++i) {
-                const char* v = ini.GetValue("ColourRules", std::format("Rule{}", i).c_str(), nullptr);
-                if (!v) continue;
-                // on;race;r,g,b;tol;r,g,b
-                std::string str(v);
-                std::vector<std::string> parts;
-                size_t pos = 0;
-                for (size_t q; (q = str.find(';', pos)) != std::string::npos; pos = q + 1) parts.push_back(str.substr(pos, q - pos));
-                parts.push_back(str.substr(pos));
-                if (parts.size() != 5) continue;
-                Rule r;
-                r.on = parts[0] == "1";
-                r.race = parts[1];
-                std::sscanf(parts[2].c_str(), "%f,%f,%f", &r.skin[0], &r.skin[1], &r.skin[2]);
-                r.tol = std::clamp(static_cast<float>(std::atof(parts[3].c_str())), 5.0f, 90.0f);
-                std::sscanf(parts[4].c_str(), "%f,%f,%f", &r.anus[0], &r.anus[1], &r.anus[2]);
-                g_rules.push_back(r);
+            if (ini.GetValue("ColourRules", "Count", nullptr)) {
+                g_rules = ParseRules(ini);
+                rulesFromUser = true;
+            }
+            keys.clear();
+            ini.GetAllKeys("ColourRaceCum", keys);
+            for (const auto& k : keys) {
+                auto& r = g_races[k.pItem];
+                if (std::sscanf(ini.GetValue("ColourRaceCum", k.pItem, ""), "%f,%f,%f", &r.cum[0], &r.cum[1], &r.cum[2]) == 3) r.cumOwn = true;
+                for (auto& c : r.cum) c = std::clamp(c, 0.0f, 1.0f);
+            }
+            keys.clear();
+            ini.GetAllKeys("ColourMan", keys);
+            for (const auto& k : keys) {
+                ManSet m;
+                if (std::sscanf(ini.GetValue("ColourMan", k.pItem, ""), "%d;%f,%f,%f", &m.choice, &m.rgb[0], &m.rgb[1], &m.rgb[2]) >= 1) {
+                    m.choice = std::clamp(m.choice, kInstalled, kSmart);
+                    g_perMan[k.pItem] = m;
+                }
             }
             keys.clear();
             ini.GetAllKeys("ColourReroll", keys);
@@ -410,8 +631,16 @@ namespace {
             g.tenderStrength = GetF(ini, "AfterSex", "TenderStrength", g.tenderStrength);
             g.tenderTime = GetF(ini, "AfterSex", "TenderTime", g.tenderTime);
             g.tenderBlend = ini.GetBoolValue("AfterSex", "TenderBlend", g.tenderBlend);
+            AfterSexIni(ini, false);
+            g.skinOnRim = GetF(ini, "Colour", "SkinOnRim", g.skinOnRim);
+            g.follower = static_cast<int>(ini.GetLongValue("Colour", "Follower", g.follower));
         }
+        if (!rulesFromUser) g_rules = DefaultRules();   // first run: the shipped rules (Argonian colours)
         g.interval = std::clamp(g.interval, 1.0f, 180.0f);
+        g.radius = std::clamp(g.radius, 70.0f, 7000.0f);
+        g.skinOnRim = std::clamp(g.skinOnRim, 0.0f, 1.0f);
+        g.follower = std::clamp(g.follower, kUseDefault, kSmart);
+        g.loadDelay = std::clamp(g.loadDelay, 0.0f, 60.0f);
         g.harmony = std::clamp(g.harmony, 0, 2);
         for (auto& [k, v] : g_races) v.choice = std::clamp(v.choice, kUseDefault, kSmart);
         g.scope = std::clamp(g.scope, 0, 2);
@@ -427,6 +656,11 @@ namespace {
         g.wetTime = std::clamp(g.wetTime, 10.0f, 3600.0f);
         g.tenderStrength = std::clamp(g.tenderStrength, 0.0f, 1.0f);
         g.tenderTime = std::clamp(g.tenderTime, 10.0f, 3600.0f);
+        {
+            CSimpleIniA di;
+            di.LoadFile(kIni);
+            Drip::Ini(di, false);
+        }
         g_loaded = true;
     }
 
@@ -436,6 +670,8 @@ namespace {
         ini.SetLongValue("Colour", "Version", 2);
         ini.SetBoolValue("Colour", "Enabled", g.enabled);
         ini.SetDoubleValue("Colour", "Interval", g.interval);
+        ini.SetDoubleValue("Colour", "Radius", g.radius);
+        ini.SetDoubleValue("Colour", "LoadDelay", g.loadDelay);
         ini.SetLongValue("Colour", "Scope", g.scope);
         ini.SetLongValue("Colour", "Method", g.method);
         ini.SetDoubleValue("Colour", "Strength", g.strength);
@@ -463,6 +699,7 @@ namespace {
         ini.Delete("ColourRaceStrengthMax", nullptr);
         ini.Delete("ColourRacePool", nullptr);
         ini.Delete("ColourRacePalette", nullptr);
+        ini.Delete("ColourRaceCum", nullptr);
         ini.Delete("ColourRules", nullptr);
         ini.SetLongValue("ColourRules", "Count", static_cast<long>(g_rules.size()));
         for (size_t i = 0; i < g_rules.size(); ++i) {
@@ -484,7 +721,11 @@ namespace {
                     pal += std::format("{}{:.3f},{:.3f},{:.3f}", i ? "," : "", v.palette[i][0], v.palette[i][1], v.palette[i][2]);
                 ini.SetValue("ColourRacePalette", k.c_str(), pal.c_str());
             }
+            if (v.cumOwn) ini.SetValue("ColourRaceCum", k.c_str(), std::format("{:.3f},{:.3f},{:.3f}", v.cum[0], v.cum[1], v.cum[2]).c_str());
         }
+        ini.Delete("ColourMan", nullptr);
+        for (const auto& [k, m] : g_perMan)
+            ini.SetValue("ColourMan", k.c_str(), std::format("{};{:.3f},{:.3f},{:.3f}", m.choice, m.rgb[0], m.rgb[1], m.rgb[2]).c_str());
         ini.SetBoolValue("AfterSex", "Wet", g.wet);
         ini.SetDoubleValue("AfterSex", "WetStrength", g.wetStrength);
         ini.SetDoubleValue("AfterSex", "WetTime", g.wetTime);
@@ -492,6 +733,10 @@ namespace {
         ini.SetDoubleValue("AfterSex", "TenderStrength", g.tenderStrength);
         ini.SetDoubleValue("AfterSex", "TenderTime", g.tenderTime);
         ini.SetBoolValue("AfterSex", "TenderBlend", g.tenderBlend);
+        AfterSexIni(ini, true);
+        ini.SetDoubleValue("Colour", "SkinOnRim", g.skinOnRim);
+        ini.SetLongValue("Colour", "Follower", g.follower);
+        Drip::Ini(ini, true);
         ini.SaveFile(kIni);
     }
 
@@ -640,6 +885,7 @@ namespace {
         int choice = kInstalled;   // -1 installed, 0-4 preset, 5 = colour in rgb
         float rgb[3] = {0, 0, 0};
         float strength = 1.0f;
+        bool active = false;       // picker on and this man in scope
     };
 
     Pick PickFor(RE::Actor* a) {
@@ -647,8 +893,17 @@ namespace {
         p.strength = g.strength;
         std::copy(std::begin(g.custom), std::end(g.custom), p.rgb);
         if (!g.enabled || !InScope(a)) return p;
+        p.active = true;
         int choice = kUseDefault;
-        if (a->IsPlayerRef()) choice = g.player;
+        const ManSet* man = nullptr;
+        if (auto mi = g_perMan.find(RefKey(a)); mi != g_perMan.end()) {   // his own colour (Status page)
+            man = &mi->second;
+            choice = man->choice;
+        } else if (a->IsPlayerRef()) {
+            choice = g.player;
+        } else if (g.follower != kUseDefault && a->IsPlayerTeammate()) {
+            choice = g.follower;
+        }
         const RaceSet* race = nullptr;
         if (auto it = g_races.find(RaceKey(a->GetRace())); it != g_races.end() && it->second.choice != kUseDefault) race = &it->second;
         bool raceCustom = false;
@@ -667,6 +922,7 @@ namespace {
         }
         if (choice == kUseDefault) choice = g.def;
         if (choice == kCustom && raceCustom) std::copy(std::begin(race->rgb), std::end(race->rgb), p.rgb);
+        if (choice == kCustom && man) std::copy(std::begin(man->rgb), std::end(man->rgb), p.rgb);
         if (choice == kRandom) {
             const bool racePool = raceCustom && race->choice == kRandom && race->pool > 0;
             const int e = RandomFor(a, racePool ? race->pool : g.pool);
@@ -743,7 +999,55 @@ namespace {
         int swap = 0;               // 1 = overlay uses the white base texture (tinted)
         int gloss = -1, spec = -1;  // x100, -1 = none
         int add = -1;               // ring colour to ADD if he has no skin-blend paint, -1 = don't
+        int swell = 0;              // x1000, puffy rim morph
+        int sgloss = -1, sspec = -1;  // x100, shine on his schlong (-1 = none)
     };
+
+    // smooth 0-1 levels for one man (also used by the movement code)
+    struct Levels {
+        float wet = 0.0f, tender = 0.0f, bruise = 0.0f, stage = 0.0f;   // stage 0 = bright red, 1 = deep red
+    };
+    Levels LevelsFor(RE::FormID id, RE::Actor* a) {
+        Levels lv;
+        auto it = g_work.find(id);
+        if (it == g_work.end()) return lv;
+        Work& w = it->second;
+        const double now = Now();
+        // water dries it faster
+        if (a && g.waterDry && w.lastEval > 0.0) {
+            bool water = false;
+            if (auto* st = a->AsActorState(); st && st->IsSwimming()) water = true;
+            if (!water) {
+                auto* cell = a->GetParentCell();
+                auto* sky = RE::Sky::GetSingleton();
+                if (cell && !cell->IsInteriorCell() && sky && sky->currentWeather &&
+                    sky->currentWeather->data.flags.any(RE::TESWeather::WeatherDataFlag::kRainy))
+                    water = true;
+            }
+            if (water) w.dryShift += (now - w.lastEval) * (g.waterDryMul - 1.0f);
+        }
+        if (a) w.lastEval = now;
+        const double e = now - w.last;
+        if (g.wet) {
+            const double ew = now - w.wetLast + w.dryShift;
+            lv.wet = std::min(1.0f, w.wetPeak) * g.wetStrength * Fade(ew, g.wetTime * std::max(1.0f, w.wetPeak));
+            // "just finished": extra gloss for the first moments after the last stroke
+            if (g.wetBurst && ew < g.wetBurstSecs) lv.wet = std::min(1.0f, lv.wet * (1.0f + g.wetBurstBoost * static_cast<float>(1.0 - ew / g.wetBurstSecs)));
+        }
+        if (g.tender) {
+            float p = w.peak;
+            if (g.tenderPartners && w.partners > 1) p *= 1.0f + g.tenderPerPartner * static_cast<float>(w.partners - 1);
+            if (g.rested) p *= 1.0f + w.restedBoost;
+            lv.tender = std::min(1.0f, p * g.tenderStrength * Fade(e, g.tenderTime));
+            lv.stage = std::clamp(static_cast<float>(e / (g.tenderTime * g.tenderSplit)), 0.0f, 1.0f);
+            lv.stage = lv.stage * lv.stage * (3.0f - 2.0f * lv.stage);
+            if (g.bruise && (w.partners >= g.bruisePartners || w.workSecs >= g.bruiseLong))
+                lv.bruise = g.bruiseStrength * Fade(e, g.tenderTime * 1.5f);
+        }
+        const double keep = std::max({static_cast<double>(g.wetTime) * std::max(1.0f, w.wetPeak) + w.dryShift, g.tenderTime * 1.5});
+        if (e > keep + 5.0 && now - w.wetLast > keep + 5.0) g_work.erase(it);
+        return lv;
+    }
 
     Look Want(RE::Actor* a) {
         Look L;
@@ -751,36 +1055,54 @@ namespace {
         const int choice = pk.choice;
         float skin[3];
         SkinTone(a, skin);
+        for (float& v : skin) v = 1.0f + (v - 1.0f) * g.skinOnRim;   // how much skin tone goes into the rim
 
-        // after-sex levels
-        float wet = 0.0f, tender = 0.0f;
-        if (auto it = g_work.find(a->GetFormID()); it != g_work.end()) {
-            const double e = Now() - it->second.last;
-            if (g.wet) wet = Quant(it->second.peak * g.wetStrength * Fade(e, g.wetTime));
-            if (g.tender) tender = Quant(it->second.peak * g.tenderStrength * Fade(e, g.tenderTime));
-            if (e > std::max(g.wetTime, g.tenderTime) + 5.0) g_work.erase(it);
+        const Levels lv = LevelsFor(a->GetFormID(), a);
+        const float wet = Quant(lv.wet), tender = Quant(lv.tender), bruise = Quant(lv.bruise);
+        // reddening colour: a multiplier on the rim / ring colour
+        float red[3];
+        for (int i = 0; i < 3; ++i) {
+            const float stageCol = g.tenderStages ? g.tenderCol1[i] + (g.tenderCol2[i] - g.tenderCol1[i]) * Quant(lv.stage)
+                                                  : (i == 0 ? 1.0f : i == 1 ? 0.6f : 0.65f);
+            red[i] = 1.0f + (stageCol - 1.0f) * tender;
         }
-        const float red[3] = {1.0f, 1.0f - 0.40f * tender, 1.0f - 0.35f * tender};
 
-        // rim texture: a shipped shade, or a generated one (any colour / strength / reddening).
-        // The game puts the character's skin tone on top, so no shader tint is needed.
-        const bool any = choice >= 0 && (g.method == 0 || choice == kCustom);
-        if ((choice >= 0 || tender > 0.0f) && (any || tender > 0.0f)) {
+        // rim texture, made for this man: colour x his skin tone x reddening, plus wetness colour and
+        // bruising. (The rim is not skin-tinted by the game - that shader path streaks it.)
+        const bool lubeOn = g.wetColourOn && wet > 0.0f;
+        float filmCol[3] = {1, 1, 1}, film = 0.0f;
+        if (Drip::Film(a->GetFormID(), filmCol, film)) film = Quant(film);   // cum film on the rim
+        if (pk.active || tender > 0.0f || lubeOn || bruise > 0.0f || film > 0.0f) {
             const int col = choice >= 0 ? choice : InstalledPreset();
             const float s = (g.method == 0 && choice >= 0) ? pk.strength : 1.0f;
-            float pick[3], base[3], c[3];
+            float pick[3], base[3];
             AnusTarget(col, pk.rgb, pick);
             AnusTarget(kSkinPreset, pk.rgb, base);
-            for (int i = 0; i < 3; ++i) c[i] = (base[i] + (pick[i] - base[i]) * s) / 255.0f * red[i];
-            L.tex = GenRimTexture(c);
+            RimTex t{};
+            for (int i = 0; i < 3; ++i) {
+                t.colour[i] = (base[i] + (pick[i] - base[i]) * s) / 255.0f * red[i] * skin[i];
+                t.lube[i] = g.wetColour[i];
+                if (g.cumByRace) {
+                    if (auto wi = g_work.find(a->GetFormID()); wi != g_work.end() && !wi->second.giverRace.empty())
+                        if (auto ri = g_races.find(wi->second.giverRace); ri != g_races.end() && ri->second.cumOwn) t.lube[i] = ri->second.cum[i];
+                }
+                t.bruise[i] = g.bruiseCol[i];
+            }
+            t.lubeAmt = lubeOn ? wet * g.wetColourAmt : 0.0f;
+            if (film > t.lubeAmt) {
+                t.lubeAmt = film;
+                for (int i = 0; i < 3; ++i) t.lube[i] = filmCol[i];
+            }
+            t.bruiseAmt = bruise;
+            L.tex = GenRimTexture(t);
+            if (L.tex.empty() && col >= 0 && col < kPresets) L.tex = std::string(kDir) + kColourFiles[col];
         }
-        if (L.tex.empty() && choice >= 0) L.tex = std::string(kDir) + kColourFiles[std::min(choice, kPresets - 1)];
 
-        // skin-blend overlay (the game skin-tones the anus, so the ring follows the skin tone too)
+        // skin-blend ring
         const bool npcRing = g.autoRing && !a->IsPlayerRef();
         if ((g.blendMatch && choice >= 0) || npcRing) {
             const int col = (g.blendMatch && choice >= 0) ? choice : InstalledPreset();
-            const float s = (g.method == 0 && col != kCustom && choice >= 0) ? pk.strength : 1.0f;
+            const float s = (g.method == 0 && choice >= 0) ? pk.strength : 1.0f;   // same strength as the rim
             float pick[3], base[3], c[3];
             BlendTarget(col, pk.rgb, pick);
             BlendTarget(kSkinPreset, pk.rgb, base);
@@ -792,7 +1114,7 @@ namespace {
             L.swap = 1;
             if (npcRing) L.add = L.blend;
         } else if (g.tenderBlend && tender > 0.0f) {
-            L.blend = PackRGB(red);   // redden the installed overlay as it is
+            L.blend = PackRGB(red);   // redden the installed ring as it is
             L.swap = 0;
         }
 
@@ -800,15 +1122,30 @@ namespace {
             L.gloss = static_cast<int>(std::lround((30.0f + 90.0f * wet) * 100.0f));
             L.spec = static_cast<int>(std::lround((3.0f + 7.0f * wet) * 100.0f));
         }
+        if (g.swell) L.swell = static_cast<int>(std::lround(Quant(lv.tender * g.swellStrength) * 1000.0f));
+
+        // his schlong, if he was the one giving
+        if (g.schlongWet) {
+            if (auto it = g_schlong.find(a->GetFormID()); it != g_schlong.end()) {
+                const double e = Now() - it->second.last;
+                const float sw = Quant(it->second.peak * g.schlongStrength * Fade(e, g.schlongTime));
+                if (sw > 0.0f) {
+                    L.sgloss = static_cast<int>(std::lround((30.0f + 90.0f * sw) * 100.0f));
+                    L.sspec = static_cast<int>(std::lround((2.0f + 6.0f * sw) * 100.0f));
+                }
+                if (e > g.schlongTime + 5.0) g_schlong.erase(it);
+            }
+        }
         return L;
     }
 
     // ---- Papyrus ------------------------------------------------------------------------------
-    // Int[] LookFor(Actor): [tex, anusTint, blendTint, blendSwap, gloss x100, spec x100, ringToAdd]
+    // Int[] LookFor(Actor): [tex, anusTint, blendTint, blendSwap, gloss x100, spec x100, ringToAdd,
+    //                        swell x1000, schlong gloss x100, schlong spec x100]
     //   -2 = unchanged, -1 = remove / back to installed, -3 (blend only) = clean up if ours,
     //   tex 0 = set (ask ColourFor for the path), tints >= 0 = 0xRRGGBB
     std::vector<std::int32_t> LookFor(RE::StaticFunctionTag*, RE::Actor* a) {
-        std::vector<std::int32_t> out{-2, -2, -2, 0, -2, -2, -1};
+        std::vector<std::int32_t> out{-2, -2, -2, 0, -2, -2, -1, -2, -2, -2};
         if (!a) return out;
         std::lock_guard lk(g_lock);
         if (!g_loaded) LoadIni();
@@ -825,7 +1162,10 @@ namespace {
             out[4] = L.gloss;
             out[5] = L.gloss >= 0 ? L.spec : -1;
             out[6] = L.add;
-            g_sent[id] = {L.tex, L.tint, L.blend, L.swap, L.gloss, L.spec, L.add};
+            out[7] = L.swell;
+            out[8] = L.sgloss;
+            out[9] = L.sgloss >= 0 ? L.sspec : -1;
+            g_sent[id] = {L.tex, L.tint, L.blend, L.swap, L.gloss, L.spec, L.add, L.swell, L.sgloss};
             return out;
         }
         Sent& s = it->second;
@@ -840,7 +1180,12 @@ namespace {
             out[4] = L.gloss;
             out[5] = L.gloss >= 0 ? L.spec : -1;
         }
-        s = {L.tex, L.tint, L.blend, L.swap, L.gloss, L.spec, L.add};
+        if (L.swell != s.swell) out[7] = L.swell;
+        if (L.sgloss != s.sgloss) {
+            out[8] = L.sgloss;
+            out[9] = L.sgloss >= 0 ? L.sspec : -1;
+        }
+        s = {L.tex, L.tint, L.blend, L.swap, L.gloss, L.spec, L.add, L.swell, L.sgloss};
         return out;
     }
 
@@ -853,24 +1198,277 @@ namespace {
         return RE::BSFixedString(Want(a).tex.c_str());
     }
 
+    // ---- loading screens: Anatomica's script waits a little after each one ---------------------
+    double g_loadEnd = 0.0;
+    bool g_loading = false;
+    struct LoadSink : RE::BSTEventSink<RE::MenuOpenCloseEvent> {
+        RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* e, RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override {
+            if (e && e->menuName == RE::LoadingMenu::MENU_NAME) {
+                std::lock_guard lk(g_lock);
+                g_loading = e->opening;
+                if (!e->opening) g_loadEnd = Now();
+            }
+            return RE::BSEventNotifyControl::kContinue;
+        }
+    };
+    LoadSink g_loadSink;
+    bool g_sinkAdded = false;
+
+    // seconds the script should still wait (0 = go)
+    float LoadPause(RE::StaticFunctionTag*) {
+        std::lock_guard lk(g_lock);
+        if (!g_loaded) LoadIni();
+        if (g.loadDelay <= 0.0f) return 0.0f;
+        if (g_loading) return g.loadDelay;
+        const double left = g.loadDelay - (Now() - g_loadEnd);
+        return left > 0.0 ? static_cast<float>(left) : 0.0f;
+    }
+
+    // men near the player with their 3D loaded (any cell - the script's own scan only sees the
+    // player's cell, so men across a cell border in exteriors were never coloured)
+    std::vector<RE::Actor*> NearbyMen(RE::StaticFunctionTag*, float radius) {
+        std::vector<RE::Actor*> out;
+        if (radius <= 0.0f) {   // 0 = use the menu setting
+            std::lock_guard lk(g_lock);
+            if (!g_loaded) LoadIni();
+            radius = g.radius;
+        }
+        auto* pl = RE::PlayerCharacter::GetSingleton();
+        auto* lists = RE::ProcessLists::GetSingleton();
+        if (!pl || !lists) return out;
+        const auto ppos = pl->GetPosition();
+        for (auto& h : lists->highActorHandles) {
+            auto ptr = h.get();
+            RE::Actor* a = ptr.get();
+            if (!a || a == pl || !a->Is3DLoaded()) continue;
+            const auto* npc = a->GetActorBase();
+            if (!npc || npc->GetSex() != RE::SEX::kMale) continue;
+            if (radius > 0.0f && a->GetPosition().GetDistance(ppos) > radius) continue;
+            out.push_back(a);
+            if (out.size() >= 48) break;
+        }
+        return out;
+    }
+
     float ColourInterval(RE::StaticFunctionTag*) {
         std::lock_guard lk(g_lock);
         if (!g_loaded) LoadIni();
         return g.interval;
     }
 
-    // called by the gape script while the actor is being penetrated (dil = how dilated, 0-1)
-    void Worked(RE::StaticFunctionTag*, RE::Actor* a, float dil) {
+    // called by the gape script while the actor is being penetrated (dil = how dilated, 0-1,
+    // partners = partners in a row, partner = who is giving)
+    void Worked(RE::StaticFunctionTag*, RE::Actor* a, float dil, float partners, RE::Actor* partner) {
         if (!a) return;
+        Drip::OnWorked(a, partner, dil);   // before our lock (it has its own)
         std::lock_guard lk(g_lock);
         if (!g_loaded) LoadIni();
-        auto& w = g_work[a->GetFormID()];
         const double now = Now();
+        const Levels before = LevelsFor(a->GetFormID(), nullptr);
+        auto& w = g_work[a->GetFormID()];
+        const bool newRound = w.last <= 0.0 || now - w.last > 20.0;
+        dil = std::clamp(std::max(dil, 0.15f), 0.0f, 1.0f);
+        // reddening level
         float cur = 0.0f;
-        if (w.last > 0.0) cur = w.peak * Fade(now - w.last, std::max(g.wetTime, g.tenderTime));
-        w.peak = std::clamp(std::max(cur, std::max(dil, 0.15f)), 0.0f, 1.0f);
+        if (w.last > 0.0) cur = w.peak * Fade(now - w.last, g.tenderTime);
+        w.peak = std::clamp(std::max(cur, dil), 0.0f, 1.0f);
+        // wetness: a new round adds to what is left (up to the cap)
+        if (newRound) {
+            w.wetBase = (g.wetBuild && g.wetStrength > 0.0f) ? before.wet / g.wetStrength : 0.0f;
+            w.partners = 0;
+            w.workSecs = 0.0f;
+            w.dryShift = 0.0;
+            w.dripDone = false;
+            w.looseDone = false;
+            // first time in a while = redder
+            const auto lr = g_lastRound.find(a->GetFormID());
+            const bool restedNow = lr == g_lastRound.end() || now - lr->second > g.restedMinutes * 60.0;
+            w.restedBoost = restedNow ? g.restedExtra : 0.0f;
+        } else {
+            w.workSecs += static_cast<float>(std::min(now - w.last, 2.0));
+        }
+        w.wetPeak = std::clamp(g.wetBuild ? w.wetBase + dil : std::max(before.wet, dil), 0.0f, g.wetBuild ? g.wetCap : 1.0f);
+        w.partners = std::max(w.partners, static_cast<int>(partners + 0.5f));
         w.last = now;
+        w.wetLast = now;
+        g_lastRound[a->GetFormID()] = now;
+        if (partner && partner != a) w.giverRace = RaceKey(partner->GetRace());
+        if (partner && partner != a) {
+            auto& sw = g_schlong[partner->GetFormID()];
+            float sc = 0.0f;
+            if (sw.last > 0.0) sc = sw.peak * Fade(now - sw.last, g.schlongTime);
+            sw.peak = std::clamp(std::max(sc, std::max(dil, 0.4f)), 0.0f, 1.0f);
+            sw.last = now;
+        }
     }
+
+    // names of the shapes of his schlong (the armor in slot 52 - SOS / TNG), for the shine
+    std::vector<RE::BSFixedString> SchlongNodes(RE::StaticFunctionTag*, RE::Actor* a) {
+        std::vector<RE::BSFixedString> out;
+        if (!a) return out;
+        const auto& biped = a->GetBiped2();
+        if (!biped) return out;
+        auto* obj = biped->objects[RE::BIPED_OBJECTS::kModPelvisSecondary].partClone.get();
+        if (!obj) return out;
+        RE::BSVisit::TraverseScenegraphGeometries(obj, [&](RE::BSGeometry* geo) {
+            if (geo && !geo->name.empty() && out.size() < 16) out.emplace_back(geo->name.c_str());
+            return RE::BSVisit::BSVisitControl::kContinue;
+        });
+        return out;
+    }
+
+    // old SMP Cum Drip hook (replaced by Anatomica's own drips, Drip.cpp) - kept so older scripts still bind
+    bool DripDue(RE::StaticFunctionTag*, RE::Actor*) { return false; }
+
+    // how much slower the gape closes right now (1 = normal)
+    float CloseSlow(RE::StaticFunctionTag*, RE::Actor* a) {
+        if (!a) return 1.0f;
+        std::lock_guard lk(g_lock);
+        if (!g_loaded) LoadIni();
+        const float full = Drip::HoldOpen(a->GetFormID());   // still full of cum: stays open longer
+        if (!g.slowClose) return full;
+        return (1.0f + g.slowCloseAmt * LevelsFor(a->GetFormID(), nullptr).tender) * full;
+    }
+
+    // lasting looseness: cur = what he has now, days = game days since it was last updated.
+    // Returns the new value (a round that just ended adds to it; time heals it).
+    float LooseFor(RE::StaticFunctionTag*, RE::Actor* a, float cur, float days) {
+        if (!a) return cur;
+        std::lock_guard lk(g_lock);
+        if (!g_loaded) LoadIni();
+        if (!g.loose) return 0.0f;
+        float v = std::max(0.0f, cur - g.looseRecover * std::max(0.0f, days));
+        if (auto it = g_work.find(a->GetFormID()); it != g_work.end()) {
+            Work& w = it->second;
+            if (!w.looseDone && Now() - w.last >= 3.0) {
+                w.looseDone = true;
+                v += g.looseAdd * std::max(0.25f, w.peak);
+            }
+        }
+        v = std::clamp(v, 0.0f, g.looseCap);
+        g_looseSeen[a->GetFormID()] = v;
+        return v;
+    }
+
+
+    // ---- status (Status page + hotkey) --------------------------------------------------------
+    const char* ChoiceName(int c) {
+        static const char* n[] = {"Installed colour", "Pink", "Light pink", "Rose", "Mauve brown", "Skin matched", "Custom", "Random", "Skin-fit"};
+        return (c >= kInstalled && c <= kSmart) ? n[c + 1] : "?";
+    }
+    struct Status {
+        bool ok = false;
+        std::string name, race, colour;
+        float rim[3]{}, skin[3]{};
+        float wet = 0, tender = 0, bruise = 0, swell = 0, schlong = 0, gape = 0, loose = 0;
+        int partners = 0;
+        float secs = 0;
+        bool own = false;
+    };
+    Status StatusOf(RE::Actor* a) {   // caller holds g_lock
+        Status st;
+        if (!a) return st;
+        st.ok = true;
+        st.name = a->GetName();
+        if (auto* r = a->GetRace()) st.race = r->GetFullName();
+        const Pick pk = PickFor(a);
+        st.own = g_perMan.count(RefKey(a)) > 0;
+        st.colour = pk.active ? ChoiceName(pk.choice) : "Picker off / out of range";
+        SkinTone(a, st.skin);
+        float pick[3], base[3];
+        const int col = pk.choice >= 0 ? pk.choice : InstalledPreset();
+        AnusTarget(col, pk.rgb, pick);
+        AnusTarget(kSkinPreset, pk.rgb, base);
+        const float sMix = (g.method == 0 && pk.choice >= 0) ? pk.strength : 1.0f;
+        for (int i = 0; i < 3; ++i) {
+            const float sk = 1.0f + (st.skin[i] - 1.0f) * g.skinOnRim;
+            st.rim[i] = std::clamp((base[i] + (pick[i] - base[i]) * sMix) / 255.0f * sk, 0.0f, 1.0f);
+        }
+        const auto id = a->GetFormID();
+        const Levels lv = LevelsFor(id, nullptr);
+        st.wet = lv.wet, st.tender = lv.tender, st.bruise = lv.bruise;
+        st.swell = g.swell ? lv.tender * g.swellStrength : 0.0f;
+        if (auto it = g_work.find(id); it != g_work.end()) st.partners = it->second.partners, st.secs = it->second.workSecs;
+        if (auto it = g_schlong.find(id); it != g_schlong.end())
+            st.schlong = it->second.peak * g.schlongStrength * Fade(Now() - it->second.last, g.schlongTime);
+        if (auto it = g_looseSeen.find(id); it != g_looseSeen.end()) st.loose = it->second;
+        st.gape = Wink::GapeOf(id);
+        return st;
+    }
+    std::string StatusLine(const Status& st) {
+        return std::format("{}: {} | wet {:.0f}% | red {:.0f}% | bruise {:.0f}% | swell {:.0f}% | gape {:.0f}% | loose {:.0f}%",
+                           st.name, st.colour, st.wet * 100, st.tender * 100, st.bruise * 100, st.swell * 100, st.gape * 100,
+                           st.loose * 100);
+    }
+    RE::FormID g_inspect = 0;   // last man looked at with the hotkey
+
+    struct KeySink : RE::BSTEventSink<RE::InputEvent*> {
+        RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* ev, RE::BSTEventSource<RE::InputEvent*>*) override {
+            if (!ev) return RE::BSEventNotifyControl::kContinue;
+            int key = 0;
+            {
+                std::lock_guard lk(g_lock);
+                key = g.statusKey;
+            }
+            if (key <= 0) return RE::BSEventNotifyControl::kContinue;
+            for (auto* e = *ev; e; e = e->next) {
+                if (e->GetEventType() != RE::INPUT_EVENT_TYPE::kButton) continue;
+                const auto* b = e->AsButtonEvent();
+                if (!b || b->GetDevice() != RE::INPUT_DEVICE::kKeyboard || !b->IsDown() || static_cast<int>(b->GetIDCode()) != key) continue;
+                if (auto* ui = RE::UI::GetSingleton(); ui && ui->GameIsPaused()) continue;
+                RE::Actor* a = nullptr;
+                if (auto* pick = RE::CrosshairPickData::GetSingleton()) {
+                    auto ref = pick->GetActiveTarget().get();
+                    if (ref) a = ref->As<RE::Actor>();
+                }
+                if (!a) a = RE::PlayerCharacter::GetSingleton();
+                if (!a) continue;
+                std::string line;
+                {
+                    std::lock_guard lk(g_lock);
+                    if (!g_loaded) LoadIni();
+                    g_inspect = a->GetFormID();
+                    line = StatusLine(StatusOf(a));
+                }
+                RE::SendHUDMessage::ShowHUDMessage(line.c_str());
+            }
+            return RE::BSEventNotifyControl::kContinue;
+        }
+    };
+    KeySink g_keySink;
+
+    // ---- healing: sleeping / waiting and healing magic clear the after-sex looks ---------------
+    struct SleepSink : RE::BSTEventSink<RE::TESSleepStopEvent> {
+        RE::BSEventNotifyControl ProcessEvent(const RE::TESSleepStopEvent*, RE::BSTEventSource<RE::TESSleepStopEvent>*) override {
+            std::lock_guard lk(g_lock);
+            if (g.healSleep) {
+                g_work.clear();
+                g_schlong.clear();
+            }
+            return RE::BSEventNotifyControl::kContinue;
+        }
+    };
+    struct MagicSink : RE::BSTEventSink<RE::TESMagicEffectApplyEvent> {
+        RE::BSEventNotifyControl ProcessEvent(const RE::TESMagicEffectApplyEvent* e, RE::BSTEventSource<RE::TESMagicEffectApplyEvent>*) override {
+            if (!e || !e->target) return RE::BSEventNotifyControl::kContinue;
+            const auto* mgef = RE::TESForm::LookupByID<RE::EffectSetting>(e->magicEffect);
+            if (!mgef || mgef->IsHostile() || mgef->data.primaryAV != RE::ActorValue::kHealth) return RE::BSEventNotifyControl::kContinue;
+            const auto arch = mgef->GetArchetype();
+            if (arch != RE::EffectSetting::Archetype::kValueModifier && arch != RE::EffectSetting::Archetype::kPeakValueModifier &&
+                arch != RE::EffectSetting::Archetype::kDualValueModifier)
+                return RE::BSEventNotifyControl::kContinue;
+            std::lock_guard lk(g_lock);
+            if (!g.healMagic) return RE::BSEventNotifyControl::kContinue;
+            if (auto it = g_work.find(e->target->GetFormID()); it != g_work.end()) {
+                it->second.peak = 0.0f;       // redness, bruising and swelling gone
+                it->second.partners = 0;
+                it->second.workSecs = 0.0f;
+            }
+            return RE::BSEventNotifyControl::kContinue;
+        }
+    };
+    SleepSink g_sleepSink;
+    MagicSink g_magicSink;
 
     // ---- menu helpers -------------------------------------------------------------------------
     bool ComboValue(const char* label, int* value, int offset, const char* const items[], int count) {
@@ -915,7 +1513,7 @@ namespace {
             box(kColourNames[i], i);
             if (i != 2 && i != kCustom) ImGuiMCP::SameLine();
         }
-        box("Smart (fits his skin, uses Skin rules)", kSmartBit);
+        box("Skin-fit colour (follows Skin rules)", kSmartBit);
         ImGuiMCP::TextDisabled("Your colours (tick to use, click a swatch for the colour wheel):");
         for (int i = 0; i < kPaletteSize; ++i) {
             ImGuiMCP::PushID(i);
@@ -961,15 +1559,103 @@ namespace Colour {
         vm->RegisterFunction("ColourFor"sv, "AnatomicaNative"sv, ColourFor);
         vm->RegisterFunction("LookFor"sv, "AnatomicaNative"sv, LookFor);
         vm->RegisterFunction("ColourInterval"sv, "AnatomicaNative"sv, ColourInterval);
+        vm->RegisterFunction("NearbyMen"sv, "AnatomicaNative"sv, NearbyMen);
+        vm->RegisterFunction("LoadPause"sv, "AnatomicaNative"sv, LoadPause);
         vm->RegisterFunction("Worked"sv, "AnatomicaNative"sv, Worked);
+        vm->RegisterFunction("SchlongNodes"sv, "AnatomicaNative"sv, SchlongNodes);
+        vm->RegisterFunction("DripDue"sv, "AnatomicaNative"sv, DripDue);
+        vm->RegisterFunction("CloseSlow"sv, "AnatomicaNative"sv, CloseSlow);
+        vm->RegisterFunction("LooseFor"sv, "AnatomicaNative"sv, LooseFor);
+        Drip::RegisterFuncs(vm);
+    }
+
+    // the giver's race cum colour (Cum & drips page); false = none set
+    bool CumColour(RE::Actor* giver, float out[3]) {
+        if (!giver) return false;
+        std::lock_guard lk(g_lock);
+        if (!g_loaded) LoadIni();
+        auto it = g_races.find(RaceKey(giver->GetRace()));
+        if (it == g_races.end() || !it->second.cumOwn) return false;
+        for (int i = 0; i < 3; ++i) out[i] = it->second.cum[i];
+        return true;
+    }
+
+    // the cum settings that live with the colours (shown on the Cum & drips page)
+    void RenderCumColours() {
+        std::lock_guard lk(g_lock);
+        if (!g_loaded) LoadIni();
+        BuildRaces();
+        bool changed = false;
+        changed |= ImGuiMCP::Checkbox("The wetness colour (After sex page) follows the giver's race too", &g.cumByRace);
+        Help("With the wetness colour switched on, the gloss on his anus takes the cum colour of the man who gave.");
+        ImGuiMCP::TextDisabled("Tick a race to give it its own cum colour (used for his drips, squirts, puddles, the film on the rim, ...)");
+        if (g_raceRows.empty()) ImGuiMCP::TextDisabled("Races appear here once a game is loaded.");
+        if (!g_raceRows.empty() && ImGuiMCP::TreeNode("Cum colour per race")) {
+            for (const auto& r : g_raceRows) {
+                auto& rs = g_races[r.key];
+                ImGuiMCP::PushID(r.key.c_str());
+                if (ImGuiMCP::Checkbox("##own", &rs.cumOwn)) changed = true;
+                ImGuiMCP::SameLine();
+                if (rs.cumOwn) {
+                    changed |= ImGuiMCP::ColorEdit3("##cum", rs.cum, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
+                    ImGuiMCP::SameLine();
+                }
+                ImGuiMCP::TextUnformatted(r.name.c_str());
+                ImGuiMCP::PopID();
+            }
+            if (ConfirmButton("Clear all race cum colours")) {
+                for (auto& [k, v] : g_races) v.cumOwn = false;
+                changed = true;
+            }
+            ImGuiMCP::TreePop();
+        }
+        if (changed) SaveIni();
+    }
+
+    void SaveNow() {
+        std::lock_guard lk(g_lock);
+        SaveIni();
     }
 
     void Reset() {
+        if (!g_sinkAdded) {
+            if (auto* ui = RE::UI::GetSingleton()) {
+                ui->AddEventSink<RE::MenuOpenCloseEvent>(&g_loadSink);
+                g_sinkAdded = true;
+            }
+        }
+        static bool keySink = false;
+        if (!keySink) {
+            if (auto* in = RE::BSInputDeviceManager::GetSingleton()) {
+                in->AddEventSink<RE::InputEvent*>(&g_keySink);
+                keySink = true;
+            }
+        }
+        static bool scriptSinks = false;
+        if (!scriptSinks) {
+            if (auto* src = RE::ScriptEventSourceHolder::GetSingleton()) {
+                src->AddEventSink<RE::TESSleepStopEvent>(&g_sleepSink);
+                src->AddEventSink<RE::TESMagicEffectApplyEvent>(&g_magicSink);
+                scriptSinks = true;
+            }
+        }
         std::lock_guard lk(g_lock);
+        g_loadEnd = Now();   // a save was just loaded
+        g_loading = false;
         g_sent.clear();
         g_pendingTex.clear();
         g_work.clear();
+        g_schlong.clear();
+        Drip::Reset();
     }
+
+    float TenderLevel(RE::FormID id) {
+        std::lock_guard lk(g_lock);
+        if (!g_loaded || !g.sensitive) return 0.0f;
+        return LevelsFor(id, nullptr).tender;
+    }
+    float SensClench() { std::lock_guard lk(g_lock); return g.sensClench; }
+    float SensBreath() { std::lock_guard lk(g_lock); return g.sensBreath; }
 
     void __stdcall RenderColours() {
         std::lock_guard lk(g_lock);
@@ -984,6 +1670,15 @@ namespace Colour {
         changed |= ImGuiMCP::SliderFloat("Check every", &g.interval, 1.0f, 180.0f, "%.0f s", ImGuiMCP::ImGuiSliderFlags_Logarithmic);
         Help("How often nearby men are checked (1 s - 3 min). Shorter = new men and after-sex looks show up sooner; longer = "
              "less script work. A man who already looks right costs almost nothing, so 3 s is fine for most games.");
+        {
+            float m = g.radius / 70.0f;
+            if (ImGuiMCP::SliderFloat("Distance", &m, 1.0f, 100.0f, "%.0f m")) {
+                g.radius = m * 70.0f;
+                changed = true;
+            }
+            Help("Only men this close to you are coloured (and get after-sex looks). 30 m covers a room or a camp; "
+                 "further = more men checked each time.");
+        }
         changed |= ComboValue("Applies to", &g.scope, 0, kScopeItems, 3);
         changed |= ComboValue("Method", &g.method, 0, kMethodItems, 2);
         Help("Any colour: Custom, your colours, Smart random, colour strength and reddening all work - each colour is "
@@ -998,6 +1693,10 @@ namespace Colour {
         } else {
             ImGuiMCP::TextDisabled("Colour strength: tint method only.");
         }
+        changed |= Pct("Skin tone on the rim", &g.skinOnRim);
+        Help("How much of each man's own skin tone is mixed into the rim colour. 100% = it always sits in his skin "
+             "(a blue anus on red skin comes out dark); lower = picked colours show truer on strongly coloured skin "
+             "(argonians, khajiit, dunmer).");
         changed |= ImGuiMCP::ColorEdit3("Custom colour", g.custom, kWheel);
         Help("Used wherever \"Custom\" is picked (always tinted, in both methods). Pick the colour you want the anus to be; "
              "it is still shaded by the skin tone.");
@@ -1011,23 +1710,24 @@ namespace Colour {
         ImGuiMCP::SeparatorText("Who gets which colour");
         changed |= ComboValue("Everyone (default)", &g.def, 1, kDefaultItems, 9);
         changed |= ComboValue("You (player)", &g.player, 2, kPlayerItems, 10);
+        changed |= ComboValue("Your followers", &g.follower, 2, kFollowerItems, 10);
         ImGuiMCP::TextDisabled("Per-race picks: Per race page.");
 
         ImGuiMCP::SeparatorText("Random picks from");
         changed |= PoolEditor(g.pool, g.palette);
 
-        ImGuiMCP::SeparatorText("Smart random");
-        changed |= ComboValue("Colours chosen", &g.harmony, 0, kHarmonyItems, 3);
-        Help("Smart random first follows your Skin rules page (e.g. red argonian -> blue anus). With no matching rule it "
+        ImGuiMCP::SeparatorText("Skin-fit colour");
+        changed |= ComboValue("When no Skin rule matches", &g.harmony, 0, kHarmonyItems, 3);
+        Help("Skin-fit first follows your Skin rules page (e.g. red argonian -> blue anus). With no matching rule it "
              "reads his skin colour and picks an anus colour around it. Same family = his own hue, "
              "deeper. Neighbouring = hues next to his on the colour wheel (a red argonian gets reds, oranges, magentas - "
              "never green). Contrasting = the opposite side of the wheel, for bold looks.");
-        ImGuiMCP::TextDisabled("Random and Smart random are fixed per man until you re-roll.");
+
         if (ConfirmButton("Re-roll everyone")) {
             ++g.seed;
             changed = true;
         }
-        Help("Gives every man a new random / smart-random colour.");
+        Help("Gives every man a new Random / Skin-fit colour.");
         ImGuiMCP::SameLine();
         {
             auto sel = RE::Console::GetSelectedRef();
@@ -1044,6 +1744,7 @@ namespace Colour {
             const Settings d;
             g.enabled = d.enabled;
             g.interval = d.interval;
+            g.radius = d.radius;
             g.scope = d.scope;
             g.method = d.method;
             g.strength = d.strength;
@@ -1056,11 +1757,66 @@ namespace Colour {
             g.player = d.player;
             g.pool = d.pool;
             g.harmony = d.harmony;
+            g.follower = d.follower;
+            g.skinOnRim = d.skinOnRim;
             changed = true;
         }
         if (changed) SaveIni();
         ImGuiMCP::Spacing();
         ImGuiMCP::TextDisabled("Save size: a few small RaceMenu entries per coloured man (well under 1 KB each).");
+        ImGuiMCP::Spacing();
+        ImGuiMCP::TextWrapped("Note: Random and Skin-fit picks are fixed per man. After changing the random colours, "
+                              "Skin rules or the Skin-fit setting, press Re-roll everyone (or Re-roll one man) to see the "
+                              "new picks.");
+    }
+
+    void __stdcall RenderGeneral() {
+        std::lock_guard lk(g_lock);
+        if (!g_loaded) LoadIni();
+        bool changed = false;
+        ImGuiMCP::TextWrapped("Settings for all of Anatomica's script: the gape, movement, colours, wetness and reddening.");
+        ImGuiMCP::Separator();
+        changed |= ImGuiMCP::SliderFloat("Wait after loading screens", &g.loadDelay, 0.0f, 30.0f, "%.0f s");
+        Help("After every loading screen (loading a save, going through a door, fast travel) Anatomica's script waits this "
+             "long before doing anything, so other mods' scripts get the busy first seconds. 0 = no wait.");
+        ImGuiMCP::SeparatorText("Presets");
+        ImGuiMCP::TextWrapped("Save every Anatomica setting (all pages) to a slot, and load it again later - or share the "
+                              "file (Data\\SKSE\\Plugins\\AnatomicaMenu\\Presets\\SlotN.ini).");
+        for (int slot = 1; slot <= 5; ++slot) {
+            ImGuiMCP::PushID(slot);
+            const std::filesystem::path f = std::format("Data/SKSE/Plugins/AnatomicaMenu/Presets/Slot{}.ini", slot);
+            std::error_code ec;
+            const bool has = std::filesystem::exists(f, ec);
+            ImGuiMCP::Text("Slot %d%s", slot, has ? "" : " (empty)");
+            ImGuiMCP::SameLine();
+            if (ConfirmButton(std::format("Save##s{}", slot).c_str())) {
+                SaveIni();
+                std::filesystem::create_directories(f.parent_path(), ec);
+                std::filesystem::copy_file(kIni, f, std::filesystem::copy_options::overwrite_existing, ec);
+            }
+            if (has) {
+                ImGuiMCP::SameLine();
+                if (ConfirmButton(std::format("Load##l{}", slot).c_str())) {
+                    std::filesystem::copy_file(f, kIni, std::filesystem::copy_options::overwrite_existing, ec);
+                    g = Settings{};
+                    g_races.clear();
+                    g_perMan.clear();
+                    g_reroll.clear();
+                    g_rules.clear();
+                    g_sent.clear();
+                    LoadIni();
+                    UI::ReloadSettings();
+                }
+            }
+            ImGuiMCP::PopID();
+        }
+
+        ImGuiMCP::Spacing();
+        if (ConfirmButton("Reset general settings")) {
+            g.loadDelay = Settings{}.loadDelay;
+            changed = true;
+        }
+        if (changed) SaveIni();
     }
 
     void __stdcall RenderRaces() {
@@ -1070,6 +1826,7 @@ namespace Colour {
         bool changed = false;
         if (!g_raceDefaults.empty())
             ImGuiMCP::TextDisabled("Races set in the installer start with that colour; Reset all races goes back to them.");
+        ImGuiMCP::TextDisabled("Cum colours per race are on the Cum & drips page.");
         ImGuiMCP::TextWrapped("Colour per playable race. \"Use the default\" follows Everyone on the Colours page. "
                               "Custom (and Random, when it lands on Custom) uses this race's own colour - click the "
                               "swatch for the colour wheel. Own colour strength only applies with the Tint method.");
@@ -1175,41 +1932,265 @@ namespace Colour {
             g_rules.push_back({});
             changed = true;
         }
-        Help("Tick = rule on. Race = who it applies to. Skin swatch + degrees = which skin colours match (how far round the "
+        ImGuiMCP::SameLine();
+        if (ConfirmButton("Load the default rules")) {
+            g_rules = DefaultRules();
+            changed = true;
+        }
+        Help("Replaces the list with the rules that come with Anatomica (argonian scale colours). Tick = rule on. Race = who it applies to. Skin swatch + degrees = which skin colours match (how far round the "
              "colour wheel from that colour). Anus swatch = the colour they get.");
         if (changed) {
             SaveIni();
         }
     }
 
+    struct KeyName {
+        int code;
+        const char* name;
+    };
+    constexpr KeyName kKeys[] = {{0, "None"}, {0x43, "F9"}, {0x44, "F10"}, {0x57, "F11"}, {0x58, "F12"}, {0xD2, "Insert"},
+                                 {0xD3, "Delete"}, {0xC7, "Home"}, {0xCF, "End"}, {0xC9, "Page Up"}, {0xD1, "Page Down"},
+                                 {0x46, "Scroll Lock"}, {0xC5, "Pause"}, {0x52, "Num 0"}, {0x4F, "Num 1"}, {0x50, "Num 2"},
+                                 {0x51, "Num 3"}, {0x4B, "Num 4"}, {0x4C, "Num 5"}, {0x4D, "Num 6"}, {0x47, "Num 7"},
+                                 {0x48, "Num 8"}, {0x49, "Num 9"}, {0xB5, "Num /"}, {0x37, "Num *"}, {0x4A, "Num -"},
+                                 {0x4E, "Num +"}, {0x53, "Num ."}};
+
+    void __stdcall RenderStatus() {
+        std::lock_guard lk(g_lock);
+        if (!g_loaded) LoadIni();
+        bool changed = false;
+        // hotkey
+        {
+            int idx = 0;
+            for (int i = 0; i < static_cast<int>(std::size(kKeys)); ++i)
+                if (kKeys[i].code == g.statusKey) idx = i;
+            std::vector<const char*> names;
+            for (const auto& k : kKeys) names.push_back(k.name);
+            if (ImGuiMCP::Combo("Status hotkey", &idx, names.data(), static_cast<int>(names.size()))) {
+                g.statusKey = kKeys[idx].code;
+                changed = true;
+            }
+            Help("Look at a man and press it: his colour, wetness, redness, gape and looseness show as a message, and he "
+                 "becomes the man shown on this page. None = no hotkey.");
+        }
+        ImGuiMCP::Separator();
+        RE::Actor* a = nullptr;
+        if (auto sel = RE::Console::GetSelectedRef()) a = sel->As<RE::Actor>();
+        if (!a && g_inspect) a = RE::TESForm::LookupByID<RE::Actor>(g_inspect);
+        if (!a) {
+            ImGuiMCP::TextWrapped("Open the console (~) and click a man (or use the hotkey on him), then come back here.");
+            if (changed) SaveIni();
+            return;
+        }
+        const Status st = StatusOf(a);
+        ImGuiMCP::SeparatorText(st.name.c_str());
+        ImGuiMCP::Text("Race: %s", st.race.c_str());
+        ImGuiMCP::Text("Colour: %s%s", st.colour.c_str(), st.own ? " (his own)" : "");
+        ImGuiMCP::ColorButton("Rim colour", ImGuiMCP::ImVec4{st.rim[0], st.rim[1], st.rim[2], 1.0f});
+        ImGuiMCP::SameLine();
+        ImGuiMCP::Text("rim");
+        ImGuiMCP::SameLine();
+        ImGuiMCP::ColorButton("Skin tone", ImGuiMCP::ImVec4{st.skin[0], st.skin[1], st.skin[2], 1.0f});
+        ImGuiMCP::SameLine();
+        ImGuiMCP::Text("skin tone");
+        ImGuiMCP::Text("Wet %.0f%%   Red %.0f%%   Bruise %.0f%%   Swelling %.0f%%", st.wet * 100, st.tender * 100, st.bruise * 100, st.swell * 100);
+        ImGuiMCP::Text("Gape %.0f%%   Looseness %.0f%%   Schlong shine %.0f%%", st.gape * 100, st.loose * 100, st.schlong * 100);
+        ImGuiMCP::Text("This round: %d partner(s), %.0f s of penetration", st.partners, st.secs);
+        ImGuiMCP::TextUnformatted(Drip::Status(a).c_str());
+
+        ImGuiMCP::SeparatorText("His own colour");
+        const std::string key = RefKey(a);
+        bool own = g_perMan.count(key) > 0;
+        if (ImGuiMCP::Checkbox("Give him his own colour", &own)) {
+            if (own) g_perMan[key] = ManSet{};
+            else g_perMan.erase(key);
+            changed = true;
+        }
+        Help("Overrides his race, Random and everything else - just for him.");
+        if (auto it = g_perMan.find(key); it != g_perMan.end()) {
+            ImGuiMCP::Indent();
+            changed |= ComboValue("Colour##man", &it->second.choice, 1, kDefaultItems, 9);
+            if (it->second.choice == kCustom) changed |= ImGuiMCP::ColorEdit3("His colour", it->second.rgb, kWheel);
+            ImGuiMCP::Unindent();
+        }
+        if (changed) SaveIni();
+        ImGuiMCP::Spacing();
+        ImGuiMCP::TextDisabled("Values update every \"Check every\" seconds (Colours page).");
+    }
+
     void __stdcall RenderAfter() {
         std::lock_guard lk(g_lock);
         if (!g_loaded) LoadIni();
         bool changed = false;
-        ImGuiMCP::TextWrapped("Looks that follow anal sex and fade afterwards. Stronger and longer sex = stronger "
-                              "effect (up to the strength set here).");
+        auto Indented = [&](bool on, auto&& body) {
+            if (!on) return;
+            ImGuiMCP::Indent();
+            body();
+            ImGuiMCP::Unindent();
+        };
+        ImGuiMCP::TextWrapped("Looks that follow anal sex and fade afterwards. Longer and rougher sex = stronger effect "
+                              "(up to the strength set here). Every part can be switched off on its own.");
+
+        // ---------------------------------------------------------------- wetness
         ImGuiMCP::SeparatorText("Wetness");
         changed |= ImGuiMCP::Checkbox("Wet shine after sex", &g.wet);
-        changed |= Pct("Wetness strength", &g.wetStrength);
-        Help("How glossy the anus gets (stronger, tighter highlights).");
-        changed |= Minutes("Wetness dries in", &g.wetTime, 0.5f, 30.0f);
+        Indented(g.wet, [&] {
+            changed |= Pct("Shine strength", &g.wetStrength);
+            Help("How glossy the anus gets (stronger, tighter highlights).");
+            changed |= Minutes("Dries in", &g.wetTime, 0.5f, 30.0f);
+            changed |= ImGuiMCP::Checkbox("Builds up over rounds", &g.wetBuild);
+            Help("Another round before he has dried adds to the wetness instead of starting again - he stays wet longer.");
+            if (g.wetBuild) {
+                ImGuiMCP::SameLine();
+                float pct = g.wetCap * 100.0f;
+                ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 8.0f);
+                if (ImGuiMCP::SliderFloat("up to##cap", &pct, 100.0f, 300.0f, "%.0f%%")) {
+                    g.wetCap = pct / 100.0f;
+                    changed = true;
+                }
+            }
+            changed |= ImGuiMCP::Checkbox("Coloured wetness (lube / cum)", &g.wetColourOn);
+            Help("Lays a colour over the rim while it is wet, fading as it dries.");
+            Indented(g.wetColourOn, [&] {
+                changed |= ImGuiMCP::ColorEdit3("Wetness colour", g.wetColour, kWheel);
+                changed |= Pct("Colour amount", &g.wetColourAmt);
+                auto preset = [&](const char* label, float r, float gg, float b, float amt) {
+                    if (ImGuiMCP::Button(label)) {
+                        g.wetColour[0] = r, g.wetColour[1] = gg, g.wetColour[2] = b, g.wetColourAmt = amt;
+                        changed = true;
+                    }
+                };
+                preset("Clear lube", 0.9f, 0.9f, 0.92f, 0.15f);
+                ImGuiMCP::SameLine();
+                preset("Milky (cum)", 0.95f, 0.93f, 0.88f, 0.45f);
+                ImGuiMCP::SameLine();
+                preset("Pink lube", 0.95f, 0.55f, 0.7f, 0.35f);
+                ImGuiMCP::SameLine();
+                preset("Blue lube", 0.45f, 0.65f, 0.95f, 0.35f);
+            });
+            changed |= ImGuiMCP::Checkbox("Extra gloss right after", &g.wetBurst);
+            Help("For the first moments after the last stroke he is glossier than the slider says, then settles.");
+            Indented(g.wetBurst, [&] {
+                changed |= ImGuiMCP::SliderFloat("for##burst", &g.wetBurstSecs, 5.0f, 120.0f, "%.0f s");
+                changed |= Pct("extra##burst", &g.wetBurstBoost);
+            });
+            changed |= ImGuiMCP::Checkbox("Water dries it faster", &g.waterDry);
+            Help("Swimming, or standing outside in the rain, dries him faster.");
+            if (g.waterDry) {
+                ImGuiMCP::SameLine();
+                ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 8.0f);
+                changed |= ImGuiMCP::SliderFloat("x faster##water", &g.waterDryMul, 1.0f, 10.0f, "x%.1f");
+            }
+        });
+
+        ImGuiMCP::SeparatorText("Wet schlong");
+        changed |= ImGuiMCP::Checkbox("The partner's schlong gets wet too", &g.schlongWet);
+        Help("The man giving gets a wet shine on his schlong (SOS / TNG, anything in body slot 52) that dries on its own.");
+        Indented(g.schlongWet, [&] {
+            changed |= Pct("Schlong shine", &g.schlongStrength);
+            changed |= Minutes("Schlong dries in", &g.schlongTime, 0.5f, 30.0f);
+        });
+
+        // ---------------------------------------------------------------- reddening
         ImGuiMCP::SeparatorText("Tender reddening");
         changed |= ImGuiMCP::Checkbox("Tender reddening after sex", &g.tender);
-        changed |= Pct("Reddening strength", &g.tenderStrength);
-        Help("How red and flushed the anus gets.");
-        changed |= Minutes("Reddening fades in", &g.tenderTime, 0.5f, 60.0f);
-        changed |= ImGuiMCP::Checkbox("Also redden the skin-blend area", &g.tenderBlend);
-        Help("Reddens the RaceMenu \"Anatomica Blend\" paint around the anus too (characters who have it applied).");
+        Indented(g.tender, [&] {
+            changed |= Pct("Reddening strength", &g.tenderStrength);
+            changed |= Minutes("Fades in", &g.tenderTime, 0.5f, 60.0f);
+            changed |= ImGuiMCP::Checkbox("Also redden the skin-blend ring", &g.tenderBlend);
+            changed |= ImGuiMCP::Checkbox("Colour changes as it fades", &g.tenderStages);
+            Help("Starts as the first colour, turns into the second, then fades back to normal.");
+            Indented(g.tenderStages, [&] {
+                changed |= ImGuiMCP::ColorEdit3("Fresh", g.tenderCol1, kWheel);
+                ImGuiMCP::SameLine();
+                changed |= ImGuiMCP::ColorEdit3("Later", g.tenderCol2, kWheel);
+                changed |= Pct("Turns to \"Later\" after (part of the fade time)", &g.tenderSplit);
+            });
+            changed |= ImGuiMCP::Checkbox("More partners = redder", &g.tenderPartners);
+            if (g.tenderPartners) {
+                ImGuiMCP::SameLine();
+                ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 8.0f);
+                changed |= Pct("per extra partner##pp", &g.tenderPerPartner);
+            }
+            changed |= ImGuiMCP::Checkbox("Bruising after very long sex or many partners", &g.bruise);
+            Indented(g.bruise, [&] {
+                changed |= ImGuiMCP::SliderInt("Partners in a row", &g.bruisePartners, 2, 6);
+                changed |= Minutes("or penetration lasting", &g.bruiseLong, 0.5f, 30.0f);
+                changed |= ImGuiMCP::ColorEdit3("Bruise colour", g.bruiseCol, kWheel);
+                changed |= Pct("Bruise strength", &g.bruiseStrength);
+                Help("A faint tint toward the outer edge of the rim. Lasts a little longer than the redness.");
+            });
+            changed |= ImGuiMCP::Checkbox("Swelling (puffy rim)", &g.swell);
+            Help("Needs the body built in BodySlide with \"Build Morphs\" ticked (Anatomica Swell).");
+            if (g.swell) {
+                ImGuiMCP::SameLine();
+                ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 8.0f);
+                changed |= Pct("##swell", &g.swellStrength);
+            }
+            changed |= ImGuiMCP::Checkbox("First time in a while = redder", &g.rested);
+            Indented(g.rested, [&] {
+                changed |= Minutes("\"A while\" is", &g.restedMinutes, 5.0f, 600.0f);
+                changed |= Pct("extra redness##rested", &g.restedExtra);
+            });
+            changed |= ImGuiMCP::Checkbox("Gape closes slower while tender", &g.slowClose);
+            if (g.slowClose) {
+                ImGuiMCP::SameLine();
+                ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 8.0f);
+                float pct = g.slowCloseAmt * 100.0f;
+                if (ImGuiMCP::SliderFloat("longer##slow", &pct, 0.0f, 200.0f, "+%.0f%%")) {
+                    g.slowCloseAmt = pct / 100.0f;
+                    changed = true;
+                }
+            }
+            changed |= ImGuiMCP::Checkbox("Sensitive while tender", &g.sensitive);
+            Help("While he is still red, the clenches are sharper and the breathing slower (Movement page).");
+            Indented(g.sensitive, [&] {
+                changed |= Pct("Sharper clenches", &g.sensClench);
+                changed |= Pct("Slower breathing", &g.sensBreath);
+            });
+        });
+
+        // ---------------------------------------------------------------- looseness
+        ImGuiMCP::SeparatorText("Lasting looseness");
+        changed |= ImGuiMCP::Checkbox("Each round leaves him a little looser", &g.loose);
+        Help("A small gape that stays after the after-sex gape has closed and heals over game days. Saved with each "
+             "man (RaceMenu body morph). Turning this off lets every man heal back over the next minutes.");
+        Indented(g.loose, [&] {
+            changed |= Pct("Per round", &g.looseAdd);
+            changed |= Pct("At most", &g.looseCap);
+            changed |= Pct("Heals per game day", &g.looseRecover);
+        });
+
+        ImGuiMCP::SeparatorText("Drips");
+        ImGuiMCP::TextDisabled("Strands, squirts, puddles and the leg trail have their own page: Cum & drips.");
+
+        // ---------------------------------------------------------------- healing
+        ImGuiMCP::SeparatorText("Healing");
+        changed |= ImGuiMCP::Checkbox("Sleeping or waiting clears everything", &g.healSleep);
+        changed |= ImGuiMCP::Checkbox("Healing spells and potions clear redness, bruising and swelling", &g.healMagic);
+
         ImGuiMCP::Spacing();
         if (ConfirmButton("Reset after-sex settings")) {
             const Settings d;
-            g.wet = d.wet;
-            g.wetStrength = d.wetStrength;
-            g.wetTime = d.wetTime;
-            g.tender = d.tender;
-            g.tenderStrength = d.tenderStrength;
-            g.tenderTime = d.tenderTime;
-            g.tenderBlend = d.tenderBlend;
+            g.wet = d.wet, g.wetStrength = d.wetStrength, g.wetTime = d.wetTime, g.wetBuild = d.wetBuild, g.wetCap = d.wetCap;
+            g.wetColourOn = d.wetColourOn, g.wetColourAmt = d.wetColourAmt;
+            std::copy(std::begin(d.wetColour), std::end(d.wetColour), g.wetColour);
+            g.waterDry = d.waterDry, g.waterDryMul = d.waterDryMul;
+            g.schlongWet = d.schlongWet, g.schlongStrength = d.schlongStrength, g.schlongTime = d.schlongTime;
+            g.tender = d.tender, g.tenderStrength = d.tenderStrength, g.tenderTime = d.tenderTime, g.tenderBlend = d.tenderBlend;
+            g.tenderStages = d.tenderStages, g.tenderSplit = d.tenderSplit;
+            std::copy(std::begin(d.tenderCol1), std::end(d.tenderCol1), g.tenderCol1);
+            std::copy(std::begin(d.tenderCol2), std::end(d.tenderCol2), g.tenderCol2);
+            g.tenderPartners = d.tenderPartners, g.tenderPerPartner = d.tenderPerPartner;
+            g.bruise = d.bruise, g.bruisePartners = d.bruisePartners, g.bruiseLong = d.bruiseLong, g.bruiseStrength = d.bruiseStrength;
+            std::copy(std::begin(d.bruiseCol), std::end(d.bruiseCol), g.bruiseCol);
+            g.swell = d.swell, g.swellStrength = d.swellStrength;
+            g.sensitive = d.sensitive, g.sensClench = d.sensClench, g.sensBreath = d.sensBreath;
+            g.healSleep = d.healSleep, g.healMagic = d.healMagic;
+            g.wetBurst = d.wetBurst, g.wetBurstSecs = d.wetBurstSecs, g.wetBurstBoost = d.wetBurstBoost, g.cumByRace = d.cumByRace;
+            g.slowClose = d.slowClose, g.slowCloseAmt = d.slowCloseAmt;
+            g.rested = d.rested, g.restedMinutes = d.restedMinutes, g.restedExtra = d.restedExtra;
+            g.loose = d.loose, g.looseAdd = d.looseAdd, g.looseCap = d.looseCap, g.looseRecover = d.looseRecover;
             changed = true;
         }
         if (changed) SaveIni();

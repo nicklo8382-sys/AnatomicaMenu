@@ -1,6 +1,7 @@
 #include <string_view>
 #include "UI.h"
 #include "Colour.h"
+#include "Drip.h"
 
 #include <SimpleIni.h>
 
@@ -158,6 +159,12 @@ namespace {
     }
 }
 
+void UI::ReloadSettings() {
+    LoadIni();
+    PushGlobals();
+    logger::info("Anatomica: settings reloaded (preset)");
+}
+
 void UI::ApplySavedSettings() {
     if (!g_loaded) LoadIni();
     PushGlobals();
@@ -171,12 +178,15 @@ void UI::Register() {
     }
     LoadIni();
     SKSEMenuFramework::SetSection("Anatomica");
+    SKSEMenuFramework::AddSectionItem("General", Colour::RenderGeneral);
     SKSEMenuFramework::AddSectionItem("Gape", Gape::Render);
     SKSEMenuFramework::AddSectionItem("Movement", Motion::Render);
     SKSEMenuFramework::AddSectionItem("Colours", Colour::RenderColours);
     SKSEMenuFramework::AddSectionItem("Per race", Colour::RenderRaces);
     SKSEMenuFramework::AddSectionItem("Skin rules", Colour::RenderRules);
     SKSEMenuFramework::AddSectionItem("After sex", Colour::RenderAfter);
+    SKSEMenuFramework::AddSectionItem("Cum & drips", Drip::RenderPage);
+    SKSEMenuFramework::AddSectionItem("Status", Colour::RenderStatus);
     SKSEMenuFramework::AddSectionItem("Jiggle", Jiggle::Render);
     SKSEMenuFramework::AddSectionItem("About", About::Render);
 }

@@ -1,7 +1,9 @@
 #include "Wink.h"
+#include "Drip.h"
 #include "Colour.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <mutex>
@@ -51,6 +53,7 @@ namespace {
         float phase[3] = {};     // per-actor random phases, so actors don't breathe in sync
         float clenchT = -1.0f;   // seconds into the current clench, -1 = none
         float clenchAmp = 0.0f;
+        float tender = 0.0f;     // after-sex reddening (Colour), for the "sensitive" option
         float sinceSet = 0.0f;   // seconds since the script last sent the gape
         bool touched = false;    // bones currently offset by us
         bool logged = false;
@@ -114,6 +117,8 @@ namespace {
                 m.entry[0][2] * v.x + m.entry[1][2] * v.y + m.entry[2][2] * v.z};
     }
 
+    std::atomic<float> g_sensBreath{0.4f}, g_sensClench{0.5f};
+
     // runs on the game thread
     void Apply(float dt) {
         const float breathAmp = std::clamp(GlobalOr(0x812, 0.15f), 0.0f, 0.6f);
@@ -122,7 +127,7 @@ namespace {
         for (auto it = g_states.begin(); it != g_states.end();) {
             auto& s = it->second;
             s.sinceSet += dt;
-            s.time += dt * breathSpeed;
+            s.time += dt * breathSpeed * (1.0f - g_sensBreath * s.tender);   // slower breathing while tender
             // follow the script's gape smoothly (it only updates a few times a second)
             const float k = 1.0f - std::exp(-dt / 0.15f);
             s.g += (s.gTarget - s.g) * k;
@@ -208,6 +213,9 @@ namespace {
     // ---- Papyrus: AnatomicaNative ----
     void SetGape(RE::StaticFunctionTag*, RE::Actor* a, float g) {
         if (!a) return;
+        const float tender = Colour::TenderLevel(a->GetFormID());   // before our own lock (Colour has its own)
+        g_sensBreath = Colour::SensBreath();
+        g_sensClench = Colour::SensClench();
         std::lock_guard lk(g_lock);
         auto found = g_states.find(a->GetFormID());
         if (found == g_states.end() && g < 0.01f) return;   // closed and untracked: nothing to do
@@ -220,20 +228,26 @@ namespace {
         auto& s = g_states[a->GetFormID()];
         s.gTarget = std::max(0.0f, g);
         s.sinceSet = 0.0f;
+        s.tender = tender;
     }
     // "Blink" from the script = time for a clench
     void Blink(RE::StaticFunctionTag*, RE::Actor* a) {
         if (!a) return;
-        std::lock_guard lk(g_lock);
-        auto it = g_states.find(a->GetFormID());
-        if (it == g_states.end()) return;
-        auto& s = it->second;
-        if (s.clenchT >= 0.0f) return;
-        const float strength = std::clamp(GlobalOr(0x811, 0.4f), 0.0f, 0.9f);
-        std::uniform_real_distribution<float> var(0.7f, 1.0f);
-        s.clenchAmp = strength * var(g_rng);
-        s.clenchT = 0.0f;
-        logger::info("Anatomica motion: clench on {} ({:.0f}% closed)", a->GetName(), s.clenchAmp * 100.0f);
+        float amp = 0.0f;
+        {
+            std::lock_guard lk(g_lock);
+            auto it = g_states.find(a->GetFormID());
+            if (it == g_states.end()) return;
+            auto& s = it->second;
+            if (s.clenchT >= 0.0f) return;
+            const float strength = std::clamp(GlobalOr(0x811, 0.4f), 0.0f, 0.9f);
+            std::uniform_real_distribution<float> var(0.7f, 1.0f);
+            s.clenchAmp = std::min(0.95f, strength * var(g_rng) * (1.0f + g_sensClench * s.tender));   // sharper while tender
+            s.clenchT = 0.0f;
+            amp = s.clenchAmp;
+        }
+        logger::info("Anatomica motion: clench on {} ({:.0f}% closed)", a->GetName(), amp * 100.0f);
+        Drip::OnClench(a->GetFormID(), amp);   // a clench pushes cum out (after our lock)
     }
     bool IsBlinking(RE::StaticFunctionTag*, RE::Actor* a) {
         if (!a) return false;
@@ -259,6 +273,12 @@ namespace Wink {
         logger::info("Anatomica motion: Papyrus functions (AnatomicaNative) {}", ok ? "registered" : "FAILED to register");
         std::thread(Loop).detach();
     }
+    float GapeOf(RE::FormID id) {
+        std::lock_guard lk(g_lock);
+        auto it = g_states.find(id);
+        return it == g_states.end() ? 0.0f : it->second.g;
+    }
+
     void Reset() {
         // a save was loaded: bones come fresh from the new 3D, forget everything
         {

@@ -7,8 +7,16 @@ namespace Colour {
     bool ConfirmButton(const char* label);   // button with an "Are you sure?" step
     void RegisterFuncs(RE::BSScript::IVirtualMachine* vm);
     void Reset();                       // a save was loaded / new game
+    float TenderLevel(RE::FormID id);   // 0-1 reddening right now (0 when "sensitivity" is off)
+    float SensClench();                 // how much sharper clenches get while tender (0-1)
+    float SensBreath();                 // how much slower breathing gets while tender (0-1)
+    bool CumColour(RE::Actor* giver, float out[3]);   // his race's cum colour (Per race page); false = none
+    void SaveNow();                     // write AnatomicaMenu.ini now
+    void RenderCumColours();            // cum colour per race + wetness follows the giver (Cum & drips page)
+    void __stdcall RenderGeneral();   // settings for the whole script (wait after loading screens)
     void __stdcall RenderColours();
     void __stdcall RenderRaces();
     void __stdcall RenderRules();
     void __stdcall RenderAfter();
+    void __stdcall RenderStatus();   // stats of the man selected in the console + his own colour
 }

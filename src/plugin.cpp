@@ -1,5 +1,6 @@
 #include "Plugin.h"
 #include "Wink.h"
+#include "Drip.h"
 
 void OnMessage(SKSE::MessagingInterface::Message* message) {
     switch (message->type) {
@@ -19,6 +20,7 @@ SKSEPluginLoad(const SKSE::LoadInterface* skse) {
     SKSE::GetMessagingInterface()->RegisterListener(OnMessage);
     UI::Register();
     Wink::Register();
+    Drip::Install();
     logger::info("Anatomica menu loaded");
     return true;
 }

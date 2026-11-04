@@ -6,4 +6,6 @@ namespace Wink {
     void Register();
     // Forget all actors (save loaded / new game).
     void Reset();
+    // current after-sex gape the movement code is following (0 if untracked) - for the Status page
+    float GapeOf(RE::FormID id);
 }
