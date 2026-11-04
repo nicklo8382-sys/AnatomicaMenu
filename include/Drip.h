@@ -12,6 +12,7 @@ namespace Drip {
     void OnWorked(RE::Actor* receiver, RE::Actor* partner, float dil);   // gape script: he is being penetrated
     void OnClench(RE::FormID id, float amp);              // Wink: a clench just started
     bool Film(RE::FormID id, float rgb[3], float& amt);    // cum film for the rim texture (false = none)
+    float Froth(RE::FormID id);                            // froth on the rim texture right now (0-1)
     float HoldOpen(RE::FormID id);                         // gape closes this many times slower (1 = normal)
     std::string Status(RE::Actor* a);                      // one line for the Status page
     void __stdcall RenderPage();

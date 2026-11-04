@@ -18,6 +18,7 @@
 #include <map>
 #include <random>
 #include <mutex>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -152,6 +153,9 @@ namespace {
         float lubeAmt = 0.0f;
         float bruise[3] = {1, 1, 1};
         float bruiseAmt = 0.0f;     // toward the outer edge
+        float film[3] = {1, 1, 1};
+        float filmAmt = 0.0f;       // cum film on the inner edge (where it comes out)
+        float frothAmt = 0.0f;      // little bubbles on the inner part of the rim
     };
 
     void CleanGenFolder() {
@@ -174,13 +178,15 @@ namespace {
         if (!LoadDetail()) return {};
         CleanGenFolder();
         auto q = [](float v, int steps) { return std::clamp(static_cast<int>(std::lround(v * steps)), 0, steps); };
-        int k[11] = {q(t.colour[0], 31), q(t.colour[1], 31), q(t.colour[2], 31), 0, 0, 0, 0, 0, 0, 0, 0};
-        const int la = q(t.lubeAmt, 10), ba = q(t.bruiseAmt, 10);
+        int k[16] = {q(t.colour[0], 31), q(t.colour[1], 31), q(t.colour[2], 31), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+        const int la = q(t.lubeAmt, 10), ba = q(t.bruiseAmt, 10), fa = q(t.filmAmt, 10), fr = q(t.frothAmt, 6);
         if (la) { k[3] = q(t.lube[0], 15); k[4] = q(t.lube[1], 15); k[5] = q(t.lube[2], 15); k[6] = la; }
         if (ba) { k[7] = q(t.bruise[0], 15); k[8] = q(t.bruise[1], 15); k[9] = q(t.bruise[2], 15); k[10] = ba; }
+        if (fa) { k[11] = q(t.film[0], 15); k[12] = q(t.film[1], 15); k[13] = q(t.film[2], 15); k[14] = fa; }
+        k[15] = fr;
         std::string key = "rim";
-        for (int v : k) key += std::format("_{}", v);
-        if (!la && !ba) key = std::format("rim_{:02d}{:02d}{:02d}", k[0], k[1], k[2]);
+        for (int i = 0; i < (fa || fr ? 16 : 11); ++i) key += std::format("_{}", k[i]);
+        if (!la && !ba && !fa && !fr) key = std::format("rim_{:02d}{:02d}{:02d}", k[0], k[1], k[2]);
         const std::string rel = std::format("{}{}.dds", kGenDir, key);
         const std::filesystem::path file = std::filesystem::path("Data") / std::filesystem::path(std::string(rel));
         std::error_code ec;
@@ -189,6 +195,14 @@ namespace {
         const float c[3] = {k[0] / 31.0f, k[1] / 31.0f, k[2] / 31.0f};
         const float L[3] = {k[3] / 15.0f, k[4] / 15.0f, k[5] / 15.0f}, Lamt = la / 10.0f;
         const float Bc[3] = {k[7] / 15.0f, k[8] / 15.0f, k[9] / 15.0f}, Bamt = ba / 10.0f;
+        const float Fc[3] = {k[11] / 15.0f, k[12] / 15.0f, k[13] / 15.0f}, Famt = fa / 10.0f, Froth = fr / 6.0f;
+        // bubbles: one possible bubble per 9x9 cell, placed and sized by a hash of the cell
+        auto hash = [](std::uint32_t x, std::uint32_t y, std::uint32_t s) {
+            std::uint32_t h = x * 374761393u + y * 668265263u + s * 2246822519u;
+            h = (h ^ (h >> 13)) * 1274126177u;
+            return ((h ^ (h >> 16)) & 0xFFFF) / 65535.0f;
+        };
+        const int dw = g_detailW;
         int w = g_detailW, h = g_detailH, levels = 1;
         while ((w >> levels) >= 1 && (h >> levels) >= 1) ++levels;
         std::vector<float> rgb(static_cast<size_t>(w) * h * 3);
@@ -198,7 +212,23 @@ namespace {
                 float v = c[ch] * det;
                 if (Bamt > 0.0f) v *= 1.0f + (Bc[ch] - 1.0f) * Bamt * edge;
                 if (Lamt > 0.0f) v += (L[ch] * (0.75f + 0.25f * det) - v) * Lamt;
+                if (Famt > 0.0f) v += (Fc[ch] * (0.8f + 0.2f * det) - v) * Famt * std::pow(1.0f - edge, 1.5f);
                 rgb[i * 3 + ch] = v;
+            }
+            if (Froth > 0.0f) {
+                const int px = static_cast<int>(i % dw), py = static_cast<int>(i / dw), cx = px / 9, cy = py / 9;
+                float best = 0.0f;
+                for (int oy = -1; oy <= 1; ++oy)
+                    for (int ox = -1; ox <= 1; ++ox) {
+                        const std::uint32_t X = static_cast<std::uint32_t>(cx + ox), Y = static_cast<std::uint32_t>(cy + oy);
+                        if (hash(X, Y, 1) > Froth * 0.85f * std::pow(1.0f - edge, 0.7f)) continue;
+                        const float bx = (cx + ox) * 9 + 1 + hash(X, Y, 2) * 7, by = (cy + oy) * 9 + 1 + hash(X, Y, 3) * 7;
+                        const float r = 1.2f + 3.0f * hash(X, Y, 4) * hash(X, Y, 5);
+                        const float d = std::sqrt((px - bx) * (px - bx) + (py - by) * (py - by)) / r;
+                        if (d < 1.0f) best = std::max(best, 0.55f + 0.45f * (1.0f - d * d) + (d > 0.8f ? -0.15f : 0.0f));
+                    }
+                if (best > 0.0f)
+                    for (int ch = 0; ch < 3; ++ch) rgb[i * 3 + ch] += (0.93f * best - rgb[i * 3 + ch]) * 0.85f;
             }
         }
         std::string data;
@@ -363,6 +393,7 @@ namespace {
     int g_installed = -2;                       // installer colour (preset index), -2 = not checked yet
     std::map<std::string, int> g_raceDefaults;  // race picks made in the installer (SKSE/Plugins/AnatomicaMenu/Races/*.ini)
     std::map<std::string, int> g_reroll;        // "Plugin|refID" -> times re-rolled
+    std::set<RE::FormID> g_ringReset;           // re-rolled: take his skin-blend ring back off first, then redo it
     constexpr const char* kRaceDefaultsDir = "Data/SKSE/Plugins/AnatomicaMenu/Races";
 
     int RaceDefault(const std::string& key) {
@@ -1070,9 +1101,10 @@ namespace {
         // rim texture, made for this man: colour x his skin tone x reddening, plus wetness colour and
         // bruising. (The rim is not skin-tinted by the game - that shader path streaks it.)
         const bool lubeOn = g.wetColourOn && wet > 0.0f;
-        float filmCol[3] = {1, 1, 1}, film = 0.0f;
-        if (Drip::Film(a->GetFormID(), filmCol, film)) film = Quant(film);   // cum film on the rim
-        if (pk.active || tender > 0.0f || lubeOn || bruise > 0.0f || film > 0.0f) {
+        const float film = 0.0f;   // the cum film is a mesh now (Drip): the rim is never repainted with cum
+        const float filmCol[3] = {1, 1, 1};
+        const float froth = Quant(Drip::Froth(a->GetFormID()));
+        if (pk.active || tender > 0.0f || lubeOn || bruise > 0.0f || film > 0.0f || froth > 0.0f) {
             const int col = choice >= 0 ? choice : InstalledPreset();
             const float s = (g.method == 0 && choice >= 0) ? pk.strength : 1.0f;
             float pick[3], base[3];
@@ -1089,10 +1121,9 @@ namespace {
                 t.bruise[i] = g.bruiseCol[i];
             }
             t.lubeAmt = lubeOn ? wet * g.wetColourAmt : 0.0f;
-            if (film > t.lubeAmt) {
-                t.lubeAmt = film;
-                for (int i = 0; i < 3; ++i) t.lube[i] = filmCol[i];
-            }
+            t.filmAmt = film;
+            for (int i = 0; i < 3; ++i) t.film[i] = filmCol[i];
+            t.frothAmt = froth;
             t.bruiseAmt = bruise;
             L.tex = GenRimTexture(t);
             if (L.tex.empty() && col >= 0 && col < kPresets) L.tex = std::string(kDir) + kColourFiles[col];
@@ -1150,6 +1181,12 @@ namespace {
         std::lock_guard lk(g_lock);
         if (!g_loaded) LoadIni();
         const auto id = a->GetFormID();
+        if (g_ringReset.erase(id)) {
+            // re-rolled: the script removes the ring we added (or restores his own paint); the whole look follows next time
+            g_sent.erase(id);
+            out[2] = -4;
+            return out;
+        }
         const Look L = Want(a);
         g_pendingTex[id] = L.tex;
         auto it = g_sent.find(id);
@@ -1725,6 +1762,7 @@ namespace Colour {
 
         if (ConfirmButton("Re-roll everyone")) {
             ++g.seed;
+            for (const auto& [rid, snt] : g_sent) g_ringReset.insert(rid);   // their rings are redone too
             changed = true;
         }
         Help("Gives every man a new Random / Skin-fit colour.");
@@ -1735,6 +1773,7 @@ namespace Colour {
             const std::string lbl = act ? std::format("Re-roll {}", act->GetName()) : std::string("Re-roll selected man");
             if (ImGuiMCP::Button(lbl.c_str()) && act) {
                 ++g_reroll[RefKey(act)];
+                g_ringReset.insert(act->GetFormID());
                 changed = true;
             }
             Help("Open the console (~) and click a man to select him, then press this to give just him a new random colour.");
