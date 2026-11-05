@@ -1201,7 +1201,25 @@ namespace {
     //                        swell x1000, schlong gloss x100, schlong spec x100]
     //   -2 = unchanged, -1 = remove / back to installed, -3 (blend only) = clean up if ours,
     //   tex 0 = set (ask ColourFor for the path), tints >= 0 = 0xRRGGBB
+    std::vector<std::int32_t> LookForImpl(RE::Actor* a);
+    // the skin-blend ring is coloured straight by the DLL now (Engine.cpp): the script leaves it alone
     std::vector<std::int32_t> LookFor(RE::StaticFunctionTag*, RE::Actor* a) {
+        auto out = LookForImpl(a);
+        if (out.size() > 6 && Engine::RingDirect()) { out[2] = -2; out[6] = -1; }
+        return out;
+    }
+    // what the ring should be for this man: colour (0xRRGGBB, -1 = his installed paint), swap (1 = white base
+    // texture, tinted), add (colour to give a man without the ring, -1 = don't)
+    Colour::RingWant RingImpl(RE::Actor* a) {
+        Colour::RingWant w;
+        if (!a) return w;
+        std::lock_guard lk(g_lock);
+        if (!g_loaded) LoadIni();
+        const Look L = Want(a);
+        w.col = L.blend; w.swap = L.swap; w.add = L.add;
+        return w;
+    }
+    std::vector<std::int32_t> LookForImpl(RE::Actor* a) {
         std::vector<std::int32_t> out{-2, -2, -2, 0, -2, -2, -1, -2, -2, -2};
         if (!a) return out;
         std::lock_guard lk(g_lock);
@@ -1779,6 +1797,7 @@ namespace Colour {
     float CloseSlowFor(RE::Actor* a) { return CloseSlow(nullptr, a); }
     float LooseNow(RE::Actor* a, float cur, float days) { return LooseFor(nullptr, a, cur, days); }
     std::vector<RE::Actor*> Men() { return NearbyMen(nullptr, 0.0f); }
+    RingWant RingNow(RE::Actor* a) { return RingImpl(a); }
     float Interval() { return ColourInterval(nullptr); }
     float LoadPauseNow() { return LoadPause(nullptr); }
     std::vector<std::string> SchlongShapeNames(RE::Actor* a) {

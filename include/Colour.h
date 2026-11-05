@@ -31,6 +31,8 @@ namespace Colour {
     float Interval();
     float LoadPauseNow();
     std::vector<std::string> SchlongShapeNames(RE::Actor* a);
+    struct RingWant { int col = -1; int swap = 0; int add = -1; };
+    RingWant RingNow(RE::Actor* a);
     struct WetInfo { RE::FormID id; float wet; float rgb[3]; };
     std::vector<WetInfo> WetNow();     // every man who is wet right now (0-1) and the colour of it (Fluid draws it)
 }

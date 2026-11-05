@@ -345,12 +345,134 @@ namespace {
         if (v[2] != -2) BlendOne(a, v[2], v[3], v.size() > 6 ? v[6] : -1);
     }
 
+    // ---- the skin-blend ring, straight on the RaceMenu overlay's material (for RaceMenu versions whose override
+    // interface we can't use). Not stored anywhere: it is checked again every colour pass and put back if the game
+    // rebuilt him.
+    constexpr const char* kRingOrigTex = "textures\\actors\\character\\Overlays\\Anatomica\\anatomica_blend.dds";
+    std::string Lower(std::string x) { for (auto& ch : x) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch))); return x; }
+    RE::BSLightingShaderMaterialBase* MatOf(RE::BSGeometry* geo) {
+        auto* lsp = geo ? geo->lightingShaderProp_cast() : nullptr;
+        return lsp ? static_cast<RE::BSLightingShaderMaterialBase*>(lsp->material) : nullptr;
+    }
+    std::string DiffuseOf(RE::BSGeometry* geo) {
+        auto* m = MatOf(geo);
+        const char* p = (m && m->textureSet) ? m->textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse) : nullptr;
+        return p ? Lower(p) : std::string{};
+    }
+    bool IsTint(RE::BSLightingShaderMaterialBase* m) {
+        return m && (m->GetFeature() == RE::BSShaderMaterial::Feature::kFaceGenRGBTint || m->GetFeature() == RE::BSShaderMaterial::Feature::kHairTint);
+    }
+    // tex: "" = keep; rgb < 0 = keep the tint; alpha < 0 = keep
+    void RingLook(RE::BSGeometry* geo, const char* tex, int rgb, float alpha) {
+        auto* lsp = geo ? geo->lightingShaderProp_cast() : nullptr;
+        auto* mat = MatOf(geo);
+        if (!lsp || !mat) return;
+        const bool texChange = tex && *tex && DiffuseOf(geo).find(Lower(tex).substr(9)) == std::string::npos;
+        const bool needTint = rgb >= 0 && !IsTint(mat);
+        if (texChange || needTint) {
+            RE::BSLightingShaderMaterialBase* nm = needTint ? RE::BSLightingShaderMaterialBase::CreateMaterial<RE::BSLightingShaderMaterialFacegenTint>()
+                                                            : static_cast<RE::BSLightingShaderMaterialBase*>(mat->Create());
+            if (!nm) return;
+            nm->CopyMembers(mat);
+            if (texChange) {
+                if (auto* ts = RE::BSShaderTextureSet::Create()) {
+                    for (std::uint32_t i = 0; i < RE::BSTextureSet::Texture::kTotal; ++i) {
+                        const char* pth = mat->textureSet ? mat->textureSet->GetTexturePath(static_cast<RE::BSTextureSet::Texture>(i)) : nullptr;
+                        if (pth && *pth) ts->SetTexturePath(static_cast<RE::BSTextureSet::Texture>(i), pth);
+                    }
+                    ts->SetTexturePath(RE::BSTextureSet::Texture::kDiffuse, tex);
+                    nm->ClearTextures();
+                    nm->OnLoadTextureSet(0, ts);
+                }
+            }
+            if (needTint) {   // what RaceMenu does for a tinted paint: a face-tint material
+                lsp->SetFlags(RE::BSShaderProperty::EShaderPropertyFlag8::kFace, false);
+                lsp->SetFlags(RE::BSShaderProperty::EShaderPropertyFlag8::kFaceGenRGBTint, true);
+            }
+            lsp->SetMaterial(nm, true);
+            lsp->SetupGeometry(geo);
+            lsp->FinishSetupGeometry(geo);
+            nm->~BSLightingShaderMaterialBase();
+            RE::free(nm);
+            mat = MatOf(geo);
+        }
+        if (rgb >= 0 && IsTint(mat)) {
+            auto* t = static_cast<RE::BSLightingShaderMaterialFacegenTint*>(mat);
+            t->tintColor.red = ((rgb >> 16) & 255) / 255.0f;
+            t->tintColor.green = ((rgb >> 8) & 255) / 255.0f;
+            t->tintColor.blue = (rgb & 255) / 255.0f;
+        }
+        if (alpha >= 0.0f && mat && std::abs(mat->materialAlpha - alpha) > 0.01f) lsp->SetMaterialAlpha(alpha);
+    }
+    std::unordered_map<RE::FormID, double> g_askedOverlays;
+    void AskOverlays(RE::Actor* a) {   // NPCs only get RaceMenu's paint slots when something asks for them
+        auto& t = g_askedOverlays[a->GetFormID()];
+        if (t > 0.0 && Now() - t < 60.0) return;
+        t = Now();
+        auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+        if (!vm) return;
+        RE::TESObjectREFR* ref = a;
+        auto* args = RE::MakeFunctionArguments(std::move(ref));
+        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb;
+        vm->DispatchStaticCall("NiOverride", "AddOverlays", args, cb);
+    }
+    // what we last put on each man's ring: nothing is touched again until the colour he should have changes, or the
+    // game rebuilds his body / RaceMenu re-applies its paint (the ring's material is then a different one)
+    struct RingDone { RE::NiAVObject* root = nullptr; RE::NiPointer<RE::BSGeometry> geo;   // held: a redress can rebuild the overlays
+                      RE::BSShaderMaterial* mat = nullptr; int col = -9, swap = -9, add = -9; };
+    std::unordered_map<RE::FormID, RingDone> g_ringDone;
+    void RingOne(RE::Actor* a) {
+        auto* root = a->Get3D(false);
+        if (!root) return;
+        const Colour::RingWant w = Colour::RingNow(a);
+        if (auto it = g_ringDone.find(a->GetFormID()); it != g_ringDone.end()) {
+            const RingDone& d = it->second;
+            // still the ring he wears? (a rebuilt body puts a new overlay shape there)
+            const bool same = !d.geo || Node(root, d.geo->name.c_str()) == d.geo.get();
+            auto* lsp = d.geo ? d.geo->lightingShaderProp_cast() : nullptr;
+            if (same && d.root == root && d.col == w.col && d.swap == w.swap && d.add == w.add && (!d.geo || (lsp && lsp->material == d.mat))) return;
+        }
+        RingDone done{root, nullptr, nullptr, w.col, w.swap, w.add};
+        struct Mark { RingDone& d; RE::FormID id; ~Mark() { if (d.geo) if (auto* l = d.geo->lightingShaderProp_cast()) d.mat = l->material; g_ringDone[id] = d; } } mark{done, a->GetFormID()};
+        if (!Node(root, "3BA_AnusRim")) return;
+        const auto* npc = a->GetActorBase();
+        if (!npc || npc->GetSex() != RE::SEX::kMale) return;
+        RE::BSGeometry* ring = nullptr;
+        RE::BSGeometry* freeSlot = nullptr;
+        bool any = false;
+        for (int i = 0; i < 32; ++i) {
+            auto* o = Node(root, std::format("Body [Ovl{}]", i).c_str());
+            auto* geo = o ? o->AsGeometry() : nullptr;
+            if (!geo) continue;
+            any = true;
+            const std::string d = DiffuseOf(geo);
+            if (d.find("anatomica_blend") != std::string::npos) { ring = geo; break; }
+            if (!freeSlot && (d.empty() || d.find("default.dds") != std::string::npos)) freeSlot = geo;
+        }
+        if (!ring) {
+            if (w.add < 0) return;
+            if (!any) { AskOverlays(a); done.root = nullptr; return; }   // look again once RaceMenu has added them
+            if (!freeSlot) return;
+            RingLook(freeSlot, kBlendBase, w.add, 1.0f);   // a ring for a man without one (NPC ring option)
+            done.geo = RE::NiPointer<RE::BSGeometry>(freeSlot);
+            return;
+        }
+        done.geo = RE::NiPointer<RE::BSGeometry>(ring);
+        const bool isBase = DiffuseOf(ring).find("blend_base") != std::string::npos;
+        if (w.col < 0) {   // his own paint, as installed
+            if (isBase) RingLook(ring, kRingOrigTex, IsTint(MatOf(ring)) ? 0xFFFFFF : -1, -1.0f);
+            else if (IsTint(MatOf(ring))) RingLook(ring, nullptr, 0xFFFFFF, -1.0f);
+            return;
+        }
+        RingLook(ring, w.swap == 1 ? kBlendBase : kRingOrigTex, w.col, -1.0f);
+    }
+
     void Tick() {
         g_queued = false;
         const double now = Now();
         const float dt = g_last > 0.0 ? static_cast<float>(std::min(now - g_last, 0.5)) : 0.0f;
         g_last = now;
-        if (!g_morph || dt <= 0.0f) return;
+        if (dt <= 0.0f) return;
         if (Colour::LoadPauseNow() > 0.05f) return;
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!player || !player->Is3DLoaded()) return;
@@ -364,7 +486,7 @@ namespace {
                 if (all.size() > 80) break;
             }
         std::lock_guard lk(g_mx);
-        if (on) {
+        if (on && g_morph) {
             for (auto* a : all) {
                 const auto* npc = a->GetActorBase();
                 if (!npc || npc->GetSex() != RE::SEX::kMale || a->IsDead()) continue;
@@ -379,18 +501,19 @@ namespace {
             if (!a || !a->Is3DLoaded()) { std::lock_guard gl(g_gapeMx); g_gape.erase(it->first); it = g_st.erase(it); }
             else ++it;
         }
-        // the colour pass
-        if (g_ovr && g_ovl && now - g_lastCol > std::max(Colour::Interval(), 1.0f)) {
+        // the colour pass (everything through RaceMenu's interface; or, with an older RaceMenu, just the ring here)
+        if (now - g_lastCol > std::max(Colour::Interval(), 1.0f)) {
             g_lastCol = now;
-            ColourOne(player);
-            for (auto* a : Colour::Men()) ColourOne(a);
+            const bool full = g_ovr && g_ovl;
+            if (full) ColourOne(player); else RingOne(player);
+            for (auto* a : Colour::Men()) { if (full) ColourOne(a); else RingOne(a); }
         }
     }
 
     void Loop() {
         for (;;) {
             std::this_thread::sleep_for(std::chrono::milliseconds(80));
-            if (!g_morph) continue;
+            if (!g_asked) continue;
             auto* ui = RE::UI::GetSingleton();
             if (ui && ui->GameIsPaused()) { g_last = 0.0; continue; }
             if (g_queued.exchange(true)) continue;
@@ -424,7 +547,7 @@ namespace Engine {
         }
         if (auto* p = msg.interfaceMap->QueryInterface("Overlay")) {
             g_vOvl = p->GetVersion();
-            g_ovl = static_cast<SKEE::IOverlayInterface*>(p);
+            if (g_vOvl >= 2) g_ovl = static_cast<SKEE::IOverlayInterface*>(p);
         }
         logger::info("Anatomica engine: RaceMenu BodyMorph v{} {}, Override v{} {}, Overlay v{} -> mode {}", g_vMorph, g_morph ? "used" : "not used",
                      g_vOvr, g_ovr ? "used" : "not used", g_vOvl, Mode());
@@ -433,6 +556,7 @@ namespace Engine {
     void Reset() {
         std::lock_guard lk(g_mx);
         g_st.clear();
+        g_ringDone.clear();
         { std::lock_guard gl(g_gapeMx); g_gape.clear(); }
         g_last = 0.0; g_lastCol = 0.0;
     }
@@ -465,7 +589,7 @@ namespace Engine {
     std::string Status() {
         return std::format("RaceMenu interface: body morphs {}, overrides {}, overlays {} - {}",
                            g_morph ? "yes" : "no", g_ovr ? "yes" : "no", g_ovl ? "yes" : "no",
-                           Mode() == 3 ? "gape and colour run in the DLL" : (Mode() == 1 ? "gape runs in the DLL, colour in the script" : "the script does everything"));
+                           Mode() == 3 ? "gape and colour run in the DLL" : (Mode() == 1 ? "gape and the skin-blend ring run in the DLL, the rest of the colour in the script" : "the script does everything"));
     }
 
     bool NodeFloat(RE::Actor* a, const char* node, int key, float value) {
@@ -473,6 +597,7 @@ namespace Engine {
         PutFloat(a, node, key, value, false);
         return true;
     }
+    bool RingDirect() { return g_asked && !(g_ovr && g_ovl); }
     bool NodeRemove(RE::Actor* a, const char* node, int key, int index) {
         if (!g_ovr || !a) return false;
         Remove(a, node, key, index);

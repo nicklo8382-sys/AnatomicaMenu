@@ -15,4 +15,5 @@ namespace Engine {
     // RaceMenu node overrides (no Papyrus); false = not available, use the old way
     bool NodeFloat(RE::Actor* a, const char* node, int key, float value);
     bool NodeRemove(RE::Actor* a, const char* node, int key, int index);
+    bool RingDirect();                    // the skin-blend ring is coloured here, straight on its material
 }

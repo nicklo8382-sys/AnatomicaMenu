@@ -22,8 +22,12 @@ namespace Fluid {
     void Trail(RE::FormID id, float level, int side, const float rgb[3]);        // rivulets down the leg; level 0-3, side 1 = left, 2 = right
     void Coat(RE::FormID giver, float amount, const float rgb[3], float seconds); // his schlong: wet, cum streaks, a drip from the tip
     void Clear(RE::FormID id);                                                    // everything on him gone (wash, bath, test)
+    float WetOf(RE::FormID id);                                                   // how wet he is now (0-1)
+    std::vector<RE::FormID> WetMen();                                             // everyone wet right now
     bool Busy(RE::FormID id);                                                     // a squirt / ooze still running
     std::vector<std::pair<RE::FormID, float>> TakeLandings();                    // drops that reached the floor: (actor, amount) -> puddles
     std::string Status(RE::FormID id);                                            // one line for the Status page
-    bool TestString(RE::Actor* a, const float rgb[3]);                           // a string to an invisible partner pulling away
+    bool TestString(RE::Actor* a, const float rgb[3]);
+    void SlowMotion(bool on);                                                     // Testing page: everything at 15% speed
+    bool SlowMotion();                           // a string to an invisible partner pulling away
 }

@@ -496,15 +496,11 @@ namespace {
     void AdjustNodes(RE::Actor* a, State& s, double now) {
         auto* root = a->Get3D(false);
         if (!root) return;
-        if (auto* film = FindNode(root, "AnatomicaFilm")) {
-            if (g.film) film->GetFlags().reset(RE::NiAVObject::Flag::kHidden);
-            else film->GetFlags().set(RE::NiAVObject::Flag::kHidden);
-        }
-        if (auto* pool = FindNode(root, "AnatomicaPool")) {
-            const bool inside = now - s.lastWorked < 2.5;
-            if (inside) pool->GetFlags().set(RE::NiAVObject::Flag::kHidden);
-            else pool->GetFlags().reset(RE::NiAVObject::Flag::kHidden);
-        }
+        const bool cum = s.vol > 0.01f;   // worn only for the wet sheen: the cum pieces stay hidden
+        auto show = [](RE::NiAVObject* o, bool on) { if (!o) return; if (on) o->GetFlags().reset(RE::NiAVObject::Flag::kHidden); else o->GetFlags().set(RE::NiAVObject::Flag::kHidden); };
+        show(FindNode(root, "AnatomicaFilm"), g.film && cum);
+        show(FindNode(root, "AnatomicaLip"), cum);
+        show(FindNode(root, "AnatomicaPool"), cum && now - s.lastWorked >= 2.5);
     }
 
     void ClearActor(RE::FormID id, State& s) {
@@ -532,6 +528,7 @@ namespace {
             if (now >= it->expires || static_cast<int>(g_puddles.size()) > g.puddleMax) { DeleteRef(it->ref); it = g_puddles.erase(it); }
             else ++it;
         }
+        for (auto wid : Fluid::WetMen()) if (!g_st.count(wid)) g_st[wid].self = wid;   // wet without cum: the sheen needs the rim armor
         for (auto it = g_st.begin(); it != g_st.end();) {
             const RE::FormID id = it->first;
             State& s = it->second;
@@ -630,7 +627,10 @@ namespace {
             // ---- strands
             if (s.vol <= 0.01f) {
                 Fluid::Hang(id, 0.0f, 0.0f, s.rgb);
-                if (s.worn) { EquipStrand(id, 0, s.worn, {}); s.worn = 0; }
+                // still wet: the rim armor stays on for its wet sheen (Fluid fades it); dry or dressed: off
+                const bool wet = Fluid::WetOf(id) > 0.03f && !a->GetWornArmor(RE::BGSBipedObjectForm::BipedObjectSlot::kBody);
+                if (wet && s.worn != kStrandArmo) { EquipStrand(id, kStrandArmo, s.worn, {}); s.worn = kStrandArmo; s.lastWornCheck = now; }
+                else if (!wet && s.worn) { EquipStrand(id, 0, s.worn, {}); s.worn = 0; }
                 if (s.loads > 0) { s.loads = 0; s.givers.clear(); s.vol = 0.0f; s.cycleStart = 0.0; s.emptySince = now; }
             } else {
                 s.tier = s.vol < 1.5f ? 1 : (s.vol < 3.0f ? 2 : 3);
@@ -1004,6 +1004,8 @@ namespace Drip {
             if (ImGuiMCP::IsItemHovered()) { ImGuiMCP::BeginTooltip(); ImGuiMCP::TextUnformatted(t[2]); ImGuiMCP::EndTooltip(); }
         }
         if (!last.empty()) ImGuiMCP::TextDisabled("Cum: %s", last.c_str());
+        bool slow = Fluid::SlowMotion();
+        if (ImGuiMCP::Checkbox("Slow motion (to watch squirts, strings and drops)", &slow)) Fluid::SlowMotion(slow);
         ImGuiMCP::TextDisabled("Console: cgf \"AnatomicaNative.DripTest\" \"squirt\"  (load fill squirt spray ooze gush string drip froth trail coat clear)");
     }
 
