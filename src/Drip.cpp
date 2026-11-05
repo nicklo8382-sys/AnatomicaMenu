@@ -1,4 +1,5 @@
 #include "Drip.h"
+#include "Fluid.h"
 #include "Colour.h"
 #include "Wink.h"
 #include "SKSEMenuFramework.h"
@@ -69,6 +70,7 @@ namespace {
         bool squirt = true; float squirtChance = 0.4f; float squirtMin = 1.0f; bool squirtOverflow = true;
         bool overflow = true; float overflowChance = 0.25f; float overflowOut = 0.3f; float overflowHold = 8.0f;
         bool tip = true; float tipTime = 90.0f;                                     // leftover on the giver
+        float tipFwd = 1.4f, tipDown = 0.4f;   // where it hangs: along his schlong past the last bone / toward the underside
         bool gush = true; bool gushScene = true; bool gushStand = true; float gushMin = 0.6f; float gushFrac = 0.45f;
         bool bath = true;                                                           // bathing mods wash it off
         bool film = true; float filmStrength = 0.35f;                               // cum film: a thin mesh over the inner rim
@@ -85,6 +87,7 @@ namespace {
     } g;
 
     struct State {
+        RE::FormID self = 0;
         float vol = 0.0f, volStart = 0.0f;
         int loads = 0;
         std::set<RE::FormID> givers;
@@ -111,6 +114,7 @@ namespace {
         float roundSecs = 0.0f, roundRough = 0.0f;                  // this round: penetration time, sum of dilation
         double frothStart = 0.0; float frothLevel = 0.0f; int trailWorn = 0;   // froth: painted into the rim texture
         int strFrame = 0; double strNext = 0.0;
+        bool pulledOut = true; double lastString = 0.0;              // the string: right as he slides out
         double lastStep = 0.0; bool inAir = false; double airSince = 0.0;
         // colour (volume-weighted mix of the givers' colours)
         float rgb[3] = {0.96f, 0.95f, 0.90f};
@@ -121,8 +125,6 @@ namespace {
     };
 
     struct Puddle { RE::FormID ref; double expires; };
-    struct Tip { double start = 0.0; int stage = 0; float rgb[3] = {0.96f, 0.95f, 0.90f}; };
-    std::unordered_map<RE::FormID, Tip> g_tips;   // giver -> leftover on his tip
 
     std::mutex g_mx;
     std::unordered_map<RE::FormID, State> g_st;
@@ -274,7 +276,8 @@ namespace {
                 if (auto* arm = Armo(newLocal)) {
                     AllowRace(arm, a->GetRace());
                     if (!tex.empty()) NiOvrTex(a, "AnatomicaCum", tex);
-                    a->AddObjectToContainer(arm, nullptr, 1, nullptr);
+                    if (a->GetInventoryCounts([arm](RE::TESBoundObject& o) { return &o == arm; }).empty())
+                        a->AddObjectToContainer(arm, nullptr, 1, nullptr);
                     em->EquipObject(a, arm, nullptr, 1, nullptr, false, true, false, true);
                 }
             }
@@ -283,6 +286,25 @@ namespace {
                     em->UnequipObject(a, arm, nullptr, 1, nullptr, false, true, false, true, nullptr);
                     a->RemoveItem(arm, 1, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
                 }
+            }
+        });
+    }
+    // take every copy of our armors that match off him and out of his inventory, whatever we think he wears
+    void StripOurs(RE::FormID actorId, bool tipsOnly) {
+        Task([=]() {
+            auto* a = RE::TESForm::LookupByID<RE::Actor>(actorId);
+            auto* em = RE::ActorEquipManager::GetSingleton();
+            if (!a || !em) return;
+            auto inv = a->GetInventoryCounts([&](RE::TESBoundObject& o) {
+                auto* arm = o.As<RE::TESObjectARMO>();
+                if (!IsOurs(arm)) return false;
+                const auto id = arm->GetLocalFormID();
+                return !tipsOnly || (id >= kTipArmo && id < kTipArmo + 2);
+            });
+            for (auto& [obj, n] : inv) {
+                if (n <= 0) continue;
+                em->UnequipObject(a, obj, nullptr, n, nullptr, false, true, false, true, nullptr);
+                a->RemoveItem(obj, n, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
             }
         });
     }
@@ -320,36 +342,40 @@ namespace {
 
     // ---------------------------------------------------------------- loads
     // slot 59 is shared by the squirt, the overflow and the string: one at a time
-    bool Slot59Free(const State& s) { return s.ofFrame == 0 && s.squirtFrame == 0 && s.strFrame == 0; }
+    bool Slot59Free(const State& s) { return !Fluid::Busy(s.self); }
     // something is inside him (penetration seen in the last 3 s): never a squirt then
     bool Penetrated(const State& s, double now) { return s.lastWorked > 0.0 && now - s.lastWorked < 3.0; }
+    // comes back out of him: an ooze down the skin (hold = how long it hangs), a gush, a small spurt (landing)
     void StartOverflow(State& s, float amt, double now, float hold = -1.0f, int lastFrame = 3) {
-        if (!Slot59Free(s)) return;
-        s.ofFrame = 1; s.ofNext = now; s.ofAmt = amt; s.ofHold = hold > 0.0f ? hold : g.overflowHold; s.ofMax = lastFrame;
-        s.ofBase = kOverArmo; s.ofStep = 0.45;
+        (void)now;
+        if (!Slot59Free(s) || amt <= 0.0f) return;
+        const Fluid::Kind k = (lastFrame == 2 && hold < 1.3f) ? Fluid::Kind::Land : (hold >= 3.0f ? Fluid::Kind::Gush : Fluid::Kind::Ooze);
+        Fluid::Squirt(s.self, amt, s.rgb, k, hold > 0.0f ? hold : g.overflowHold);
+        s.leaked += amt;
     }
     // a squirt while something is still inside him: it sprays out around the shaft instead of out of an open hole
     void StartSpray(State& s, float amt, double now) {
-        if (!Slot59Free(s)) return;
-        s.ofFrame = 1; s.ofNext = now; s.ofAmt = amt; s.ofHold = 2.5f; s.ofMax = 4;
-        s.ofBase = kSprayArmo; s.ofStep = 0.16;
+        (void)now;
+        if (!Slot59Free(s) || amt <= 0.0f) return;
+        Fluid::Squirt(s.self, amt, s.rgb, Fluid::Kind::Spray);
+        s.leaked += amt;
+    }
+    // out of the open hole
+    void StartSquirt(State& s, float amt) {
+        if (amt <= 0.0f) return;
+        Fluid::Squirt(s.self, amt, s.rgb, Fluid::Kind::Squirt);
+        s.leaked += amt;
     }
     // he pulled out: what is left on his tip (a pearl, then a strand that drips)
     void StartTips(State& s) {
-        if (g.tip) {
-            const double now = Now();
-            for (auto& [gid, col] : s.roundGivers) {
-                auto& t = g_tips[gid];
-                if (t.stage > 0 && now - t.start < 5.0) continue;   // already started for this pull-out
-                t.start = now; if (t.stage == 0) t.stage = -1;       // -1 = equip on the next step
-                for (int i = 0; i < 3; ++i) t.rgb[i] = col[i];
-            }
-        }
+        if (g.tip && g.on)
+            for (auto& [gid, col] : s.roundGivers) Fluid::Coat(gid, 1.0f, col.data(), g.tipTime);   // his schlong: wet with it
         s.roundGivers.clear();
     }
 
     void AddLoad(RE::FormID recvId, const float col[3], int key, float amount) {
         auto& s = g_st[recvId];
+        s.self = recvId;
         const double now = Now();
         // still inside him: a framework scene, or penetration in the last few seconds
         const bool inside = key != 0 || now - s.lastWorked < 3.0;
@@ -358,7 +384,7 @@ namespace {
             // full: it comes straight back out - around his schlong while he is still in, else a squirt
             if (g.squirtOverflow) {
                 if (inside) StartSpray(s, amount * 0.6f, now);
-                else if (Slot59Free(s) && !Penetrated(s, now)) { s.squirtFrame = 1; s.squirtNext = now; s.squirtAmt = amount * 0.6f; }
+                else if (Slot59Free(s) && !Penetrated(s, now)) StartSquirt(s, amount * 0.6f);
             }
             return;
         }
@@ -425,6 +451,7 @@ namespace {
         if (now - last < 4.0) return;   // the same climax reported twice (OStim + SexLab, SLSO + SexLab)
         last = now;
         auto& s = g_st[recv->GetFormID()];
+        s.self = recv->GetFormID();
         s.roundGivers[giver->GetFormID()] = {col[0], col[1], col[2]};
         AddLoad(recv->GetFormID(), col, key, AmountFor(s, giver));
     }
@@ -469,23 +496,6 @@ namespace {
     void AdjustNodes(RE::Actor* a, State& s, double now) {
         auto* root = a->Get3D(false);
         if (!root) return;
-        if (s.worn >= kStrandArmo && s.worn < kStrandArmo + 12) {
-            const int idx = static_cast<int>(s.worn - kStrandArmo);
-            const std::string name = std::format("AD{}_R", idx / 4 + 1);
-            // the length that is growing now: one group shown, the others hidden (no re-equip, so the physics never resets)
-            for (int k = 1; k <= 4; ++k) {
-                const std::string gname = std::format("ADStage{}", k);
-                if (auto* grp = FindNode(root, gname)) {
-                    if (k == std::max(s.stage, 1)) grp->GetFlags().reset(RE::NiAVObject::Flag::kHidden);
-                    else grp->GetFlags().set(RE::NiAVObject::Flag::kHidden);
-                }
-            }
-            if (auto* node = FindNode(root, name)) {
-                const float gp = std::clamp(Wink::GapeOf(a->GetFormID()), 0.0f, 1.5f);
-                // rest: the bottom of the closed slit (under the pelvis); as he gapes, down the opening to the lower lip
-                node->local.translate = RE::NiPoint3(0.0f, -4.9759f + 0.59f * 0.75f * gp, -6.9299f - 0.81f * 0.75f * gp);
-            }
-        }
         if (auto* film = FindNode(root, "AnatomicaFilm")) {
             if (g.film) film->GetFlags().reset(RE::NiAVObject::Flag::kHidden);
             else film->GetFlags().set(RE::NiAVObject::Flag::kHidden);
@@ -500,14 +510,8 @@ namespace {
     void ClearActor(RE::FormID id, State& s) {
         if (s.worn) EquipStrand(id, 0, s.worn, {});
         s.worn = 0;
-        if (s.squirtFrame >= 2) EquipStrand(id, 0, SquirtArmo(std::min(s.squirtFrame - 1, kSquirtFrames)), {});
-        s.squirtFrame = 0;
-        if (s.ofFrame >= 2) EquipStrand(id, 0, s.ofBase + std::min(s.ofFrame - 2, s.ofMax - 1), {});
-        s.ofFrame = 0;
-        if (s.strFrame >= 2) EquipStrand(id, 0, kStringArmo + std::min(s.strFrame - 2, 2), {});
-        s.strFrame = 0;
-        if (s.trailWorn) EquipStrand(id, 0, kTrailArmo + s.trailWorn - 1, {});
-        s.trailWorn = 0; s.frothLevel = 0.0f;
+        Fluid::Clear(id);
+        s.squirtFrame = 0; s.ofFrame = 0; s.strFrame = 0; s.trailWorn = 0; s.frothLevel = 0.0f;
         s.vol = 0.0f; s.loads = 0; s.givers.clear(); s.tier = s.stage = 0; s.cycleStart = 0.0;
     }
 
@@ -518,6 +522,12 @@ namespace {
         // stale puddles from a loaded save
         for (auto id : g_staleRefs) DeleteRef(id);
         g_staleRefs.clear();
+        for (auto& [lid, amt] : Fluid::TakeLandings()) {
+            if (!g.puddles || amt < 0.03f) continue;
+            auto it = g_st.find(lid);
+            const float* rgb = it != g_st.end() ? it->second.rgb : g.colour;
+            PlacePuddle(lid, amt, CumTex(rgb, g.opacity, true));
+        }
         for (auto it = g_puddles.begin(); it != g_puddles.end();) {
             if (now >= it->expires || static_cast<int>(g_puddles.size()) > g.puddleMax) { DeleteRef(it->ref); it = g_puddles.erase(it); }
             else ++it;
@@ -529,6 +539,7 @@ namespace {
             if (!a || a->IsDead()) { ClearActor(id, s); it = g_st.erase(it); continue; }
             ++it;
             if (!a->Is3DLoaded()) continue;
+            s.self = id;
             if (!g.on) { if (s.worn || s.vol > 0.0f) ClearActor(id, s); continue; }
 
             // ---- round tracking (penetration seen by the gape script)
@@ -550,40 +561,22 @@ namespace {
                     if (lvl > 0.05f && lvl > left) { s.frothLevel = lvl; s.frothStart = now; }
                 }
                 // he pulled out: a string to him, or maybe a squirt
-                const bool string = g.string && (s.climaxInRound || s.vol > 0.05f) && Slot59Free(s) && Rand(0.0f, 1.0f) < g.stringChance;
-                if (string) { s.strFrame = 1; s.strNext = now; }
-                else if (g.squirt && Slot59Free(s) && !Penetrated(s, now) && s.waitKey == 0 && s.vol >= g.squirtMin && Rand(0.0f, 1.0f) < g.squirtChance) {
-                    s.squirtFrame = 1; s.squirtNext = now; s.squirtAmt = s.vol * 0.35f; s.vol -= s.squirtAmt;
+                const bool string = now - s.lastString < 4.0;   // a string just went: no squirt on top of it
+                if (!string && g.squirt && Slot59Free(s) && !Penetrated(s, now) && s.waitKey == 0 && s.vol >= g.squirtMin && Rand(0.0f, 1.0f) < g.squirtChance) {
+                    const float amt = s.vol * 0.35f; s.vol -= amt; StartSquirt(s, amt);
+                }
+            }
+            // he just slid out (no penetration for half a second): maybe a string between his hole and the tip
+            if (!s.roundOver && !s.pulledOut && now - s.lastWorked > 0.45) {
+                s.pulledOut = true;
+                RE::FormID partner = 0;
+                for (auto& [pid, pc] : s.roundPartners) { partner = pid; break; }
+                if (g.string && partner && (s.climaxInRound || s.vol > 0.05f) && now - s.lastString > 8.0 && Rand(0.0f, 1.0f) < g.stringChance) {
+                    Fluid::String(id, partner, s.rgb);
+                    s.lastString = now;
                 }
             }
             if (s.waitKey && now - s.waitSince > 600.0) s.waitKey = 0;   // scene end never came
-            // ---- overflow around the shaft (shown during the scene too: that is the point of it)
-            if (s.ofFrame > 0 && now >= s.ofNext) {
-                const std::string otex = CumTex(s.rgb, g.opacity, false);
-                const RE::FormID prev = s.ofFrame > 1 ? s.ofBase + s.ofFrame - 2 : 0;
-                if (s.ofFrame <= s.ofMax) {
-                    EquipStrand(id, s.ofBase + s.ofFrame - 1, prev, otex);
-                    s.ofNext = now + (s.ofFrame == s.ofMax ? s.ofHold : s.ofStep);
-                    s.ofFrame++;
-                } else {
-                    EquipStrand(id, 0, prev, {});
-                    if (g.puddles) PlacePuddle(id, std::max(s.ofAmt, 0.15f), CumTex(s.rgb, g.opacity, true));
-                    s.leaked += s.ofAmt; s.ofFrame = 0;
-                    if (s.emptySince == 0.0 && s.vol <= 0.01f) s.emptySince = now;
-                }
-            }
-            // ---- the string to him when he pulls out: taut, thinning, snapped
-            if (s.strFrame > 0 && now >= s.strNext) {
-                const RE::FormID prev = s.strFrame > 1 ? kStringArmo + s.strFrame - 2 : 0;
-                if (s.strFrame <= 3) {
-                    EquipStrand(id, kStringArmo + s.strFrame - 1, prev, CumTex(s.rgb, g.opacity, false));
-                    s.strNext = now + (s.strFrame == 1 ? 0.35 : (s.strFrame == 2 ? 0.45 : 1.6));
-                    s.strFrame++;
-                } else {
-                    EquipStrand(id, 0, prev, {});
-                    s.strFrame = 0;
-                }
-            }
             // ---- the trail down his leg: longer the more has leaked; gone a while after he is empty, or when he dresses
             {
                 int stage = 0;
@@ -592,16 +585,13 @@ namespace {
                     if (s.emptySince > 0.0 && now - s.emptySince > g.legStay) { stage = 0; s.leaked = 0.0f; }
                 }
                 if (a->GetWornArmor(RE::BGSBipedObjectForm::BipedObjectSlot::kBody)) stage = 0;
-                const int want = stage ? (s.legSide == 2 ? 3 : 0) + stage : 0;
-                if (want != s.trailWorn) {
-                    EquipStrand(id, want ? kTrailArmo + want - 1 : 0, s.trailWorn ? kTrailArmo + s.trailWorn - 1 : 0, CumTex(s.rgb, g.opacity, false));
-                    s.trailWorn = want;
-                }
+                // rivulets running down the inner thigh (Fluid); they dry off on their own
+                if (stage != s.trailWorn) { Fluid::Trail(id, static_cast<float>(stage), s.legSide == 2 ? 2 : 1, s.rgb); s.trailWorn = stage; }
             }
             AdjustNodes(a, s, now);
             const double stepDt = s.lastStep > 0.0 ? std::min(now - s.lastStep, 1.0) : 0.0;
             s.lastStep = now;
-            if (s.waitKey) continue;
+            if (s.waitKey) { Fluid::Hang(id, 0.0f, 0.0f, s.rgb); continue; }
 
             // ---- a spurt when he lands
             {
@@ -636,27 +626,10 @@ namespace {
                 continue;
             }
 
-            const std::string tex = CumTex(s.rgb, g.opacity, false);
-            // ---- squirt frames (stopped at once if he is penetrated again; what was left stays in him)
-            if (s.squirtFrame > 0 && Penetrated(s, now)) {
-                if (s.squirtFrame >= 2) EquipStrand(id, 0, SquirtArmo(std::min(s.squirtFrame - 1, kSquirtFrames)), {});
-                s.vol += s.squirtAmt; s.squirtAmt = 0.0f; s.squirtFrame = 0;
-            }
-            if (s.squirtFrame > 0 && now >= s.squirtNext) {
-                const RE::FormID prev = s.squirtFrame > 1 ? SquirtArmo(s.squirtFrame - 1) : 0;
-                if (s.squirtFrame <= kSquirtFrames) {
-                    EquipStrand(id, SquirtArmo(s.squirtFrame), prev, tex);
-                    s.squirtNext = now + kSquirtTime[s.squirtFrame - 1];
-                    s.squirtFrame++;
-                } else {
-                    EquipStrand(id, 0, prev, {});
-                    if (g.puddles) PlacePuddle(id, std::max(s.squirtAmt, 0.3f), CumTex(s.rgb, g.opacity, true));
-                    s.leaked += s.squirtAmt; s.squirtFrame = 0;
-                }
-            }
-
+            const std::string tex;   // the rim armor keeps its own look
             // ---- strands
             if (s.vol <= 0.01f) {
+                Fluid::Hang(id, 0.0f, 0.0f, s.rgb);
                 if (s.worn) { EquipStrand(id, 0, s.worn, {}); s.worn = 0; }
                 if (s.loads > 0) { s.loads = 0; s.givers.clear(); s.vol = 0.0f; s.cycleStart = 0.0; s.emptySince = now; }
             } else {
@@ -669,12 +642,13 @@ namespace {
                 if (g.clench && g.clenchOnly && !s.moving) s.cycleStart += stepDt;   // frozen between clenches
                 const float f = static_cast<float>((now - s.cycleStart) / s.cycleLen);
                 if (f >= 1.0f) {
-                    // the drip falls
+                    // the drip falls (Fluid drops it; the puddle comes where it lands)
                     s.vol -= s.dropAmt; s.leaked += s.dropAmt;
-                    if (g.puddles) PlacePuddle(id, s.dropAmt, CumTex(s.rgb, g.opacity, true));
-                    s.cycleStart = 0.0; s.stage = 0;   // the strand stays on: the next drip starts short
+                    Fluid::Release(id, s.dropAmt);
+                    s.cycleStart = 0.0; s.stage = 0;
                 } else {
                     s.stage = f < 0.2f ? 1 : (f < 0.45f ? 2 : (f < 0.75f ? 3 : 4));
+                    Fluid::Hang(id, s.vol, f, s.rgb);
                     const RE::FormID want = kStrandArmo + (s.tier - 1) * 4;   // only changes when he gets fuller / emptier
                     if (want != s.worn) {
                         EquipStrand(id, want, s.worn, tex);
@@ -694,30 +668,11 @@ namespace {
                     s.lastWalkDrop = now;
                     const float amt = std::min(s.vol, 0.08f);
                     s.vol -= amt; s.leaked += amt;
-                    PlacePuddle(id, 0.1f, CumTex(s.rgb, g.opacity, true));
+                    Fluid::Release(id, amt);
                 }
             }
-            if (!tex.empty() && tex != s.texSent && s.worn) { s.texSent = tex; Task([id, tex]() { if (auto* x = RE::TESForm::LookupByID<RE::Actor>(id)) NiOvrTex(x, "AnatomicaCum", tex); }); }
         }
         (void)pl;
-        // ---- leftover on the givers' tips
-        for (auto it = g_tips.begin(); it != g_tips.end();) {
-            const RE::FormID gid = it->first;
-            Tip& t = it->second;
-            auto* a = RE::TESForm::LookupByID<RE::Actor>(gid);
-            const int cur = t.stage > 0 ? t.stage : 0;
-            const float f = static_cast<float>((now - t.start) / std::max(g.tipTime, 5.0f));
-            int want = f < 0.4f ? 1 : (f < 1.0f ? 2 : 0);
-            // gone, dressed again, or switched off: take it off
-            if (!a || a->IsDead() || !g.on || !g.tip || a->GetWornArmor(RE::BGSBipedObjectForm::BipedObjectSlot::kBody)) want = 0;
-            if (a && a->Is3DLoaded() && want != cur) {
-                const float rgb[3] = {t.rgb[0], t.rgb[1], t.rgb[2]};
-                EquipStrand(gid, want ? kTipArmo + want - 1 : 0, cur ? kTipArmo + cur - 1 : 0, want ? CumTex(rgb, g.opacity, false) : std::string{});
-            }
-            if (want == 0) { it = g_tips.erase(it); continue; }
-            t.stage = want;
-            ++it;
-        }
     }
 
     // our armor on a man we know nothing about (a save made while he was dripping): take it off
@@ -736,9 +691,9 @@ namespace {
                 {
                     std::lock_guard lk(g_mx);
                     auto it = g_st.find(a->GetFormID());
-                    known = it != g_st.end() && (it->second.worn == arm->GetLocalFormID() || it->second.squirtFrame > 0 || it->second.ofFrame > 0 ||
-                                                 it->second.strFrame > 0 || (slot == kTrailSlot && it->second.trailWorn > 0));
-                    if (slot == kTipSlot) known = g_tips.count(a->GetFormID()) > 0;
+                    // only the rim armor is still worn; any other piece of ours is from an older version (SMP strands,
+                    // squirt frames, the tip, the leg mesh) and comes off
+                    known = it != g_st.end() && it->second.worn == arm->GetLocalFormID();
                 }
                 if (!known) EquipStrand(a->GetFormID(), 0, arm->GetLocalFormID(), {});
             }
@@ -783,7 +738,7 @@ namespace {
                         // he gets up: a gush, or maybe a squirt
                         if (g.gush && g.gushScene && s.vol >= g.gushMin) s.gushAt = Now() + 2.0;
                         else if (g.squirt && Slot59Free(s) && !Penetrated(s, Now()) && s.vol >= g.squirtMin && Rand(0.0f, 1.0f) < g.squirtChance) {
-                            s.squirtFrame = 1; s.squirtNext = Now() + 0.5; s.squirtAmt = s.vol * 0.35f; s.vol -= s.squirtAmt;
+                            const float amt = s.vol * 0.35f; s.vol -= amt; StartSquirt(s, amt);
                         }
                     }
             }
@@ -816,10 +771,7 @@ namespace {
                 ClearActor(id, it->second);
                 it->second.leaked = 0.0f; it->second.emptySince = 0.0; it->second.gushAt = 0.0;
             }
-            if (auto it = g_tips.find(id); it != g_tips.end()) {
-                if (it->second.stage > 0) EquipStrand(id, 0, kTipArmo + it->second.stage - 1, {});
-                g_tips.erase(it);
-            }
+            Fluid::Clear(id);   // the giver: his coated schlong too
             return RE::BSEventNotifyControl::kContinue;
         }
     } g_bathSink;
@@ -883,6 +835,9 @@ namespace {
 }
 
 namespace Drip {
+    std::string CumTexFor(const float rgb[3], float opacity) { return CumTex(rgb, opacity, false); }   // no lock: Fluid calls it from its frame
+    float TipForward() { return g.tipFwd; }
+    float TipDown() { return g.tipDown; }
     void DripTestNative(RE::StaticFunctionTag*, RE::BSFixedString what);
     RE::Actor* TestTarget();
     std::string RunTest(RE::Actor* a, std::string what);
@@ -895,6 +850,7 @@ namespace Drip {
             s->SetRevertCallback(OnRevert);
         }
         std::thread(Loop).detach();
+        Fluid::Install();
     }
 
     void RegisterFuncs(RE::BSScript::IVirtualMachine* vm) {
@@ -914,8 +870,8 @@ namespace Drip {
             if (auto* src = RE::ScriptEventSourceHolder::GetSingleton()) { src->AddEventSink<RE::TESMagicEffectApplyEvent>(&g_bathSink); bathSink = true; }
         }
         std::lock_guard lk(g_mx);
-        g_st.clear();          // strands left on men are removed by CleanStrays
-        g_tips.clear();
+        g_st.clear();          // armor left on men is removed by CleanStrays
+        Fluid::Reset();
         g_recent.clear();
         g_needEvents = true;   // mod event registrations do not survive a load
     }
@@ -928,6 +884,7 @@ namespace Drip {
         std::lock_guard lk(g_mx);
         if (!g.on) return;
         auto& s = g_st[recv->GetFormID()];
+        s.self = recv->GetFormID();
         const double now = Now();
         if (s.roundOver) {
             s.roundOver = false; s.climaxInRound = false; s.roundPartners.clear(); s.roundStart = now;
@@ -937,6 +894,7 @@ namespace Drip {
             s.roundSecs += dt; s.roundRough += dt * std::clamp(dil, 0.0f, 1.0f);
         }
         s.lastWorked = now;
+        s.pulledOut = false;
         if (male) s.roundPartners[partner->GetFormID()] = pc;
     }
 
@@ -998,23 +956,25 @@ namespace Drip {
         float col[3]; GiverColour(nullptr, col);
         std::lock_guard lk(g_mx);
         auto& s = g_st[a->GetFormID()];
+        s.self = a->GetFormID();
         const double now = Now();
         auto ensure = [&](float v) { if (s.vol < v) { if (s.vol <= 0.01f) for (int i = 0; i < 3; ++i) s.rgb[i] = col[i]; s.vol = v; s.volStart = std::max(s.volStart, v); if (s.loads == 0) s.loads = 1; } };
         auto freeSlot = [&]() { s.squirtFrame = 0; s.ofFrame = 0; s.strFrame = 0; };
         if (what == "load") { AddLoad(a->GetFormID(), col, 0, g.vol); return "one load added"; }
         if (what == "fill") { while (s.loads < g.loadCap) AddLoad(a->GetFormID(), col, 0, g.vol); return "filled to the cap"; }
-        if (what == "squirt") { ensure(1.0f); freeSlot(); s.lastWorked = 0.0; s.squirtFrame = 1; s.squirtNext = now; s.squirtAmt = s.vol * 0.35f; s.vol -= s.squirtAmt; return "squirt"; }
+        if (what == "squirt") { ensure(1.0f); freeSlot(); s.lastWorked = 0.0; const float amt = s.vol * 0.35f; s.vol -= amt; StartSquirt(s, amt); return "squirt"; }
         if (what == "spray") { ensure(1.0f); freeSlot(); StartSpray(s, 0.4f, now); return "spray around the schlong"; }
         if (what == "ooze") { ensure(1.0f); freeSlot(); StartOverflow(s, 0.3f, now); return "ooze around the schlong"; }
         if (what == "gush") { ensure(1.5f); freeSlot(); const float amt = s.vol * g.gushFrac; s.vol -= amt; StartOverflow(s, amt, now, 3.0f); return "gush"; }
-        if (what == "string") { ensure(0.5f); freeSlot(); s.strFrame = 1; s.strNext = now; return "string to the partner"; }
+        if (what == "string") { ensure(0.5f); return Fluid::TestString(a, s.rgb) ? "a string to a partner pulling away (invisible)" : "he has no 3D"; }
         if (what == "froth") { s.frothLevel = 1.0f; s.frothStart = now; return "froth (needs the colour feature on)"; }
-        if (what == "trail") { ensure(0.5f); s.leaked = 3.0f; s.emptySince = 0.0; if (s.legSide == 0) s.legSide = 1; return "full leg trail"; }
-        if (what == "tip") { Tip& t = g_tips[a->GetFormID()]; t.start = now; t.stage = -1; for (int i = 0; i < 3; ++i) t.rgb[i] = col[i]; return "left on his tip"; }
+        if (what == "trail") { ensure(0.5f); s.leaked = 3.0f; s.emptySince = 0.0; if (s.legSide == 0) s.legSide = 1; s.trailWorn = -1; return "full leg trail"; }
+        if (what == "tip" || what == "coat") { Fluid::Coat(a->GetFormID(), 1.0f, col, g.tipTime); return "his schlong is coated (needs a schlong on him)"; }
+        if (what == "drip") { ensure(1.0f); if (s.cycleStart > 0.0) s.cycleStart = now - s.cycleLen; return "the next drip falls"; }
         if (what == "clear") { ClearActor(a->GetFormID(), s); s.leaked = 0.0f; s.emptySince = 0.0; s.frothLevel = 0.0f;
-            if (auto it = g_tips.find(a->GetFormID()); it != g_tips.end()) { if (it->second.stage > 0) EquipStrand(a->GetFormID(), 0, kTipArmo + it->second.stage - 1, {}); g_tips.erase(it); }
+            StripOurs(a->GetFormID(), false);    // everything of ours, even pieces we lost track of
             return "cleared"; }
-        return "unknown test: load fill squirt spray ooze gush string froth trail tip clear";
+        return "unknown test: load fill squirt spray ooze gush string drip froth trail coat clear";
     }
     // console: cgf "AnatomicaNative.DripTest" "squirt"   (on the console-selected man, or you)
     void DripTestNative(RE::StaticFunctionTag*, RE::BSFixedString what) {
@@ -1027,14 +987,15 @@ namespace Drip {
         const char* tests[][3] = {
             {"Add a load", "load", "one load in him (strands, film, ooze)"},
             {"Fill him up", "fill", "loads up to the cap"},
-            {"Squirt", "squirt", "the 6-frame squirt out of the open hole"},
+            {"Squirt", "squirt", "a squirt out of the open hole (pulses, drops, puddle)"},
             {"Spray around schlong", "spray", "the squirt while something is still inside him"},
             {"Ooze around schlong", "ooze", "overflow around the shaft"},
             {"Gush", "gush", "a gush as when he stands up"},
-            {"String", "string", "the string to the partner, snapping"},
+            {"String", "string", "a string to an invisible partner pulling away: thins, snaps"},
+            {"Drip now", "drip", "the drip hanging from him falls"},
             {"Froth", "froth", "bubbles on the rim (colour feature on)"},
-            {"Leg trail", "trail", "the full trail down his leg"},
-            {"Tip (as giver)", "tip", "the pearl and strand on his tip"},
+            {"Leg trail", "trail", "rivulets running down his leg"},
+            {"Coat schlong (as giver)", "coat", "his schlong wet with cum: streaks and a drip from the tip"},
             {"Clear all cum", "clear", "removes all of it"}};
         int n = 0;
         for (auto& t : tests) {
@@ -1043,17 +1004,18 @@ namespace Drip {
             if (ImGuiMCP::IsItemHovered()) { ImGuiMCP::BeginTooltip(); ImGuiMCP::TextUnformatted(t[2]); ImGuiMCP::EndTooltip(); }
         }
         if (!last.empty()) ImGuiMCP::TextDisabled("Cum: %s", last.c_str());
-        ImGuiMCP::TextDisabled("Console: cgf \"AnatomicaNative.DripTest\" \"squirt\"  (load fill squirt spray ooze gush string froth trail tip clear)");
+        ImGuiMCP::TextDisabled("Console: cgf \"AnatomicaNative.DripTest\" \"squirt\"  (load fill squirt spray ooze gush string drip froth trail coat clear)");
     }
 
     std::string Status(RE::Actor* a) {
         if (!a) return {};
         std::lock_guard lk(g_mx);
         auto it = g_st.find(a->GetFormID());
-        if (it == g_st.end() || (it->second.vol <= 0.0f && it->second.leaked <= 0.0f)) return "Cum: none";
+        if (it == g_st.end() || (it->second.vol <= 0.0f && it->second.leaked <= 0.0f)) return "Cum: none | " + Fluid::Status(a->GetFormID());
         const auto& s = it->second;
-        return std::format("Cum: {} load{} ({:.1f} in him, {} partner{}), leaked {:.1f}{}", s.loads, s.loads == 1 ? "" : "s", s.vol,
-                           s.givers.size(), s.givers.size() == 1 ? "" : "s", s.leaked, s.waitKey ? " - waiting for the scene to end" : "");
+        return std::format("Cum: {} load{} ({:.1f} in him, {} partner{}), leaked {:.1f}{} | {}", s.loads, s.loads == 1 ? "" : "s", s.vol,
+                           s.givers.size(), s.givers.size() == 1 ? "" : "s", s.leaked, s.waitKey ? " - waiting for the scene to end" : "",
+                           Fluid::Status(a->GetFormID()));
     }
 
     void Ini(CSimpleIniA& ini, bool save) {
@@ -1076,6 +1038,7 @@ namespace Drip {
         B("Overflow", g.overflow); F("OverflowChance", g.overflowChance, 0.0f, 1.0f); F("OverflowOut", g.overflowOut, 0.05f, 0.9f);
         F("OverflowHold", g.overflowHold, 1.0f, 60.0f);
         B("Tip", g.tip); F("TipTime", g.tipTime, 10.0f, 1800.0f);
+        F("TipForward", g.tipFwd, -3.0f, 5.0f); F("TipDown", g.tipDown, -2.0f, 2.0f);
         B("Gush", g.gush); B("GushScene", g.gushScene); B("GushStand", g.gushStand); F("GushMin", g.gushMin, 0.0f, 10.0f);
         F("GushFrac", g.gushFrac, 0.05f, 0.9f); B("Bath", g.bath);
         B("Film", g.film); F("FilmStrength", g.filmStrength, 0.05f, 1.0f);
@@ -1087,6 +1050,7 @@ namespace Drip {
         B("Puddles", g.puddles); F("PuddleLife", g.puddleLife, 10.0f, 3600.0f); I("PuddleMax", g.puddleMax, 1, 100);
         B("WalkDrops", g.walkDrops); F("WalkEvery", g.walkEvery, 1.0f, 60.0f);
         B("Leg", g.leg); F("LegStay", g.legStay, 30.0f, 7200.0f); F("LegAlpha", g.legAlpha, 0.1f, 1.0f);
+        Fluid::Ini(ini, save);
         B("RaceColour", g.raceColour); F("Opacity", g.opacity, 0.2f, 1.0f); B("Wash", g.wash);
         if (save) ini.SetValue(S, "Colour", std::format("{:.3f},{:.3f},{:.3f}", g.colour[0], g.colour[1], g.colour[2]).c_str());
         else if (const char* v = ini.GetValue(S, "Colour", nullptr)) {
@@ -1103,8 +1067,8 @@ namespace Drip {
             return;
         }
         ch |= ImGuiMCP::Checkbox("Cum drips from the anus", &s.on);
-        Help("Anatomica's own strands (SMP physics), squirts, puddles and a trail down the leg. Needs FSMP / HDT-SMP for the "
-             "strands to swing; without it they hang stiff.");
+        Help("Anatomica's own cum: strands hanging from his hole, squirts, oozing, a string to the partner, rivulets down "
+             "his leg, puddles. Simulated by the DLL every frame against his real body shape - no SMP needed.");
         Indent(s.on, [&] {
             ImGuiMCP::SeparatorText("When");
             ch |= ImGuiMCP::Checkbox("OStim: each time a partner climaxes in him", &s.trigOStim);
@@ -1145,8 +1109,9 @@ namespace Drip {
             Help("A drip grows, falls (puddle) and the next one starts until he is empty. Bigger amounts = thicker strands, "
                  "more of them.");
             ch |= ImGuiMCP::Checkbox("Squirt when he pulls out / the scene ends", &s.squirt);
-            Help("While something is still inside him it never shoots out of an open hole: it sprays out around his schlong "
-                 "instead (when he is already full, or with a big load). A squirt that has started stops if he is penetrated again.");
+            Help("Pulses out of the open hole as a stream that pulls apart into drops; they splash on him or the floor "
+                 "(puddles). While something is still inside him it never shoots out of an open hole: it sprays out around "
+                 "his schlong instead (when he is already full, or with a big load).");
             Indent(s.squirt, [&] {
                 ch |= Pct("Chance", &s.squirtChance);
                 ch |= ImGuiMCP::SliderFloat("Only with at least", &s.squirtMin, 0.0f, 5.0f, "%.1f in him");
@@ -1160,9 +1125,9 @@ namespace Drip {
                 ch |= ImGuiMCP::Checkbox("Drops while he walks", &s.walkDrops);
                 Indent(s.walkDrops, [&] { ch |= ImGuiMCP::SliderFloat("A drop every", &s.walkEvery, 2.0f, 30.0f, "%.0f s"); });
             });
-            ch |= ImGuiMCP::Checkbox("Trail down his leg", &s.leg);
-            Help("A raised, glossy trail from the anus down the back of one thigh, longer the more has leaked. A mesh on "
-                 "the skin that moves with him (armor slot 45). Goes when he dresses.");
+            ch |= ImGuiMCP::Checkbox("Runs down his leg", &s.leg);
+            Help("Rivulets that run from the hole down the inside of one thigh over his actual body, more the more has "
+                 "leaked, leaving a wet trail that dries (drying time: Look and physics). Gone when he dresses.");
             Indent(s.leg, [&] {
                 ch |= Mins("Stays after he is empty", &s.legStay, 0.5f, 120.0f);
             });
@@ -1200,23 +1165,34 @@ namespace Drip {
                  "(wider) rounds make more. Needs the colour feature on (Colours page).");
             ch |= ImGuiMCP::Checkbox("A string to him when he pulls out", &s.string);
             Indent(s.string, [&] { ch |= Pct("Chance##string", &s.stringChance); });
-            Help("Stretches back toward him, thins and snaps; the half on the hole curls down.");
+            Help("A string between his hole and the partner's tip as he pulls out: it thins as they part and snaps "
+                 "(distance: Look and physics). One half springs back and hangs from the hole, the other stays on his tip.");
             ch |= ImGuiMCP::Checkbox("The gape stays open longer while he is full", &s.fullOpen);
             Indent(s.fullOpen, [&] { ch |= ImGuiMCP::SliderFloat("Slower by up to", &s.fullOpenAmt, 0.0f, 3.0f, "+%.1fx"); });
             ch |= ImGuiMCP::Checkbox("A spurt when he lands from a jump or fall", &s.land);
             Indent(s.land, [&] { ch |= Pct("Chance##land", &s.landChance); });
 
             ImGuiMCP::SeparatorText("The giver");
-            ch |= ImGuiMCP::Checkbox("Some is left on his tip when he pulls out", &s.tip);
-            Help("A pearl on the tip of his schlong, then a strand that hangs and drips (SMP). Goes away when it is done, "
-                 "when he dresses or bathes. Uses armor slot 44.");
-            Indent(s.tip, [&] { ch |= Mins("Stays for", &s.tipTime, 0.25f, 10.0f); });
+            ch |= ImGuiMCP::Checkbox("His schlong comes out wet with cum", &s.tip);
+            Help("When he pulls out his schlong glistens, streaks of cum run down it and now and then a drop hangs from "
+                 "the tip and falls. Fades over the time below, or when he bathes.");
+            Indent(s.tip, [&] {
+                ch |= Mins("Stays for", &s.tipTime, 0.25f, 10.0f);
+                if (ImGuiMCP::TreeNode("Tip position (only if his schlong mesh can't be read)")) {
+                    ch |= ImGuiMCP::SliderFloat("Along the schlong", &s.tipFwd, -3.0f, 5.0f, "%.1f");
+                    ch |= ImGuiMCP::SliderFloat("Toward the underside", &s.tipDown, -2.0f, 2.0f, "%.1f");
+                    ImGuiMCP::TreePop();
+                }
+            });
+
+            ImGuiMCP::SeparatorText("Look and physics");
+            if (ch) { Colour::SaveNow(); ch = false; }
+            Fluid::RenderSettings();
 
             ImGuiMCP::SeparatorText("Colour");
             ch |= ImGuiMCP::Checkbox("Colour by the giver's race (list below)", &s.raceColour);
             ch |= ImGuiMCP::ColorEdit3("Colour", s.colour, ImGuiMCP::ImGuiColorEditFlags_PickerHueWheel);
             Help("Used when the giver's race has no cum colour of its own. Several men mix their colours.");
-            ch |= Pct("Opacity", &s.opacity);
             if (ch) { Colour::SaveNow(); ch = false; }   // save before the race list (it saves on its own)
             Colour::RenderCumColours();
             if (ImGuiMCP::Button("Back to defaults")) { s = Settings{}; ch = true; }

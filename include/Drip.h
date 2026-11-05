@@ -16,5 +16,8 @@ namespace Drip {
     float HoldOpen(RE::FormID id);                         // gape closes this many times slower (1 = normal)
     void RenderTests(RE::Actor* who);                     // the cum part of the Testing page
     std::string Status(RE::Actor* a);                      // one line for the Status page
+    std::string CumTexFor(const float rgb[3], float opacity);   // tinted cum texture for this colour ("" = the default one)
+    float TipForward();                                    // fallback tip position (when his schlong mesh can't be read)
+    float TipDown();
     void __stdcall RenderPage();
 }

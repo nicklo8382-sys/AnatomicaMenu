@@ -1,5 +1,6 @@
 #include "Colour.h"
 #include "Drip.h"
+#include "Fluid.h"
 #include "SKSEMenuFramework.h"
 #include "UI.h"
 #include "Wink.h"
@@ -462,6 +463,20 @@ namespace {
         using namespace std::chrono;
         return duration<double>(steady_clock::now().time_since_epoch()).count();
     }
+
+    // (re)start the gape script's update loop (AnatomicaNative.Kick) - after every load, and from the Testing page
+    void KickScript() {
+        if (auto* t = SKSE::GetTaskInterface())
+            t->AddTask([]() {
+                auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+                if (!vm) return;
+                auto* args = RE::MakeFunctionArguments();
+                RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb;
+                vm->DispatchStaticCall("AnatomicaNative", "Kick", args, cb);
+            });
+    }
+    std::atomic<double> g_lastLook{0.0};   // when the script last asked for a look (is it running?)
+    std::atomic<int> g_looks{0};
 
     std::string RaceKey(const RE::TESRace* race) {
         if (!race) return {};
@@ -1154,25 +1169,30 @@ namespace {
             L.swap = 0;
         }
 
-        if (wet > 0.0f) {
-            L.gloss = static_cast<int>(std::lround((30.0f + 90.0f * wet) * 100.0f));
-            L.spec = static_cast<int>(std::lround((3.0f + 7.0f * wet) * 100.0f));
-        }
+        (void)wet;   // wet gloss: Fluid.cpp applies it straight from the DLL now (L.gloss / L.spec stay -1 = removed)
         if (g.swell) L.swell = static_cast<int>(std::lround(Quant(lv.tender * g.swellStrength) * 1000.0f));
 
-        // his schlong, if he was the one giving
-        if (g.schlongWet) {
-            if (auto it = g_schlong.find(a->GetFormID()); it != g_schlong.end()) {
-                const double e = Now() - it->second.last;
-                const float sw = Quant(it->second.peak * g.schlongStrength * Fade(e, g.schlongTime));
-                if (sw > 0.0f) {
-                    L.sgloss = static_cast<int>(std::lround((30.0f + 90.0f * sw) * 100.0f));
-                    L.sspec = static_cast<int>(std::lround((2.0f + 6.0f * sw) * 100.0f));
-                }
-                if (e > g.schlongTime + 5.0) g_schlong.erase(it);
-            }
-        }
+        // his schlong: coated with cum and glossy (Fluid.cpp, started by the drip code when he pulls out)
         return L;
+    }
+
+    // ---- for the simulated cum: who is wet, and with what colour
+    std::vector<Colour::WetInfo> WetNowImpl() {
+        std::vector<Colour::WetInfo> out;
+        std::lock_guard lk(g_lock);
+        if (!g_loaded) LoadIni();
+        std::vector<RE::FormID> ids;
+        for (auto& [id, w] : g_work) ids.push_back(id);
+        for (auto id : ids) {
+            auto* a = RE::TESForm::LookupByID<RE::Actor>(id);
+            if (!a) continue;
+            const Levels lv = LevelsFor(id, a);
+            if (lv.wet <= 0.0f) continue;
+            Colour::WetInfo wi{id, lv.wet, {0.93f, 0.93f, 0.92f}};
+            if (g.wetColourOn) for (int i = 0; i < 3; ++i) wi.rgb[i] = g.wetColour[i];
+            out.push_back(wi);
+        }
+        return out;
     }
 
     // ---- Papyrus ------------------------------------------------------------------------------
@@ -1186,6 +1206,7 @@ namespace {
         std::lock_guard lk(g_lock);
         if (!g_loaded) LoadIni();
         const auto id = a->GetFormID();
+        g_lastLook = Now(); ++g_looks;
         if (g_ringReset.erase(id)) {
             // re-rolled: the script removes the ring we added (or restores his own paint); the whole look follows next time
             g_sent.erase(id);
@@ -1749,6 +1770,7 @@ namespace {
 }
 
 namespace Colour {
+    std::vector<WetInfo> WetNow() { return WetNowImpl(); }
     // a button that asks "Are you sure?" before it counts as pressed
     bool ConfirmButton(const char* label) {
         static std::string pending;
@@ -1859,7 +1881,9 @@ namespace Colour {
         g_pendingTex.clear();
         g_work.clear();
         g_schlong.clear();
+        g_looks = 0;
         Drip::Reset();
+        KickScript();   // the script's loop restarts even if its load event never arrives
     }
 
     float TenderLevel(RE::FormID id) {
@@ -2270,6 +2294,22 @@ namespace Colour {
         CallStatic("NiOverride", "SetBodyMorph", ref, RE::BSFixedString(morph), RE::BSFixedString(key), v);
         CallStatic("NiOverride", "UpdateModelWeight", ref);
     }
+    // An after-sex gape the way the gape script itself starts one: it keeps its own dilation state in
+    // body-morph slots (key AnatomicaGape) and rewrites "Anatomica Gape" from it every tick, so setting the
+    // morph alone is undone on the next tick. AGTime is the script's clock (Utility.GetCurrentRealTime).
+    void GapeTest(RE::Actor* a, float dil) {
+        RE::TESObjectREFR* ref = a;
+        const float now = static_cast<float>(RE::GetDurationOfApplicationRunTime()) / 1000.0f;
+        auto set = [&](const char* m, float v) {
+            CallStatic("NiOverride", "SetBodyMorph", ref, RE::BSFixedString(m), RE::BSFixedString("AnatomicaGape"), v);
+        };
+        set("AGDil", dil);
+        set("AGTime", now);
+        set("AGWas", 0.0f);
+        set("AGEp", 1.0f);
+        set("Anatomica Gape", dil);     // open at once; the script takes over from the next tick
+        CallStatic("NiOverride", "UpdateModelWeight", ref);
+    }
     RE::Actor* TestWho() {
         if (auto sel = RE::Console::GetSelectedRef()) if (auto* a = sel->As<RE::Actor>()) return a;
         return RE::PlayerCharacter::GetSingleton();
@@ -2296,6 +2336,15 @@ namespace Colour {
         ImGuiMCP::TextWrapped("Everything here happens to the man you click in the console (~), or to you if nobody is "
                               "selected. Close the menu to see it. Looks (colour, wetness, redness...) appear on the next "
                               "check (Colours page, \"Check every\").");
+        {
+            const double ago = g_lastLook > 0.0 ? Now() - g_lastLook : -1.0;
+            float iv; { std::lock_guard lk(g_lock); iv = g.interval; }
+            if (ago < 0.0) ImGuiMCP::TextColored(ImGuiMCP::ImVec4{1, 0.5f, 0.4f, 1}, "The Anatomica script has not asked for any looks since loading.");
+            else if (ago > iv * 2.0 + 15.0) ImGuiMCP::TextColored(ImGuiMCP::ImVec4{1, 0.5f, 0.4f, 1}, "The Anatomica script last checked %.0f s ago - it looks stopped.", ago);
+            else ImGuiMCP::TextDisabled("The Anatomica script is running (last check %.0f s ago, %d men checked since loading).", ago, g_looks.load());
+            ImGuiMCP::SameLine();
+            act("Restart the script", [&] { KickScript(); return std::string("asked the gape script to start again"); });
+        }
         ImGuiMCP::SeparatorText(a ? a->GetName() : "nobody");
         if (!a) return;
 
@@ -2314,12 +2363,12 @@ namespace Colour {
         act("Wet only", [&] { FakeRound(a, 0.6f, 1, 20.0f); std::lock_guard lk(g_lock); g_work[a->GetFormID()].peak = 0.0f; return std::string("wet, not red"); });
         act("First time in a while", [&] { std::lock_guard lk(g_lock); g_lastRound.erase(a->GetFormID()); return std::string("his next round counts as rested (redder)"); });
         ImGuiMCP::SameLine();
-        act("Schlong shine (as giver)", [&] { std::lock_guard lk(g_lock); auto& sw = g_schlong[a->GetFormID()]; sw.peak = 1.0f; sw.last = Now(); g_sent.erase(a->GetFormID()); return std::string("his schlong is wet"); });
+        act("Schlong coated (as giver)", [&] { const float c[3] = {0.96f, 0.95f, 0.90f}; Fluid::Coat(a->GetFormID(), 1.0f, c, 90.0f); return std::string("his schlong is wet with cum (needs a schlong on him)"); });
         ImGuiMCP::SameLine();
         act("Clear after-sex looks", [&] { std::lock_guard lk(g_lock); g_work.erase(a->GetFormID()); g_schlong.erase(a->GetFormID()); g_sent.erase(a->GetFormID()); return std::string("back to normal on the next check"); });
 
         ImGuiMCP::SeparatorText("Gape and movement");
-        act("Gape him open", [&] { SetMorph(a, "Anatomica Gape", "AnatomicaGape", 0.8f); return std::string("opened; it closes on its own (Gape page timings)"); });
+        act("Gape him open", [&] { GapeTest(a, 0.8f); return std::string("opened; it holds, then closes on its own (Gape page timings)"); });
         ImGuiMCP::SameLine();
         act("Clench now", [&] { return std::string(Wink::TestClench(a) ? "clenched" : "only works while he is gaping (the movement code follows him then)"); });
         act("Loosen to the cap", [&] { std::lock_guard lk(g_lock); const float v = g.looseCap; SetMorph(a, "Anatomica Gape", "AnatomicaLoose", v); return std::format("lasting looseness {:.0f}%", v * 100.0f); });
@@ -2359,7 +2408,8 @@ namespace Colour {
         changed |= ImGuiMCP::Checkbox("Wet shine after sex", &g.wet);
         Indented(g.wet, [&] {
             changed |= Pct("Shine strength", &g.wetStrength);
-            Help("How glossy the anus gets (stronger, tighter highlights).");
+            Help("How wet he gets: the gloss on the hole, and glossy beads of fluid sitting on the skin around it that creep "
+                 "down and dry off (the beads can be switched off on the Cum & drips page, Look and physics).");
             changed |= Minutes("Dries in", &g.wetTime, 0.5f, 30.0f);
             changed |= ImGuiMCP::Checkbox("Builds up over rounds", &g.wetBuild);
             Help("Another round before he has dried adds to the wetness instead of starting again - he stays wet longer.");
@@ -2373,7 +2423,7 @@ namespace Colour {
                 }
             }
             changed |= ImGuiMCP::Checkbox("Coloured wetness (lube / cum)", &g.wetColourOn);
-            Help("Lays a colour over the rim while it is wet, fading as it dries.");
+            Help("Lays a colour over the rim while it is wet, fading as it dries. The wet beads around the hole take this colour too.");
             Indented(g.wetColourOn, [&] {
                 changed |= ImGuiMCP::ColorEdit3("Wetness colour", g.wetColour, kWheel);
                 changed |= Pct("Colour amount", &g.wetColourAmt);
@@ -2407,12 +2457,8 @@ namespace Colour {
         });
 
         ImGuiMCP::SeparatorText("Wet schlong");
-        changed |= ImGuiMCP::Checkbox("The partner's schlong gets wet too", &g.schlongWet);
-        Help("The man giving gets a wet shine on his schlong (SOS / TNG, anything in body slot 52) that dries on its own.");
-        Indented(g.schlongWet, [&] {
-            changed |= Pct("Schlong shine", &g.schlongStrength);
-            changed |= Minutes("Schlong dries in", &g.schlongTime, 0.5f, 30.0f);
-        });
+        ImGuiMCP::TextWrapped("The giver's schlong coming out wet with cum (gloss, streaks, a drip from the tip) is on the "
+                              "Cum & drips page now: \"His schlong comes out wet with cum\".");
 
         // ---------------------------------------------------------------- reddening
         ImGuiMCP::SeparatorText("Tender reddening");

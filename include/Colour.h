@@ -21,4 +21,6 @@ namespace Colour {
     void __stdcall RenderStatus();
     void __stdcall RenderTesting();    // the Testing page: every effect on demand
     void RegisterWindow();             // the live status window + hotkey input (call after the menu sections)
+    struct WetInfo { RE::FormID id; float wet; float rgb[3]; };
+    std::vector<WetInfo> WetNow();     // every man who is wet right now (0-1) and the colour of it (Fluid draws it)
 }
