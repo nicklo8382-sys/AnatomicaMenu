@@ -172,7 +172,7 @@ namespace {
             const std::uint32_t oS = desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_SKINNING);
             const std::uint8_t* d = part.buffData->rawVertexData;
             count = sp->vertexCount;
-            const std::uint32_t nb = si->skinData->bones;
+            const std::uint32_t nb = si->skinData->GetBoneCount();
             idx.clear(); v.clear(); n.clear(); bi.clear(); bw.clear();
             auto take = [&](std::uint32_t i) {
                 const std::uint8_t* p = d + static_cast<size_t>(i) * stride_;
@@ -215,12 +215,12 @@ namespace {
             if (!ok || !geo) return false;
             auto* si = geo->GetGeometryRuntimeData().skinInstance.get();
             if (!si || !si->skinData || !si->bones) return false;
-            const std::uint32_t nb = si->skinData->bones;
+            const std::uint32_t nb = si->skinData->GetBoneCount();
             std::vector<Xf> M(nb);
             for (std::uint32_t b = 0; b < nb; ++b) {
                 auto* bone = si->bones[b];
                 if (!bone) return false;
-                M[b] = Mul(Xf(bone->world), Xf(si->skinData->boneData[b].skinToBone));
+                M[b] = Mul(Xf(bone->world), Xf(si->skinData->GetBoneDataSkinToBone(b)));
             }
             prev = wp;
             for (size_t i = 0; i < v.size(); ++i) {
