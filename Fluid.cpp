@@ -1,0 +1,1519 @@
+#include "Fluid.h"
+#include "Colour.h"
+#include "Drip.h"
+#include "Wink.h"
+#include "SKSEMenuFramework.h"
+
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <cmath>
+#include <cstring>
+#include <deque>
+#include <format>
+#include <functional>
+#include <mutex>
+#include <random>
+#include <string>
+#include <thread>
+#include <unordered_map>
+#include <vector>
+
+// ---------------------------------------------------------------------------------------------------------------
+//  Runtime cum (see Fluid.h).
+//
+//  Pieces ("ropes") are chains of up to 16 simulated points:
+//    Strand  - hangs from a point (the lip of his anus, or the tip of a schlong). Grows, sags, stretches like goo
+//              (its rest length creeps toward the stretched length), drops fall off its end.
+//    String  - held at both ends (his lip and the partner's tip): thins as it is pulled long, breaks into two
+//              strands that spring back, the partner's half stays on his tip and drips.
+//    Free    - drops and pieces of a stream in flight: fall, stick to skin, reach the floor (puddle).
+//    Rivulet - runs over the body surface (stuck to the skin, slides down along it, leaves a thin wet trail
+//              that dries). Also the beads of the wet film around the hole and the streaks on a schlong.
+//  The body surface is the real skinned body mesh, read back from the game (morphs included) and posed every
+//  frame with the bones; the lip is the inner edge of the rim shape (3BA_AnusRim), so everything sits where the
+//  opening really is, gaping or not.
+// ---------------------------------------------------------------------------------------------------------------
+namespace {
+    using clk = std::chrono::steady_clock;
+    double Now() { return std::chrono::duration<double>(clk::now().time_since_epoch()).count(); }
+    std::mt19937 g_rng{std::random_device{}()};
+    float Rand(float a, float b) { return std::uniform_real_distribution<float>(a, b)(g_rng); }
+
+    // ------------------------------------------------------------------------------------------- math
+    struct V3 {
+        float x = 0, y = 0, z = 0;
+        V3() = default;
+        V3(float a, float b, float c) : x(a), y(b), z(c) {}
+        V3(const RE::NiPoint3& p) : x(p.x), y(p.y), z(p.z) {}
+        RE::NiPoint3 ni() const { return {x, y, z}; }
+        V3 operator+(const V3& o) const { return {x + o.x, y + o.y, z + o.z}; }
+        V3 operator-(const V3& o) const { return {x - o.x, y - o.y, z - o.z}; }
+        V3 operator*(float s) const { return {x * s, y * s, z * s}; }
+        V3 operator/(float s) const { return {x / s, y / s, z / s}; }
+        V3& operator+=(const V3& o) { x += o.x; y += o.y; z += o.z; return *this; }
+        V3& operator-=(const V3& o) { x -= o.x; y -= o.y; z -= o.z; return *this; }
+        V3& operator*=(float s) { x *= s; y *= s; z *= s; return *this; }
+    };
+    float Dot(const V3& a, const V3& b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+    V3 Cross(const V3& a, const V3& b) { return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x}; }
+    float Len(const V3& a) { return std::sqrt(Dot(a, a)); }
+    V3 Norm(const V3& a, const V3& fb = {0, 0, 1}) { const float l = Len(a); return l > 1e-6f ? a / l : fb; }
+    V3 Lerp(const V3& a, const V3& b, float t) { return a + (b - a) * t; }
+
+    // world = R * (s * v) + t   (NiTransform semantics)
+    struct Xf {
+        float r[3][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+        V3 t;
+        float s = 1.0f;
+        Xf() = default;
+        Xf(const RE::NiTransform& n) {
+            for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) r[i][j] = n.rotate.entry[i][j];
+            t = V3(n.translate); s = n.scale;
+        }
+        V3 Rot(const V3& v) const { return {r[0][0] * v.x + r[0][1] * v.y + r[0][2] * v.z, r[1][0] * v.x + r[1][1] * v.y + r[1][2] * v.z, r[2][0] * v.x + r[2][1] * v.y + r[2][2] * v.z}; }
+        V3 RotT(const V3& v) const { return {r[0][0] * v.x + r[1][0] * v.y + r[2][0] * v.z, r[0][1] * v.x + r[1][1] * v.y + r[2][1] * v.z, r[0][2] * v.x + r[1][2] * v.y + r[2][2] * v.z}; }
+        V3 Apply(const V3& v) const { return Rot(v * s) + t; }
+        V3 Axis(int c) const { return {r[0][c], r[1][c], r[2][c]}; }
+    };
+    Xf Mul(const Xf& a, const Xf& b) {
+        Xf o;
+        for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) o.r[i][j] = a.r[i][0] * b.r[0][j] + a.r[i][1] * b.r[1][j] + a.r[i][2] * b.r[2][j];
+        o.s = a.s * b.s;
+        o.t = a.Apply(b.t);
+        return o;
+    }
+
+    float Half(std::uint16_t h) {
+        const std::uint32_t s = (h >> 15) & 1, e = (h >> 10) & 0x1F, m = h & 0x3FF;
+        float v;
+        if (e == 0) v = std::ldexp(static_cast<float>(m), -24);
+        else if (e == 31) v = m ? NAN : INFINITY;
+        else v = std::ldexp(static_cast<float>(m | 0x400), static_cast<int>(e) - 25);
+        return s ? -v : v;
+    }
+
+    // ------------------------------------------------------------------------------------------- settings
+    struct Settings {
+        bool on = true;
+        float thick = 1.0f;          // radius multiplier
+        float opacity = 0.85f;       // see-through (also the generated textures)
+        float shine = 1.0f;          // specular strength
+        float gloss = 320.0f;        // glossiness (higher = smaller, sharper highlight)
+        float gravity = 520.0f;      // units / s^2 (real gravity is ~690)
+        float viscosity = 0.55f;     // 0 = runny, 1 = very thick: strands stretch slowly, flow slowly
+        float stick = 0.8f;          // how much it clings to skin
+        float maxLen = 11.0f;        // longest hanging strand before the end drops off
+        float breakDist = 9.0f;      // the string to the partner snaps around this far (+-30%)
+        float flow = 1.0f;           // how fast it runs down the skin
+        float dry = 150.0f;          // seconds for trails / film / streaks to dry off
+        int maxPieces = 22;          // pieces drawn per man
+        bool collide = true;         // runs over / rests on the body instead of passing through
+        bool wetFilm = true;         // beads and film around the hole while he is wet
+        bool coatShine = true;       // the giver's schlong glistens while coated
+        int quality = 2;             // 1 fast, 2 normal, 3 smooth (simulation sub-steps)
+    } g;
+
+    // ------------------------------------------------------------------------------------------- templates
+    constexpr const char* kRopeNif = "actors\\character\\Anatomica\\fluid\\ad_rope.nif";
+    constexpr const char* kRivNif = "actors\\character\\Anatomica\\fluid\\ad_rivulet.nif";
+    constexpr int kBones = 16;
+    RE::NiPointer<RE::NiNode> g_tplRope, g_tplRiv;
+    bool g_tplTried = false;
+
+    RE::NiPointer<RE::NiNode> LoadModel(const char* path) {
+        RE::NiPointer<RE::NiNode> out;
+        RE::BSModelDB::DBTraits::ArgsType args{};
+        const auto err = RE::BSModelDB::Demand(path, out, args);
+        if (!out) logger::warn("Anatomica fluid: could not load meshes\\{} ({})", path, static_cast<int>(err));
+        return out;
+    }
+
+    // ------------------------------------------------------------------------------------------- skinned shape readback
+    // the shape's own vertex data (SKEE writes body morphs into it), skinned with the current bone transforms
+    struct Surface {
+        RE::BSGeometry* geo = nullptr;
+        std::uint32_t count = 0;               // vertices in the shape
+        std::vector<std::uint32_t> idx;        // which vertices we keep
+        std::vector<V3> v, n;                  // skin space
+        std::vector<std::array<std::uint8_t, 4>> bi;
+        std::vector<std::array<float, 4>> bw;
+        std::vector<V3> wp, wn, prev;          // world now / last frame
+        double readAt = 0.0;
+        bool ok = false;
+        // spatial grid (sorted cell keys)
+        float cell = 1.6f;
+        std::vector<std::pair<std::int64_t, std::uint32_t>> grid;
+
+        static std::int64_t Key(int x, int y, int z) { return (static_cast<std::int64_t>(x + 4096) << 26) ^ (static_cast<std::int64_t>(y + 4096) << 13) ^ static_cast<std::int64_t>(z + 4096); }
+
+        // filter(skin-space position) -> keep; stride: keep every n-th of those
+        bool Read(RE::BSGeometry* g_, const std::function<bool(const V3&)>& filter, int stride, const std::vector<std::uint32_t>* only = nullptr) {
+            ok = false; geo = g_;
+            if (!geo) return false;
+            auto& rd = geo->GetGeometryRuntimeData();
+            auto* si = rd.skinInstance.get();
+            if (!si || !si->skinData) return false;
+            RE::NiSkinPartition* sp = si->skinPartition.get();
+            if (!sp) sp = si->skinData->skinPartition.get();
+            if (!sp || sp->numPartitions == 0) return false;
+            auto& part = sp->partitions[0];
+            if (!part.buffData || !part.buffData->rawVertexData) return false;
+            const auto desc = part.vertexDesc;
+            std::uint64_t raw = 0;
+            std::memcpy(&raw, &desc, sizeof(raw));
+            const std::uint32_t stride_ = static_cast<std::uint32_t>(raw & 0xF) * 4;
+            if (stride_ == 0 || !desc.HasFlag(RE::BSGraphics::Vertex::VF_SKINNED)) return false;
+            const bool full = desc.HasFlag(RE::BSGraphics::Vertex::VF_FULLPREC);
+            const bool hasN = desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL);
+            const std::uint32_t oP = desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_POSITION);
+            const std::uint32_t oN = desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_NORMAL);
+            const std::uint32_t oS = desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_SKINNING);
+            const std::uint8_t* d = part.buffData->rawVertexData;
+            count = sp->vertexCount;
+            const std::uint32_t nb = si->skinData->bones;
+            idx.clear(); v.clear(); n.clear(); bi.clear(); bw.clear();
+            auto take = [&](std::uint32_t i) {
+                const std::uint8_t* p = d + static_cast<size_t>(i) * stride_;
+                V3 pos;
+                if (full) { float f[3]; std::memcpy(f, p + oP, 12); pos = {f[0], f[1], f[2]}; }
+                else { std::uint16_t h[3]; std::memcpy(h, p + oP, 6); pos = {Half(h[0]), Half(h[1]), Half(h[2])}; }
+                V3 nrm{0, 0, 1};
+                if (hasN) { const std::uint8_t* q = p + oN; nrm = Norm(V3(q[0] / 127.5f - 1.0f, q[1] / 127.5f - 1.0f, q[2] / 127.5f - 1.0f)); }
+                std::uint16_t hw[4]; std::memcpy(hw, p + oS, 8);
+                std::array<std::uint8_t, 4> b{};
+                std::memcpy(b.data(), p + oS + 8, 4);
+                std::array<float, 4> w{};
+                float sum = 0;
+                for (int k = 0; k < 4; ++k) { w[k] = b[k] < nb ? std::max(0.0f, Half(hw[k])) : 0.0f; sum += w[k]; }
+                if (sum < 1e-4f) return;
+                for (auto& x : w) x /= sum;
+                idx.push_back(i); v.push_back(pos); n.push_back(nrm); bi.push_back(b); bw.push_back(w);
+            };
+            if (only) {
+                for (auto i : *only) if (i < count) take(i);
+            } else {
+                int c = 0;
+                for (std::uint32_t i = 0; i < count; ++i) {
+                    const std::uint8_t* p = d + static_cast<size_t>(i) * stride_;
+                    V3 pos;
+                    if (full) { float f[3]; std::memcpy(f, p + oP, 12); pos = {f[0], f[1], f[2]}; }
+                    else { std::uint16_t h[3]; std::memcpy(h, p + oP, 6); pos = {Half(h[0]), Half(h[1]), Half(h[2])}; }
+                    if (!filter(pos)) continue;
+                    if ((c++ % std::max(stride, 1)) == 0) take(i);
+                }
+            }
+            wp.assign(v.size(), {}); wn.assign(v.size(), {}); prev.clear();
+            readAt = Now();
+            ok = !v.empty();
+            return ok;
+        }
+
+        // skin every kept vertex with the bones as they are now
+        bool Pose() {
+            if (!ok || !geo) return false;
+            auto* si = geo->GetGeometryRuntimeData().skinInstance.get();
+            if (!si || !si->skinData || !si->bones) return false;
+            const std::uint32_t nb = si->skinData->bones;
+            std::vector<Xf> M(nb);
+            for (std::uint32_t b = 0; b < nb; ++b) {
+                auto* bone = si->bones[b];
+                if (!bone) return false;
+                M[b] = Mul(Xf(bone->world), Xf(si->skinData->boneData[b].skinToBone));
+            }
+            prev = wp;
+            for (size_t i = 0; i < v.size(); ++i) {
+                V3 p, q;
+                for (int k = 0; k < 4; ++k) {
+                    const float w = bw[i][k];
+                    if (w <= 0.0f) continue;
+                    const Xf& m = M[bi[i][k]];
+                    p += m.Apply(v[i]) * w;
+                    q += m.Rot(n[i]) * w;
+                }
+                wp[i] = p; wn[i] = Norm(q);
+            }
+            if (prev.size() != wp.size()) prev = wp;
+            grid.clear(); grid.reserve(wp.size());
+            for (size_t i = 0; i < wp.size(); ++i)
+                grid.push_back({Key(static_cast<int>(std::floor(wp[i].x / cell)), static_cast<int>(std::floor(wp[i].y / cell)), static_cast<int>(std::floor(wp[i].z / cell))), static_cast<std::uint32_t>(i)});
+            std::sort(grid.begin(), grid.end());
+            return true;
+        }
+
+        // nearest kept vertex within maxD (-1 = none)
+        int Nearest(const V3& p, float maxD) const {
+            if (grid.empty()) return -1;
+            const int cx = static_cast<int>(std::floor(p.x / cell)), cy = static_cast<int>(std::floor(p.y / cell)), cz = static_cast<int>(std::floor(p.z / cell));
+            const int r = std::max(1, static_cast<int>(std::ceil(maxD / cell)));
+            int best = -1; float bd = maxD * maxD;
+            for (int dx = -r; dx <= r; ++dx)
+                for (int dy = -r; dy <= r; ++dy)
+                    for (int dz = -r; dz <= r; ++dz) {
+                        const auto key = Key(cx + dx, cy + dy, cz + dz);
+                        auto it = std::lower_bound(grid.begin(), grid.end(), std::pair<std::int64_t, std::uint32_t>{key, 0});
+                        for (; it != grid.end() && it->first == key; ++it) {
+                            const V3 d = wp[it->second] - p;
+                            const float dd = Dot(d, d);
+                            if (dd < bd) { bd = dd; best = static_cast<int>(it->second); }
+                        }
+                    }
+            return best;
+        }
+        V3 Moved(int i) const { return (i >= 0 && static_cast<size_t>(i) < prev.size()) ? wp[i] - prev[i] : V3{}; }
+    };
+
+    // ------------------------------------------------------------------------------------------- pieces
+    enum class Type { Strand, String, Free, Rivulet };
+    struct Pt { V3 x, xp; float r = 0.1f; bool pin = false; float skin = 0.0f; };
+    struct SurfPt { int s = -1; V3 off; float r = 0.1f; };   // a point held on a surface vertex
+    struct Rope {
+        Type type = Type::Free;
+        bool onSchlong = false;          // its surface / anchor is the schlong (coat) instead of the body
+        std::vector<Pt> p;
+        std::vector<float> rest;
+        float vol = 0.2f;                // how much cum it is (radius comes from it)
+        float r0 = 0.1f;
+        float age = 0.0f, life = 12.0f, alpha = 1.0f;
+        float rgb[3] = {0.96f, 0.95f, 0.90f};
+        // Strand
+        int lip = -1;                    // lip point it hangs from (-1: anchorSurf, or the partner's tip when tipOf)
+        int anchorSurf = -1;             // hangs from this surface vertex (schlong tip)
+        float phase = 0.0f, target = 1.0f;
+        bool grows = true;
+        float holdFor = 0.0f;            // drop off after this long (0 = when Drip says)
+        // String
+        RE::FormID partner = 0; bool virtualPartner = false; V3 vpStart, vpDir; float breakAt = 9.0f, lenRest = 0.0f;
+        // Rivulet
+        std::vector<SurfPt> path;
+        V3 head; int headS = -1; float speed = 1.0f; float drain = 0.0f; bool stopped = false; float wander = 0.0f;
+        bool bead = false;               // wet film bead: barely moves
+        // Free
+        bool landed = false; float onSkin = 0.0f;
+        bool dropNow = false;            // Strand: the drip falls on the next step
+        bool dead = false;
+        int vis = -1;
+    };
+
+    struct Emitter {
+        Fluid::Kind kind = Fluid::Kind::Squirt;
+        float t = 0.0f, dur = 0.4f, amount = 0.5f, acc = 0.0f, hold = 0.0f;
+        float rgb[3] = {0.96f, 0.95f, 0.90f};
+        int rope = -1;                   // stream piece being filled
+        int pulses = 2;
+        bool spawned = false;
+    };
+
+    struct Visual {
+        RE::NiPointer<RE::NiNode> root;
+        RE::NiAVObject* bone[kBones] = {};
+        RE::BSGeometry* geo = nullptr;
+        bool flat = false;
+        bool shown = false;
+        std::string tex;
+        float alpha = -1.0f;
+    };
+
+    struct Actor {
+        RE::FormID id = 0;
+        RE::NiAVObject* root3D = nullptr;
+        RE::NiPointer<RE::NiAVObject> rootRef;   // keeps the node our pieces hang on alive until we have taken them off
+        Surface body, rim, schlong;
+        bool lipOk = false;
+        std::vector<V3> lip;             // the inner edge of the rim, world
+        V3 lipC, lipN{0, -0.81f, -0.59f}, lipDown{0, 0, -1};
+        float lipR = 0.3f;
+        int lipLow = 0;                  // index of the lowest lip point
+        V3 floorUp{0, 0, 1}; float floorZ = 0.0f;
+        bool tipOk = false; V3 tip, tipAxis{0, 1, 0}; int tipSurf = -1; float tipTrack = 0.0f;
+        std::vector<Rope> ropes;
+        std::vector<Emitter> emit;
+        std::vector<Visual> vis[2];      // 0 round, 1 flat
+        // what Drip / Colour want
+        float hang = 0.0f, hangPhase = 0.0f; float hangRgb[3] = {0.96f, 0.95f, 0.90f};
+        float trail = 0.0f; int trailSide = 1; float trailRgb[3] = {0.96f, 0.95f, 0.90f}; float trailDone = 0.0f;
+        float wet = 0.0f; float wetRgb[3] = {0.95f, 0.93f, 0.88f};
+        float coat = 0.0f, coatLeft = 0.0f, coatSecs = 90.0f; float coatRgb[3] = {0.96f, 0.95f, 0.90f}; double coatDrip = 0.0;
+        float glossSent = -1.0f, sglossSent = -1.0f; double glossAt = 0.0;
+        double rimReadAt = 0.0, bodyReadAt = 0.0, schlongReadAt = 0.0, lastSeen = 0.0;
+        bool lipTried = false;
+    };
+
+    std::mutex g_mx;
+    std::unordered_map<RE::FormID, Actor> g_act;
+    std::vector<std::pair<RE::FormID, float>> g_land;
+    std::atomic<bool> g_queued{false};
+    double g_lastTick = 0.0, g_lastWetPoll = 0.0;
+
+    Actor& Get(RE::FormID id) { auto& a = g_act[id]; a.id = id; return a; }
+
+    // ------------------------------------------------------------------------------------------- the look
+    float Radius(float vol) { return std::clamp(0.075f + 0.06f * std::sqrt(std::max(vol, 0.0f)), 0.05f, 0.32f) * g.thick; }
+
+    std::unordered_map<std::uint32_t, std::string> g_texCache;
+    const std::string& TexFor(const float rgb[3]) {
+        auto q = [](float x) { return static_cast<std::uint32_t>(std::clamp(static_cast<int>(std::lround(x * 31.0f)), 0, 31)); };
+        const std::uint32_t key = q(rgb[0]) | (q(rgb[1]) << 5) | (q(rgb[2]) << 10) | (static_cast<std::uint32_t>(std::lround(g.opacity * 20.0f)) << 15);
+        auto it = g_texCache.find(key);
+        if (it != g_texCache.end()) return it->second;
+        return g_texCache.emplace(key, Drip::CumTexFor(rgb, g.opacity)).first->second;
+    }
+
+    void SetLook(Visual& v, const float rgb[3]) {
+        if (!v.geo) return;
+        const std::string& tex = TexFor(rgb);
+        if (tex == v.tex && v.tex != "?") return;
+        auto* lsp = v.geo->lightingShaderProp_cast();
+        if (!lsp) return;
+        auto* mat = static_cast<RE::BSLightingShaderMaterialBase*>(lsp->material);
+        if (!mat) return;
+        auto* nm = static_cast<RE::BSLightingShaderMaterialBase*>(mat->Create());
+        if (!nm) return;
+        nm->CopyMembers(mat);
+        if (!tex.empty()) {
+            auto* ts = RE::BSShaderTextureSet::Create();
+            if (ts) {
+                for (std::uint32_t i = 0; i < RE::BSTextureSet::Texture::kTotal; ++i) {
+                    const char* pth = mat->textureSet ? mat->textureSet->GetTexturePath(static_cast<RE::BSTextureSet::Texture>(i)) : nullptr;
+                    if (pth && *pth) ts->SetTexturePath(static_cast<RE::BSTextureSet::Texture>(i), pth);
+                }
+                ts->SetTexturePath(RE::BSTextureSet::Texture::kDiffuse, tex.c_str());
+                nm->ClearTextures();
+                nm->OnLoadTextureSet(0, ts);
+            }
+        }
+        nm->specularPower = g.gloss;
+        nm->specularColorScale = 0.8f * g.shine;
+        nm->materialAlpha = 1.0f;
+        lsp->SetMaterial(nm, true);
+        lsp->SetupGeometry(v.geo);
+        lsp->FinishSetupGeometry(v.geo);
+        nm->~BSLightingShaderMaterialBase();
+        RE::free(nm);
+        v.tex = tex;
+        v.alpha = -1.0f;
+    }
+
+    Visual* MakeVisual(Actor& A, bool flat) {
+        auto& tpl = flat ? g_tplRiv : g_tplRope;
+        if (!tpl) return nullptr;
+        auto* node = A.root3D ? A.root3D->AsNode() : nullptr;
+        if (!node) return nullptr;
+        auto* cl = tpl->Clone();
+        auto* cn = cl ? cl->AsNode() : nullptr;
+        if (!cn) return nullptr;
+        Visual v;
+        v.root.reset(cn);
+        v.flat = flat;
+        for (int k = 0; k < kBones; ++k) {
+            const auto nm = std::format("ADF{:02d}", k);
+            v.bone[k] = cn->GetObjectByName(RE::BSFixedString(nm.c_str()));
+            if (!v.bone[k]) return nullptr;
+        }
+        RE::BSVisit::TraverseScenegraphGeometries(cn, [&](RE::BSGeometry* geo) {
+            if (!v.geo) v.geo = geo;
+            return RE::BSVisit::BSVisitControl::kContinue;
+        });
+        if (!v.geo) return nullptr;
+        // always drawn while he is: the bones move far from where the template was made
+        v.geo->GetModelData().modelBound.center = {0.0f, 0.0f, 50.0f};
+        v.geo->GetModelData().modelBound.radius = 400.0f;
+        cn->local = RE::NiTransform();
+        cn->GetFlags().set(RE::NiAVObject::Flag::kHidden);
+        node->AttachChild(cn, true);
+        if (A.rootRef.get() != A.root3D) A.rootRef.reset(A.root3D);
+        v.tex = "?";
+        A.vis[flat ? 1 : 0].push_back(std::move(v));
+        return &A.vis[flat ? 1 : 0].back();
+    }
+
+    // only while we hold the node they hang on (rootRef), so it can't have been freed under us
+    void DropVisuals(Actor& A) {
+        for (auto& list : A.vis)
+            for (auto& v : list) {
+                if (!v.root) continue;
+                v.root->GetFlags().set(RE::NiAVObject::Flag::kHidden);
+                if (A.rootRef && v.root->parent == A.rootRef.get()) A.rootRef->AsNode()->DetachChild2(v.root.get());
+            }
+        A.vis[0].clear(); A.vis[1].clear();
+        for (auto& r : A.ropes) r.vis = -1;
+        A.rootRef.reset();
+    }
+
+    // 16 evenly spaced points along a polyline (with radius)
+    void Resample(const std::vector<V3>& pts, const std::vector<float>& rad, V3 out[kBones], float rOut[kBones]) {
+        const size_t n = pts.size();
+        if (n == 0) return;
+        if (n == 1) { for (int k = 0; k < kBones; ++k) { out[k] = pts[0] + V3(0, 0, -0.01f * k); rOut[k] = rad[0]; } return; }
+        std::vector<float> acc(n, 0.0f);
+        for (size_t i = 1; i < n; ++i) acc[i] = acc[i - 1] + Len(pts[i] - pts[i - 1]);
+        const float L = std::max(acc[n - 1], 1e-4f);
+        size_t j = 0;
+        for (int k = 0; k < kBones; ++k) {
+            const float s = L * static_cast<float>(k) / (kBones - 1);
+            while (j + 2 < n && acc[j + 1] < s) ++j;
+            const float seg = std::max(acc[j + 1] - acc[j], 1e-5f);
+            const float t = std::clamp((s - acc[j]) / seg, 0.0f, 1.0f);
+            out[k] = Lerp(pts[j], pts[j + 1], t);
+            rOut[k] = rad[j] + (rad[j + 1] - rad[j]) * t;
+        }
+        if (L < 1e-3f) for (int k = 0; k < kBones; ++k) out[k] = pts[0] + V3(0, 0, -0.002f * k);
+    }
+
+    // place the bones: Y along the piece, Z out of the skin (flat) - bone scale = radius
+    void Pose(Actor& A, Visual& v, const V3 pts[kBones], const float rad[kBones], const V3* normals, float alpha) {
+        const Xf W(A.root3D->world);
+        const float inv = W.s > 1e-6f ? 1.0f / W.s : 1.0f;
+        V3 side{1, 0, 0};
+        for (int k = 0; k < kBones; ++k) {
+            const V3 tgt = Norm(pts[std::min(k + 1, kBones - 1)] - pts[std::max(k - 1, 0)], {0, 0, -1});
+            V3 Z;
+            if (normals) Z = Norm(normals[k] - tgt * Dot(normals[k], tgt), Norm(Cross(tgt, {1, 0, 0})));
+            else {   // parallel transport keeps the round tube from twisting
+                side = Norm(side - tgt * Dot(side, tgt), Norm(Cross(tgt, {0, 0, 1}), {1, 0, 0}));
+                Z = Cross(side, tgt);
+            }
+            const V3 X = Cross(tgt, Z);
+            // world rotation columns X, Y=tgt, Z -> local = W^T * that
+            const V3 cx = W.RotT(X), cy = W.RotT(tgt), cz = W.RotT(Z);
+            auto& lt = v.bone[k]->local;
+            lt.rotate.entry[0][0] = cx.x; lt.rotate.entry[1][0] = cx.y; lt.rotate.entry[2][0] = cx.z;
+            lt.rotate.entry[0][1] = cy.x; lt.rotate.entry[1][1] = cy.y; lt.rotate.entry[2][1] = cy.z;
+            lt.rotate.entry[0][2] = cz.x; lt.rotate.entry[1][2] = cz.y; lt.rotate.entry[2][2] = cz.z;
+            lt.translate = (W.RotT(pts[k] - W.t) * inv).ni();
+            lt.scale = std::max(rad[k], 0.004f) * inv;
+        }
+        if (v.root->GetFlags().any(RE::NiAVObject::Flag::kHidden)) v.root->GetFlags().reset(RE::NiAVObject::Flag::kHidden);
+        RE::NiUpdateData ud{};
+        v.root->Update(ud);
+        if (std::abs(alpha - v.alpha) > 0.03f) {
+            if (auto* lsp = v.geo->lightingShaderProp_cast()) lsp->SetMaterialAlpha(std::clamp(alpha, 0.0f, 1.0f));
+            v.alpha = alpha;
+        }
+        v.shown = true;
+    }
+
+    // ------------------------------------------------------------------------------------------- anchors
+    constexpr std::uint32_t kRimVerts = 17126;          // 3BA_AnusRim of Anatomica HD (HIMBO)
+    constexpr std::uint32_t kLipFirst = 15590, kLipCount = 192;   // its inner edge, in order around the hole
+    constexpr int kLip = 32;
+
+    RE::BSGeometry* FindGeo(RE::NiAVObject* root, const char* name) {
+        auto* o = root->GetObjectByName(RE::BSFixedString(name));
+        return o ? o->AsGeometry() : nullptr;
+    }
+    RE::BSGeometry* BodyGeo(RE::Actor* a, RE::NiAVObject* root) {
+        if (auto* g_ = FindGeo(root, "HIMBO - Body HP")) return g_;
+        RE::BSGeometry* best = nullptr; std::uint32_t most = 0;
+        const auto& biped = a->GetBiped2();
+        RE::NiAVObject* body = biped ? biped->objects[RE::BIPED_OBJECTS::kBody].partClone.get() : nullptr;
+        RE::BSVisit::TraverseScenegraphGeometries(body ? body : root, [&](RE::BSGeometry* geo) {
+            auto& rd = geo->GetGeometryRuntimeData();
+            if (rd.skinInstance && rd.skinInstance->skinPartition && rd.skinInstance->skinPartition->vertexCount > most) {
+                most = rd.skinInstance->skinPartition->vertexCount; best = geo;
+            }
+            return RE::BSVisit::BSVisitControl::kContinue;
+        });
+        return best;
+    }
+
+    void UpdateLip(Actor& A, RE::Actor* a, RE::NiAVObject* root) {
+        const double now = Now();
+        A.lipOk = false;
+        auto* rimGeo = FindGeo(root, "3BA_AnusRim");
+        if (rimGeo && (rimGeo != A.rim.geo || now - A.rimReadAt > 4.0)) {
+            std::vector<std::uint32_t> ids;
+            for (int k = 0; k < kLip; ++k) ids.push_back(kLipFirst + static_cast<std::uint32_t>(k) * kLipCount / kLip);
+            A.rim.Read(rimGeo, nullptr, 1, &ids);
+            if (A.rim.count != kRimVerts) A.rim.ok = false;   // not the Anatomica rim we know
+            A.rimReadAt = now;
+        }
+        if (rimGeo && A.rim.ok && A.rim.Pose() && A.rim.wp.size() == kLip) {
+            A.lip = A.rim.wp;
+            A.lipOk = true;
+        }
+        auto* pel = root->GetObjectByName(RE::BSFixedString("NPC Pelvis [Pelv]"));
+        if (!pel) return;
+        const Xf P(pel->world);
+        A.lipN = Norm(P.Rot(V3(0, -0.81f, -0.59f)));
+        if (!A.lipOk) {   // another body: a ring at the measured opening, opened with the gape
+            const float gp = std::clamp(Wink::GapeOf(A.id), 0.0f, 1.5f);
+            const V3 c = P.Apply(V3(0, -5.35f, -6.16f));
+            const V3 e1 = Norm(P.Rot(V3(1, 0, 0))), e2 = Norm(Cross(A.lipN, e1));
+            const float r = (0.15f + 1.1f * gp) * P.s;
+            A.lip.resize(kLip);
+            for (int k = 0; k < kLip; ++k) {
+                const float t = 6.2831853f * k / kLip;
+                A.lip[k] = c + e1 * (std::cos(t) * r) + e2 * (std::sin(t) * r * 0.8f);
+            }
+        }
+        V3 c;
+        for (auto& p : A.lip) c += p;
+        A.lipC = c / static_cast<float>(A.lip.size());
+        float r = 0; int low = 0; float lowZ = 1e9f;
+        for (int k = 0; k < static_cast<int>(A.lip.size()); ++k) {
+            r += Len(A.lip[k] - A.lipC);
+            if (A.lip[k].z < lowZ) { lowZ = A.lip[k].z; low = k; }
+        }
+        A.lipR = r / static_cast<float>(A.lip.size());
+        if (A.lipOk) {   // the rim data closed while he gapes (morph not in the readback): open the ring to the gape
+            const float want = (0.15f + 1.1f * std::clamp(Wink::GapeOf(A.id), 0.0f, 1.5f)) * P.s;
+            if (A.lipR < want * 0.5f) {
+                const float k = want / std::max(A.lipR, 0.02f);
+                for (auto& p : A.lip) p = A.lipC + (p - A.lipC) * k;
+                A.lipR = want;
+            }
+        }
+        A.lipLow = low;
+        A.floorZ = a->GetPosition().z;
+        (void)a;
+    }
+
+    // the partner's tip: the schlong's vertex farthest along his last schlong bone, or a point past that bone
+    bool TipOf(RE::Actor* a, Actor& P) {
+        P.tipOk = false;
+        auto* root = a ? a->Get3D(false) : nullptr;
+        if (!root) return false;
+        auto* g6 = root->GetObjectByName(RE::BSFixedString("NPC Genitals06 [Gen06]"));
+        if (!g6) return false;
+        const Xf G(g6->world);
+        P.tipAxis = Norm(G.Rot(V3(0, 1, 0)));
+        if (P.schlong.ok && !P.schlong.wp.empty()) {
+            float best = -1e9f; int bi = -1;
+            for (size_t i = 0; i < P.schlong.wp.size(); ++i) {
+                const float d = Dot(P.schlong.wp[i] - G.t, P.tipAxis) - 0.3f * Dot(P.schlong.wp[i] - G.t, Norm(G.Rot(V3(0, 0, -1))));
+                if (d > best) { best = d; bi = static_cast<int>(i); }
+            }
+            if (bi >= 0) { P.tip = P.schlong.wp[bi]; P.tipSurf = bi; P.tipOk = true; return true; }
+        }
+        P.tip = G.Apply(V3(0, 1.1f + Drip::TipForward(), 0.245f + Drip::TipDown()));
+        P.tipSurf = -1;
+        P.tipOk = true;
+        return true;
+    }
+
+    void ReadSchlong(Actor& A, RE::Actor* a) {
+        const auto& biped = a->GetBiped2();
+        RE::NiAVObject* obj = biped ? biped->objects[RE::BIPED_OBJECTS::kModPelvisSecondary].partClone.get() : nullptr;
+        RE::BSGeometry* best = nullptr; std::uint32_t most = 0;
+        if (obj) RE::BSVisit::TraverseScenegraphGeometries(obj, [&](RE::BSGeometry* geo) {
+            auto& rd = geo->GetGeometryRuntimeData();
+            if (rd.skinInstance && rd.skinInstance->skinPartition && rd.skinInstance->skinPartition->vertexCount > most) {
+                most = rd.skinInstance->skinPartition->vertexCount; best = geo;
+            }
+            return RE::BSVisit::BSVisitControl::kContinue;
+        });
+        if (!best) { A.schlong.ok = false; return; }
+        const int stride = std::max(1, static_cast<int>(most / 1800));
+        A.schlong.Read(best, [](const V3&) { return true; }, stride);
+        A.schlong.cell = 0.8f;
+        A.schlongReadAt = Now();
+    }
+
+    // ------------------------------------------------------------------------------------------- spawning
+    Rope& NewRope(Actor& A, Type t, const float rgb[3]) {
+        A.ropes.emplace_back();
+        Rope& r = A.ropes.back();
+        r.type = t;
+        for (int i = 0; i < 3; ++i) r.rgb[i] = rgb[i];
+        return r;
+    }
+
+    void StartStrand(Actor& A, int lipIdx, float vol, const float rgb[3]) {
+        Rope& r = NewRope(A, Type::Strand, rgb);
+        r.lip = lipIdx; r.vol = vol; r.r0 = Radius(vol);
+        const V3 a = A.lip[lipIdx] + A.lipN * 0.04f;
+        const int n = 12;
+        for (int i = 0; i < n; ++i) { Pt p; p.x = p.xp = a + V3(0, 0, -0.03f * i); p.r = r.r0; r.p.push_back(p); }
+        r.p[0].pin = true;
+        r.rest.assign(n - 1, 0.03f);
+        r.life = 1e9f;
+    }
+
+    void StartRivulet(Actor& A, Surface& S, const V3& at, float vol, const float rgb[3], bool onSchlong, bool bead = false) {
+        const int s = S.Nearest(at, 2.5f);
+        if (s < 0) return;
+        Rope& r = NewRope(A, Type::Rivulet, rgb);
+        r.onSchlong = onSchlong;
+        r.vol = vol; r.r0 = Radius(vol) * (bead ? 1.1f : 1.0f);
+        r.head = S.wp[s] + S.wn[s] * 0.01f; r.headS = s;
+        r.path.push_back({s, r.head - S.wp[s], r.r0});
+        r.speed = (bead ? 0.05f : Rand(0.7f, 1.3f) * (1.4f - 0.9f * g.viscosity)) * g.flow;
+        r.bead = bead;
+        r.life = g.dry * (bead ? 0.6f : 1.0f) * Rand(0.85f, 1.15f);
+        r.wander = Rand(0.0f, 6.28f);
+    }
+
+    void SpawnFree(Actor& A, const V3& at, const V3& vel, float vol, const float rgb[3], int n = 3) {
+        Rope& r = NewRope(A, Type::Free, rgb);
+        r.vol = vol; r.r0 = Radius(vol);
+        const float h = 1.0f / 120.0f;
+        for (int i = 0; i < n; ++i) {
+            Pt p; p.x = at - Norm(vel) * (0.06f * i); p.xp = p.x - vel * h; p.r = r.r0 * (i == 0 ? 1.1f : 0.8f); r.p.push_back(p);
+        }
+        r.rest.assign(n - 1, 0.06f);
+        r.life = 9.0f;
+    }
+
+    // ------------------------------------------------------------------------------------------- simulation
+    struct Ctx { Actor* A; RE::Actor* a; Actor* partner = nullptr; };
+
+    V3 Anchor(const Actor& A, const Rope& r, const Actor* other) {
+        if (r.anchorSurf >= 0 && r.onSchlong && A.schlong.ok && static_cast<size_t>(r.anchorSurf) < A.schlong.wp.size())
+            return A.schlong.wp[r.anchorSurf] + A.schlong.wn[r.anchorSurf] * 0.03f;
+        if (r.lip >= 0 && r.lip < static_cast<int>(A.lip.size())) return A.lip[r.lip] + A.lipN * 0.04f;
+        (void)other;
+        return r.p.empty() ? V3{} : r.p[0].x;
+    }
+
+    void Collide(Surface& S, Pt& p, float stick) {
+        if (!g.collide || !S.ok || S.grid.empty()) return;
+        const int s = S.Nearest(p.x, p.r + 1.2f);
+        if (s < 0) { p.skin = std::max(0.0f, p.skin - 0.05f); return; }
+        const V3 n = S.wn[s];
+        const float d = Dot(p.x - S.wp[s], n);
+        const float want = p.r * 0.75f;
+        if (d < want && d > -2.5f) {
+            p.x += n * (want - d);
+            p.x += S.Moved(s);       // carried along with the skin
+            V3 vel = p.x - p.xp;
+            const float vn = Dot(vel, n);
+            V3 vt = vel - n * vn;
+            vt *= (1.0f - stick);
+            p.xp = p.x - vt - n * std::max(vn, 0.0f) * 0.2f;
+            p.skin = std::min(1.0f, p.skin + 0.1f);
+        } else p.skin = std::max(0.0f, p.skin - 0.05f);
+    }
+
+    void Verlet(Rope& r, float h, float drag) {
+        const V3 gv{0, 0, -g.gravity};
+        const float vmax = 300.0f * h;   // nothing moves faster than this (units / s) - keeps a bad frame from exploding
+        for (auto& p : r.p) {
+            if (p.pin) { p.xp = p.x; continue; }
+            V3 vel = (p.x - p.xp) * (1.0f - drag * h);
+            const float vl = Len(vel);
+            if (vl > vmax) vel *= vmax / vl;
+            p.xp = p.x;
+            p.x += vel + gv * (h * h);
+        }
+    }
+
+    void Constrain(Rope& r, int iters, float stiff, float plastic, float h) {
+        const size_t n = r.p.size();
+        if (n < 2) return;
+        for (int it = 0; it < iters; ++it)
+            for (size_t i = 0; i + 1 < n; ++i) {
+                Pt& a = r.p[i]; Pt& b = r.p[i + 1];
+                const V3 d = b.x - a.x;
+                const float L = Len(d);
+                if (L < 1e-6f) continue;
+                const float rest = r.rest[i];
+                const float wa = a.pin ? 0.0f : 1.0f, wb = b.pin ? 0.0f : 1.0f;
+                if (wa + wb <= 0.0f) continue;
+                const float c = (L - rest) / L * stiff / (wa + wb);
+                a.x += d * (c * wa);
+                b.x -= d * (c * wb);
+            }
+        // goo: a stretched strand slowly gets longer instead of springing back
+        if (plastic > 0.0f)
+            for (size_t i = 0; i + 1 < n; ++i) {
+                const float L = Len(r.p[i + 1].x - r.p[i].x);
+                if (L > r.rest[i]) r.rest[i] += (L - r.rest[i]) * std::min(1.0f, plastic * h);
+            }
+    }
+
+    void Land(Actor& A, Rope& r, Pt& p) {
+        p.x.z = A.floorZ + p.r * 0.5f;
+        p.xp = p.x;
+        if (!r.landed && r.type == Type::Free) {
+            r.landed = true;
+            r.life = std::min(r.life, r.age + 1.2f);
+            g_land.push_back({A.id, r.vol});
+        }
+    }
+
+    void StepStrand(Actor& A, Rope& r, float h, int sub) {
+        const V3 a = Anchor(A, r, nullptr);
+        r.p[0].x = r.p[0].xp = a;
+        // length: grows with the drip that is forming (Drip's phase), longer for more cum
+        if (r.grows) {
+            const float want = (0.25f + (g.maxLen * (0.35f + 0.25f * std::min(r.vol, 2.0f))) * r.phase) * (r.onSchlong ? 0.35f : 1.0f);
+            r.target = want;
+            const float per = std::max(r.target / static_cast<float>(r.p.size() - 1), 0.02f);
+            for (auto& x : r.rest) x += (per - x) * std::min(1.0f, h * 2.5f);
+        }
+        Verlet(r, h, 1.8f + 3.0f * g.viscosity);
+        Constrain(r, 2 + sub, 0.9f, 0.15f + 0.4f * (1.0f - g.viscosity), h);
+        for (size_t i = 1; i < r.p.size(); ++i) {
+            if (r.onSchlong) Collide(A.schlong, r.p[i], g.stick * 0.5f);
+            else Collide(A.body, r.p[i], g.stick * 0.6f);
+            if (r.p[i].x.z < A.floorZ + r.p[i].r) r.p[i].x.z = A.floorZ + r.p[i].r;
+        }
+        // thick at the lip, thin in the middle, a heavy bead at the end
+        const size_t n = r.p.size();
+        for (size_t i = 0; i < n; ++i) {
+            const float t = static_cast<float>(i) / static_cast<float>(n - 1);
+            const float top = 1.35f * std::exp(-t * 7.0f);
+            const float mid = 1.0f - 0.45f * std::sin(t * 3.14159f) * std::clamp(r.target / 4.0f, 0.0f, 1.0f);
+            const float end = (0.9f + 1.3f * r.phase) * std::exp(-std::pow((1.0f - t) / 0.12f, 2.0f));
+            r.p[i].r = r.r0 * std::max({mid, top, end});
+        }
+        // too long: the end tears off on its own
+        float L = 0;
+        for (size_t i = 0; i + 1 < n; ++i) L += Len(r.p[i + 1].x - r.p[i].x);
+        if (L > g.maxLen * 1.25f) r.dropNow = true;
+        if (r.holdFor > 0.0f && r.age > r.holdFor) r.dropNow = true;
+    }
+
+    // the end of a hanging strand drops off (a free drop), the strand springs back short
+    void DropOff(Actor& A, Rope& r, float amount) {
+        const size_t n = r.p.size();
+        if (n < 4) return;
+        const size_t cut = n * 2 / 3;
+        const V3 vel = (r.p[n - 1].x - r.p[n - 1].xp) * 120.0f;
+        float rgb[3] = {r.rgb[0], r.rgb[1], r.rgb[2]};
+        const V3 at = r.p[n - 1].x;
+        const V3 mid = r.p[cut].x;
+        Rope drop;
+        drop.type = Type::Free;
+        for (int i = 0; i < 3; ++i) drop.rgb[i] = rgb[i];
+        drop.vol = std::max(amount, 0.05f); drop.r0 = Radius(drop.vol) * 1.1f;
+        for (size_t i = cut; i < n; ++i) { Pt p = r.p[i]; p.pin = false; p.r = drop.r0 * (i == n - 1 ? 1.2f : 0.7f); drop.p.push_back(p); }
+        for (size_t i = 0; i + 1 < drop.p.size(); ++i) drop.rest.push_back(std::max(0.02f, Len(drop.p[i + 1].x - drop.p[i].x) * 0.6f));
+        drop.life = 9.0f;
+        (void)at; (void)vel; (void)mid;
+        // the strand: back to a short stub that starts growing again
+        const V3 a = r.p[0].x;
+        for (size_t i = 0; i < n; ++i) { r.p[i].x = r.p[i].xp = Lerp(a, r.p[std::min(i, cut)].x, 0.35f); }
+        for (auto& x : r.rest) x = 0.03f;
+        r.phase = 0.0f;
+        A.ropes.push_back(std::move(drop));
+    }
+
+    void StepString(Actor& A, Rope& r, Actor* P, float h, int sub) {
+        const V3 a = A.lipOk || !A.lip.empty() ? A.lip[A.lipLow] + A.lipN * 0.05f : r.p.front().x;
+        V3 b;
+        if (r.virtualPartner) b = r.vpStart + r.vpDir * std::min(r.age * 7.0f, 30.0f);
+        else if (P && P->tipOk) b = P->tip;
+        else { r.dead = true; return; }
+        r.p.front().x = r.p.front().xp = a;
+        r.p.back().x = r.p.back().xp = b;
+        const float D = Len(b - a);
+        if (r.age < 0.05f && D > r.breakAt * 0.7f) { r.dead = true; return; }   // already too far apart: no string
+        if (r.lenRest <= 0.0f) r.lenRest = D;
+        r.lenRest += (D - r.lenRest) * std::min(1.0f, h * (1.5f + 3.0f * (1.0f - g.viscosity)));
+        const float per = std::max(r.lenRest, 0.2f) / static_cast<float>(r.p.size() - 1);
+        for (auto& x : r.rest) x = per;
+        Verlet(r, h, 3.0f);
+        Constrain(r, 3 + sub, 0.8f, 0.0f, h);
+        for (size_t i = 1; i + 1 < r.p.size(); ++i) Collide(A.body, r.p[i], g.stick * 0.3f);
+        // thins as it is drawn out (the same cum over a longer string), beads up when thin
+        const float rr = std::sqrt(std::max(r.vol, 0.01f) * 0.02f / std::max(D, 0.3f)) * g.thick;
+        const size_t n = r.p.size();
+        for (size_t i = 0; i < n; ++i) {
+            const float t = static_cast<float>(i) / static_cast<float>(n - 1);
+            const float ends = 1.0f + 1.4f * (std::exp(-t * 9.0f) + std::exp(-(1.0f - t) * 9.0f));
+            const float bead = rr < 0.05f ? 1.0f + 0.6f * std::pow(std::max(0.0f, std::sin(t * 40.0f + r.age * 2.0f)), 8.0f) : 1.0f;
+            r.p[i].r = std::clamp(rr, 0.012f, 0.2f) * ends * bead;
+        }
+        if (D > r.breakAt || rr < 0.014f) {
+            // snap: each half springs back to its own end
+            const size_t mid = n / 2;
+            Rope lipHalf; lipHalf.type = Type::Strand; lipHalf.lip = A.lipLow; lipHalf.vol = r.vol * 0.5f; lipHalf.r0 = Radius(lipHalf.vol);
+            for (int i = 0; i < 3; ++i) lipHalf.rgb[i] = r.rgb[i];
+            for (size_t i = 0; i <= mid; ++i) lipHalf.p.push_back(r.p[i]);
+            lipHalf.p[0].pin = true;
+            for (size_t i = 0; i + 1 < lipHalf.p.size(); ++i) lipHalf.rest.push_back(0.12f);
+            lipHalf.phase = 0.6f; lipHalf.holdFor = Rand(3.0f, 7.0f); lipHalf.life = 1e9f;
+            A.ropes.push_back(std::move(lipHalf));
+            if (P && !r.virtualPartner) {
+                Rope tipHalf; tipHalf.type = Type::Strand; tipHalf.onSchlong = true; tipHalf.anchorSurf = P->tipSurf; tipHalf.vol = r.vol * 0.4f;
+                tipHalf.r0 = Radius(tipHalf.vol);
+                for (int i = 0; i < 3; ++i) tipHalf.rgb[i] = r.rgb[i];
+                for (size_t i = n - 1; i + 1 > mid; --i) tipHalf.p.push_back(r.p[i]);
+                tipHalf.p[0].pin = true;
+                for (size_t i = 0; i + 1 < tipHalf.p.size(); ++i) tipHalf.rest.push_back(0.1f);
+                tipHalf.phase = 0.5f; tipHalf.holdFor = Rand(2.0f, 5.0f); tipHalf.life = 1e9f;
+                if (tipHalf.anchorSurf >= 0) P->ropes.push_back(std::move(tipHalf));
+            }
+            r.dead = true;
+        }
+    }
+
+    void StepFree(Actor& A, Rope& r, float h, int sub) {
+        Verlet(r, h, 0.4f + 1.5f * g.viscosity);
+        Constrain(r, 1 + sub, 0.5f, 0.3f, h);
+        bool touching = false;
+        for (auto& p : r.p) {
+            Collide(A.body, p, g.stick);
+            if (p.skin > 0.5f) touching = true;
+            if (p.x.z < A.floorZ + p.r) Land(A, r, p);
+        }
+        // stuck on the skin and slowed down: it runs down him from here
+        if (touching && !r.landed) {
+            r.onSkin += h;
+            const float sp = Len(r.p[0].x - r.p[0].xp) / h;
+            if (r.onSkin > 0.25f && sp < 30.0f && A.body.ok) {
+                int rivs = 0; for (auto& o : A.ropes) if (o.type == Type::Rivulet && !o.dead) ++rivs;
+                if (rivs < g.maxPieces / 2) StartRivulet(A, A.body, r.p[0].x, r.vol, r.rgb, false);
+                r.dead = true;
+            }
+        } else r.onSkin = 0.0f;
+        // pieces of a stream pull apart into drops
+        for (size_t i = 0; i + 1 < r.p.size(); ++i)
+            if (Len(r.p[i + 1].x - r.p[i].x) > std::max(r.rest[i] * 3.0f, 0.6f) && r.p.size() > 3) {
+                Rope tail; tail.type = Type::Free; tail.vol = r.vol * 0.5f; tail.r0 = r.r0; tail.life = r.life; tail.age = r.age;
+                for (int c = 0; c < 3; ++c) tail.rgb[c] = r.rgb[c];
+                tail.p.assign(r.p.begin() + static_cast<long>(i) + 1, r.p.end());
+                tail.rest.assign(r.rest.begin() + static_cast<long>(i) + 1, r.rest.end());
+                r.p.resize(i + 1); r.rest.resize(i); r.vol *= 0.5f;
+                if (tail.p.size() >= 2) A.ropes.push_back(std::move(tail));
+                break;
+            }
+    }
+
+    void StepRivulet(Actor& A, Rope& r, float h) {
+        Surface& S = r.onSchlong ? A.schlong : A.body;
+        if (!S.ok || S.wp.empty()) { r.dead = true; return; }
+        // carried with the skin
+        for (auto& sp : r.path) if (sp.s < 0 || static_cast<size_t>(sp.s) >= S.wp.size()) sp.s = -1;
+        if (r.headS >= 0 && static_cast<size_t>(r.headS) < S.wp.size()) r.head += S.Moved(r.headS);
+        if (!r.stopped && r.vol > 0.005f) {
+            const int s = S.Nearest(r.head, 1.5f);
+            if (s < 0) {   // ran off the edge: it falls
+                SpawnFree(A, r.head, V3(0, 0, -8), r.vol, r.rgb, 3);
+                r.stopped = true;
+            } else {
+                const V3 n = S.wn[s];
+                const V3 gdir{0, 0, -1};
+                V3 gt = gdir - n * Dot(gdir, n);
+                const float steep = Len(gt);
+                r.wander += h * Rand(-3.0f, 3.0f);
+                const V3 side = Norm(Cross(n, Norm(gt, {0, 0, -1})), {1, 0, 0});
+                const V3 dir = Norm(Norm(gt, {0, 0, -1}) + side * (0.35f * std::sin(r.wander)), {0, 0, -1});
+                const float sp = r.speed * (1.5f + 3.5f * steep) * std::clamp(0.4f + r.vol, 0.3f, 1.6f) * (r.onSchlong ? 0.5f : 1.0f);
+                V3 q = r.head + dir * (sp * h);
+                const int s2 = S.Nearest(q, 1.5f);
+                if (s2 >= 0) {
+                    const V3 n2 = S.wn[s2];
+                    q = q - n2 * (Dot(q - S.wp[s2], n2) - 0.012f);
+                    r.head = q; r.headS = s2;
+                }
+                const SurfPt& last = r.path.back();
+                const V3 lastW = (last.s >= 0 ? S.wp[last.s] : V3{}) + last.off;
+                if (Len(r.head - lastW) > (r.bead ? 0.1f : 0.45f)) {
+                    r.path.push_back({r.headS, r.head - S.wp[r.headS], r.r0});
+                    r.vol -= r.drain > 0.0f ? r.drain : 0.006f;   // leaves a film behind it
+                }
+                if (r.path.size() > 64) {   // keep it light: thin out the old part of the trail
+                    std::vector<SurfPt> keep;
+                    for (size_t i = 0; i < r.path.size(); ++i) if (i % 2 == 0 || i + 8 > r.path.size()) keep.push_back(r.path[i]);
+                    r.path.swap(keep);
+                }
+                if (r.head.z < A.floorZ + 0.5f) { r.stopped = true; g_land.push_back({A.id, r.vol}); r.vol = 0.0f; }
+            }
+            if (r.bead && r.age > 2.0f) r.stopped = true;
+        }
+        if (r.vol <= 0.005f) r.stopped = true;
+    }
+
+    // ------------------------------------------------------------------------------------------- emitters
+    void StepEmitter(Actor& A, Emitter& e, float h) {
+        using K = Fluid::Kind;
+        e.t += h;
+        if (A.lip.empty()) return;
+        const V3 down{0, 0, -1};
+        switch (e.kind) {
+            case K::Squirt:
+            case K::Land: {
+                // pulses out of the open hole: a thick stream that pulls apart into drops
+                const float pulseLen = e.kind == K::Land ? 0.18f : 0.32f, gap = 0.22f;
+                const float cyc = pulseLen + gap;
+                const int pulse = static_cast<int>(e.t / cyc);
+                if (pulse >= e.pulses) { e.dur = 0.0f; break; }
+                const float inPulse = e.t - pulse * cyc;
+                if (inPulse > pulseLen) { e.rope = -1; break; }
+                const float strength = (pulse == 0 ? 1.0f : 0.6f) * std::clamp(0.6f + e.amount, 0.6f, 2.0f);
+                const float speed = (e.kind == K::Land ? 18.0f : 55.0f) * strength * Rand(0.9f, 1.1f);
+                const V3 dir = Norm(A.lipN * 0.85f + down * 0.35f + V3(Rand(-0.08f, 0.08f), Rand(-0.08f, 0.08f), Rand(-0.05f, 0.05f)));
+                e.acc += h;
+                const float every = 1.0f / 75.0f;
+                while (e.acc >= every) {
+                    e.acc -= every;
+                    if (e.rope < 0 || e.rope >= static_cast<int>(A.ropes.size()) || A.ropes[e.rope].p.size() >= 14 || A.ropes[e.rope].type != Type::Free) {
+                        Rope& r = NewRope(A, Type::Free, e.rgb);
+                        r.vol = e.amount * 0.2f; r.r0 = Radius(e.amount) * 1.1f; r.life = 9.0f;
+                        e.rope = static_cast<int>(A.ropes.size()) - 1;
+                    }
+                    Rope& r = A.ropes[e.rope];
+                    Pt p; p.x = A.lipC + A.lipN * 0.15f; p.xp = p.x - dir * (speed / 120.0f);
+                    p.r = r.r0 * Rand(0.8f, 1.15f) * (inPulse < 0.05f ? 1.3f : 1.0f);
+                    if (!r.p.empty()) r.rest.push_back(std::max(0.05f, speed * every * 0.9f));
+                    r.p.push_back(p);
+                }
+                break;
+            }
+            case K::Spray: {
+                // something is inside him: it squirts out AROUND the shaft, from all round the stretched lip
+                if (e.t > 0.45f) { e.dur = 0.0f; break; }
+                e.acc += h;
+                const float every = 1.0f / 40.0f;
+                while (e.acc >= every) {
+                    e.acc -= every;
+                    const int k = static_cast<int>(Rand(0.0f, static_cast<float>(A.lip.size()) - 0.01f));
+                    const V3 radial = Norm(A.lip[k] - A.lipC, down);
+                    const V3 v = (radial * 0.75f + A.lipN * 0.55f + down * 0.2f) * (Rand(18.0f, 38.0f) * std::clamp(0.6f + e.amount, 0.6f, 1.8f));
+                    SpawnFree(A, A.lip[k] + radial * 0.15f + A.lipN * 0.1f, v, e.amount * 0.08f, e.rgb, 2);
+                }
+                break;
+            }
+            case K::Ooze:
+            case K::Gush: {
+                // runs out of the bottom of the lip (around him if he is still in) and down the skin
+                if (!e.spawned) {
+                    e.spawned = true;
+                    const bool gush = e.kind == K::Gush;
+                    const int n = gush ? 3 : 1 + (e.amount > 0.4f ? 1 : 0);
+                    for (int i = 0; i < n; ++i) {
+                        const int k = (A.lipLow + static_cast<int>(Rand(-3.0f, 3.0f)) + static_cast<int>(A.lip.size())) % static_cast<int>(A.lip.size());
+                        StartStrand(A, k, e.amount * (gush ? 0.6f : 0.8f), e.rgb);
+                        Rope& r = A.ropes.back();
+                        r.phase = 0.4f; r.holdFor = std::max(1.5f, e.hold * Rand(0.6f, 1.0f)); r.grows = true;
+                        if (A.body.ok) StartRivulet(A, A.body, A.lip[k] + down * 0.4f, e.amount * (gush ? 0.5f : 0.35f), e.rgb, false);
+                    }
+                    if (gush) for (int i = 0; i < 3; ++i)
+                        SpawnFree(A, A.lip[A.lipLow] + A.lipN * 0.2f, (A.lipN * 6.0f + down * 4.0f) * Rand(0.6f, 1.4f), e.amount * 0.15f, e.rgb, 3);
+                }
+                e.dur = 0.0f;
+                break;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------- per-man upkeep
+    void Wanted(Actor& A, double now, float h) {
+        // hanging strands: how many and how big comes from how much is in him
+        int strands = 0;
+        for (auto& r : A.ropes) if (r.type == Type::Strand && r.lip >= 0 && r.holdFor <= 0.0f && !r.dead) ++strands;
+        const int want = A.hang <= 0.01f ? 0 : (A.hang < 1.5f ? 1 : (A.hang < 3.0f ? 2 : 3));
+        if (strands < want && !A.lip.empty()) {
+            const int off[3] = {0, 3, -3};
+            const int k = (A.lipLow + off[strands] + static_cast<int>(A.lip.size())) % static_cast<int>(A.lip.size());
+            StartStrand(A, k, std::min(A.hang, 2.5f) * (strands == 0 ? 0.5f : 0.3f), A.hangRgb);
+        }
+        int seen = 0;
+        for (auto& r : A.ropes) {
+            if (r.type != Type::Strand || r.lip < 0 || r.holdFor > 0.0f || r.dead) continue;
+            if (seen++ >= want) { r.holdFor = r.age + 0.5f; continue; }
+            r.phase = std::clamp(A.hangPhase * (seen == 1 ? 1.0f : 0.7f), 0.0f, 1.0f);
+            for (int i = 0; i < 3; ++i) r.rgb[i] = A.hangRgb[i];
+        }
+        // leg trail: rivulets started one after another (1-3)
+        if (A.trail > 0.05f && A.body.ok && !A.lip.empty()) {
+            int rivs = 0;
+            for (auto& r : A.ropes) if (r.type == Type::Rivulet && !r.bead && !r.onSchlong && !r.dead) ++rivs;
+            const float target = std::min(3.0f, A.trail);
+            if (A.trailDone < target - 0.3f && rivs < 4) {
+                const int k = (A.lipLow + (A.trailSide == 1 ? 2 : -2) + static_cast<int>(A.lip.size())) % static_cast<int>(A.lip.size());
+                StartRivulet(A, A.body, A.lip[k] + V3(0, 0, -0.5f), 0.35f + 0.15f * target, A.trailRgb, false);
+                if (!A.ropes.empty() && A.ropes.back().type == Type::Rivulet) {
+                    A.ropes.back().life = g.dry * 3.0f;
+                    A.ropes.back().drain = 0.004f;
+                }
+                A.trailDone += 1.0f;
+            }
+        }
+        // wet film: small beads on the skin around the hole
+        if (g.wetFilm && A.body.ok && !A.lip.empty()) {
+            int beads = 0;
+            for (auto& r : A.ropes) if (r.bead && !r.dead) ++beads;
+            const int wantB = static_cast<int>(std::round(A.wet * 7.0f));
+            if (beads < wantB && Rand(0.0f, 1.0f) < h * 4.0f) {
+                const float ang = Rand(0.0f, 6.2831853f);
+                const V3 e1 = Norm(Cross(A.lipN, {0, 0, 1}), {1, 0, 0}), e2 = Cross(A.lipN, e1);
+                const float rad = A.lipR + Rand(0.25f, 1.6f);
+                StartRivulet(A, A.body, A.lipC + e1 * (std::cos(ang) * rad) + e2 * (std::sin(ang) * rad), Rand(0.02f, 0.06f) * (0.5f + A.wet), A.wetRgb, false, true);
+            }
+        }
+        // a coated schlong: streaks running down him, and now and then a drip off the tip
+        if (A.coatLeft > 0.0f && A.coat > 0.05f && A.schlong.ok) {
+            int streaks = 0, drips = 0;
+            for (auto& r : A.ropes) if (r.onSchlong && !r.dead) (r.type == Type::Rivulet ? streaks : drips)++;
+            if (streaks < static_cast<int>(1 + 3 * std::min(A.coat, 1.0f)) && Rand(0.0f, 1.0f) < h * 2.0f && A.tipOk) {
+                const int s = static_cast<int>(Rand(0.0f, static_cast<float>(A.schlong.wp.size()) - 0.01f));
+                const V3 p = A.schlong.wp[s];
+                if (Dot(p - A.tip, A.tipAxis) > -4.0f) StartRivulet(A, A.schlong, p, Rand(0.04f, 0.1f) * A.coat, A.coatRgb, true);
+            }
+            if (drips == 0 && now > A.coatDrip && A.tipOk && A.tipSurf >= 0 && A.coatLeft > 0.25f) {
+                Rope& r = NewRope(A, Type::Strand, A.coatRgb);
+                r.onSchlong = true; r.anchorSurf = A.tipSurf; r.vol = 0.15f * A.coat; r.r0 = Radius(r.vol);
+                const V3 a = A.tip;
+                for (int i = 0; i < 8; ++i) { Pt p; p.x = p.xp = a + V3(0, 0, -0.02f * i); p.r = r.r0; r.p.push_back(p); }
+                r.p[0].pin = true; r.rest.assign(7, 0.02f);
+                r.phase = 0.0f; r.holdFor = Rand(3.0f, 7.0f); r.life = 1e9f;
+                A.coatDrip = now + Rand(6.0f, 14.0f);
+            }
+        }
+    }
+
+    // the drip of a strand forming over its hold time (strands that are not driven by Drip)
+    void SelfGrow(Rope& r, float h) {
+        if (r.type == Type::Strand && r.holdFor > 0.0f && r.phase < 1.0f) r.phase = std::min(1.0f, r.phase + h / std::max(r.holdFor, 0.5f));
+    }
+
+    // ------------------------------------------------------------------------------------------- gloss (NiOverride)
+    void Gloss(RE::Actor* a, const char* node, float gloss, float spec, bool remove) {
+        auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+        if (!vm || !a) return;
+        RE::TESObjectREFR* ref = a;
+        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb;
+        if (remove) {
+            for (std::int32_t key : {2, 3}) {
+                auto* args = RE::MakeFunctionArguments(std::move(ref), false, RE::BSFixedString(node), std::move(key), static_cast<std::int32_t>(-1));
+                vm->DispatchStaticCall("NiOverride", "RemoveNodeOverride", args, cb);
+                ref = a;
+            }
+            return;
+        }
+        auto* a1 = RE::MakeFunctionArguments(std::move(ref), false, RE::BSFixedString(node), static_cast<std::int32_t>(2), static_cast<std::int32_t>(-1), std::move(gloss), false);
+        vm->DispatchStaticCall("NiOverride", "AddNodeOverrideFloat", a1, cb);
+        ref = a;
+        auto* a2 = RE::MakeFunctionArguments(std::move(ref), false, RE::BSFixedString(node), static_cast<std::int32_t>(3), static_cast<std::int32_t>(-1), std::move(spec), false);
+        vm->DispatchStaticCall("NiOverride", "AddNodeOverrideFloat", a2, cb);
+    }
+    std::vector<std::string> SchlongShapes(RE::Actor* a) {
+        std::vector<std::string> out;
+        const auto& biped = a->GetBiped2();
+        RE::NiAVObject* obj = biped ? biped->objects[RE::BIPED_OBJECTS::kModPelvisSecondary].partClone.get() : nullptr;
+        if (obj) RE::BSVisit::TraverseScenegraphGeometries(obj, [&](RE::BSGeometry* geo) {
+            if (!geo->name.empty() && out.size() < 8) out.emplace_back(geo->name.c_str());
+            return RE::BSVisit::BSVisitControl::kContinue;
+        });
+        return out;
+    }
+    void UpdateGloss(Actor& A, RE::Actor* a) {
+        const float w = std::clamp(A.wet, 0.0f, 1.0f);
+        const float q = std::round(w * 40.0f) / 40.0f;
+        // sent again every few seconds while on: the colour script clears old gloss once per session
+        if (Now() - A.glossAt > 5.0) { A.glossAt = Now(); if (A.glossSent > 0.0f) A.glossSent = -1.0f; if (A.sglossSent > 0.0f) A.sglossSent = -1.0f; }
+        if (std::abs(q - A.glossSent) > 0.01f) {
+            const bool off = q <= 0.0f;
+            for (const char* nd : {"3BA_AnusRim", "3BA_Anus"}) Gloss(a, nd, 30.0f + 90.0f * q, (3.0f + 7.0f * q) * g.shine, off);
+            A.glossSent = q;
+        }
+        const float sc = g.coatShine ? std::clamp(A.coatLeft, 0.0f, 1.0f) : 0.0f;
+        const float sq = std::round(sc * 20.0f) / 20.0f;
+        if (std::abs(sq - A.sglossSent) > 0.01f) {
+            const bool off = sq <= 0.0f;
+            for (auto& nm : SchlongShapes(a)) Gloss(a, nm.c_str(), 30.0f + 100.0f * sq, (2.0f + 7.0f * sq) * g.shine, off);
+            A.sglossSent = sq;
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------- the frame
+    void DrawRope(Actor& A, Rope& r, Visual& v) {
+        std::vector<V3> pts; std::vector<float> rad;
+        std::vector<V3> nrm;
+        const bool flat = r.type == Type::Rivulet;
+        if (flat) {
+            Surface& S = r.onSchlong ? A.schlong : A.body;
+            const size_t n = r.path.size();
+            for (size_t i = 0; i < n; ++i) {
+                const auto& sp = r.path[i];
+                if (sp.s < 0 || static_cast<size_t>(sp.s) >= S.wp.size()) continue;
+                pts.push_back(S.wp[sp.s] + sp.off);
+                nrm.push_back(S.wn[sp.s]);
+                // a thin wet line behind, the drop itself at the head
+                const float t = n > 1 ? static_cast<float>(i) / static_cast<float>(n - 1) : 1.0f;
+                rad.push_back(r.r0 * (r.bead ? 1.0f : (0.45f + 0.35f * t)));
+            }
+            if (!r.stopped && r.headS >= 0 && !pts.empty()) {
+                pts.push_back(r.head); nrm.push_back(S.wn[r.headS]); rad.push_back(r.r0 * (r.bead ? 1.0f : 1.5f));
+            }
+            if (pts.size() == 1) { pts.push_back(pts[0] + V3(0, 0, -0.06f)); nrm.push_back(nrm[0]); rad.push_back(rad[0]); }
+        } else {
+            for (auto& p : r.p) { pts.push_back(p.x); rad.push_back(p.r); }
+        }
+        if (pts.size() < 2) { v.root->GetFlags().set(RE::NiAVObject::Flag::kHidden); v.shown = false; return; }
+        V3 P[kBones]; float R[kBones]; V3 N[kBones];
+        Resample(pts, rad, P, R);
+        for (int k = 0; k < kBones; ++k)
+            if (!std::isfinite(P[k].x) || !std::isfinite(P[k].y) || !std::isfinite(P[k].z) || !std::isfinite(R[k])) {
+                v.root->GetFlags().set(RE::NiAVObject::Flag::kHidden); v.shown = false; return;
+            }
+        if (flat) {
+            const std::vector<V3>& np = nrm;
+            // normals follow the same resampling (nearest point)
+            for (int k = 0; k < kBones; ++k) {
+                float best = 1e9f; int bi = 0;
+                for (size_t i = 0; i < pts.size(); ++i) { const float d = Len(pts[i] - P[k]); if (d < best) { best = d; bi = static_cast<int>(i); } }
+                N[k] = np[bi];
+            }
+        }
+        SetLook(v, r.rgb);
+        Pose(A, v, P, R, flat ? N : nullptr, r.alpha);
+    }
+
+    void Draw(Actor& A) {
+        // the newest pieces win when there are more than we draw
+        std::vector<int> order;
+        for (int i = static_cast<int>(A.ropes.size()) - 1; i >= 0; --i) if (!A.ropes[i].dead) order.push_back(i);
+        int used[2] = {0, 0};
+        std::vector<int> slot(A.ropes.size(), -1);
+        for (int i : order) {
+            const int kind = A.ropes[i].type == Type::Rivulet ? 1 : 0;
+            if (used[0] + used[1] >= g.maxPieces) break;
+            if (used[kind] >= static_cast<int>(A.vis[kind].size())) {
+                if (!MakeVisual(A, kind == 1)) continue;
+            }
+            slot[i] = used[kind]++;
+        }
+        for (size_t i = 0; i < A.ropes.size(); ++i) {
+            if (slot[i] < 0) continue;
+            const int kind = A.ropes[i].type == Type::Rivulet ? 1 : 0;
+            DrawRope(A, A.ropes[i], A.vis[kind][slot[i]]);
+        }
+        for (int k = 0; k < 2; ++k)
+            for (size_t j = static_cast<size_t>(used[k]); j < A.vis[k].size(); ++j)
+                if (A.vis[k][j].shown) { A.vis[k][j].root->GetFlags().set(RE::NiAVObject::Flag::kHidden); A.vis[k][j].shown = false; }
+    }
+
+    void Tick() {
+        g_queued = false;
+        const double now = Now();
+        float dt = g_lastTick > 0.0 ? static_cast<float>(now - g_lastTick) : 0.0f;
+        g_lastTick = now;
+        if (dt <= 0.0f) return;
+        dt = std::min(dt, 0.05f);
+        if (!g_tplTried) {
+            g_tplTried = true;
+            g_tplRope = LoadModel(kRopeNif);
+            g_tplRiv = LoadModel(kRivNif);
+            logger::info("Anatomica fluid: templates {} / {}", g_tplRope ? "ok" : "MISSING", g_tplRiv ? "ok" : "MISSING");
+        }
+        // wetness and coated schlongs come from the colour code (after-sex looks)
+        std::vector<Colour::WetInfo> wet;
+        bool polled = false;
+        if (now - g_lastWetPoll > 0.5) { g_lastWetPoll = now; wet = Colour::WetNow(); polled = true; }
+        std::lock_guard lk(g_mx);
+        if (polled) {
+            for (auto& [id, A] : g_act) A.wet = 0.0f;
+            for (auto& w : wet) {
+                if (w.wet <= 0.0f) continue;
+                auto& A = Get(w.id);
+                A.wet = w.wet;
+                for (int i = 0; i < 3; ++i) A.wetRgb[i] = w.rgb[i];
+            }
+        }
+        const int sub = std::clamp(g.quality, 1, 3);
+        const float h = dt / static_cast<float>(sub);
+        for (auto it = g_act.begin(); it != g_act.end();) {
+            Actor& A = it->second;
+            auto* a = RE::TESForm::LookupByID<RE::Actor>(A.id);
+            auto* root = a && a->Is3DLoaded() ? a->Get3D(false) : nullptr;
+            const bool anything = !A.ropes.empty() || !A.emit.empty() || A.hang > 0.01f || A.trail > 0.05f || A.wet > 0.01f || A.coatLeft > 0.0f || A.tipTrack > 0.0f ||
+                                  A.glossSent > 0.0f || A.sglossSent > 0.0f;
+            if (!a || !root || !g.on) {
+                if (A.root3D && A.root3D != root) DropVisuals(A);
+                A.root3D = root;
+                A.ropes.clear(); A.emit.clear();
+                if (!anything || !a) { it = g_act.erase(it); continue; }
+                ++it;
+                continue;
+            }
+            if (!anything) { DropVisuals(A); it = g_act.erase(it); continue; }
+            if (A.root3D != root) { DropVisuals(A); A.root3D = root; A.body.ok = false; A.rim.ok = false; A.schlong.ok = false; }
+            // surfaces: re-read the mesh now and then (morphs / outfit changes), pose every frame
+            const bool needBody = !A.ropes.empty() || !A.emit.empty() || A.hang > 0.01f || A.trail > 0.05f || A.wet > 0.01f;
+            if (needBody) {
+                if (!A.body.ok || now - A.bodyReadAt > 6.0) {
+                    if (auto* bg = BodyGeo(a, root)) {
+                        // around the hips and down the legs, behind and between
+                        A.body.Read(bg, [](const V3& p) { return p.z > 18.0f && p.z < 82.0f && p.y < 9.0f; }, 2);
+                    }
+                    A.bodyReadAt = now;
+                }
+                if (A.body.ok) A.body.Pose();
+                UpdateLip(A, a, root);
+            }
+            if (A.coatLeft > 0.0f || A.tipTrack > 0.0f) {
+                if (!A.schlong.ok || now - A.schlongReadAt > 6.0) ReadSchlong(A, a);
+                if (A.schlong.ok) A.schlong.Pose();
+                TipOf(a, A);
+                A.coatLeft = std::max(0.0f, A.coatLeft - dt / std::max(A.coatSecs, 5.0f));
+                A.tipTrack = std::max(0.0f, A.tipTrack - dt);
+            } else A.tipOk = false;
+            UpdateGloss(A, a);
+            A.ropes.reserve(A.ropes.size() + 256);   // pieces born during the step never move the ones being stepped
+            Wanted(A, now, dt);
+            for (int s = 0; s < sub; ++s) {
+                for (auto& e : A.emit) StepEmitter(A, e, h);
+                const size_t n = A.ropes.size();
+                for (size_t i = 0; i < n; ++i) {
+                    Rope& r = A.ropes[i];
+                    if (r.dead) continue;
+                    switch (r.type) {
+                        case Type::Strand:
+                            if (r.onSchlong && (!A.schlong.ok || r.anchorSurf < 0)) { r.dead = true; break; }
+                            if (!r.onSchlong && A.lip.empty()) { r.dead = true; break; }
+                            SelfGrow(r, h);
+                            StepStrand(A, r, h, sub);
+                            if (r.dropNow) {
+                                r.dropNow = false;
+                                const bool last = r.holdFor > 0.0f;
+                                DropOff(A, A.ropes[i], A.ropes[i].vol * 0.6f);
+                                if (last) A.ropes[i].dead = true;
+                            }
+                            break;
+                        case Type::String: {
+                            Actor* P = nullptr;
+                            if (!r.virtualPartner) {
+                                auto pit = g_act.find(r.partner);
+                                if (pit != g_act.end()) P = &pit->second;
+                            }
+                            StepString(A, r, P, h, sub);
+                            break;
+                        }
+                        case Type::Free: StepFree(A, r, h, sub); break;
+                        case Type::Rivulet: StepRivulet(A, r, h); break;
+                    }
+                }
+            }
+            A.emit.erase(std::remove_if(A.emit.begin(), A.emit.end(), [](const Emitter& e) { return e.dur <= 0.0f || e.t > 6.0f; }), A.emit.end());
+            // age, dry, fade
+            for (auto& r : A.ropes) {
+                r.age += dt;
+                if (r.type == Type::Rivulet) {
+                    const float dryT = r.life;
+                    r.alpha = std::clamp(1.0f - (r.age - dryT * 0.6f) / std::max(dryT * 0.4f, 1.0f), 0.0f, 1.0f) * (r.bead ? std::clamp(0.4f + A.wet, 0.4f, 1.0f) : 1.0f);
+                    if (r.age > dryT) r.dead = true;
+                    if (r.bead && A.wet < 0.02f && r.age > 3.0f) r.life = std::min(r.life, r.age + 4.0f);
+                } else {
+                    if (r.age > r.life) r.dead = true;
+                    r.alpha = std::clamp((r.life - r.age) / 0.6f, 0.0f, 1.0f);
+                }
+                for (auto& p : r.p) if (!std::isfinite(p.x.x) || !std::isfinite(p.x.y) || !std::isfinite(p.x.z) || (r.type == Type::Free && Len(p.x - A.lipC) > 300.0f)) r.dead = true;
+                if (r.type == Type::Rivulet && !std::isfinite(r.head.x)) r.dead = true;
+            }
+            A.ropes.erase(std::remove_if(A.ropes.begin(), A.ropes.end(), [](const Rope& r) { return r.dead; }), A.ropes.end());
+            if (A.ropes.size() > 80) A.ropes.erase(A.ropes.begin(), A.ropes.begin() + static_cast<long>(A.ropes.size() - 80));
+            Draw(A);
+            A.lastSeen = now;
+            ++it;
+        }
+    }
+
+    void Loop() {
+        for (;;) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(6));
+            {
+                std::lock_guard lk(g_mx);
+                if (g_act.empty()) { g_lastTick = 0.0; continue; }
+            }
+            auto* ui = RE::UI::GetSingleton();
+            if (ui && ui->GameIsPaused()) { g_lastTick = 0.0; continue; }
+            if (g_queued.exchange(true)) continue;
+            if (auto* t = SKSE::GetTaskInterface()) t->AddTask([]() { Tick(); });
+            else g_queued = false;
+        }
+    }
+
+    void Help(const char* t) {
+        ImGuiMCP::SameLine();
+        ImGuiMCP::TextDisabled("(?)");
+        if (ImGuiMCP::IsItemHovered()) { ImGuiMCP::BeginTooltip(); ImGuiMCP::PushTextWrapPos(420.0f); ImGuiMCP::TextUnformatted(t); ImGuiMCP::PopTextWrapPos(); ImGuiMCP::EndTooltip(); }
+    }
+}
+
+namespace Fluid {
+    void Install() { std::thread(Loop).detach(); }
+
+    void Reset() {
+        std::lock_guard lk(g_mx);
+        for (auto& [id, A] : g_act) DropVisuals(A);
+        g_texCache.clear();
+        g_act.clear();
+        g_land.clear();
+    }
+
+    void Hang(RE::FormID id, float amount, float phase, const float rgb[3]) {
+        std::lock_guard lk(g_mx);
+        if (amount <= 0.01f && g_act.find(id) == g_act.end()) return;
+        auto& A = Get(id);
+        A.hang = amount; A.hangPhase = std::clamp(phase, 0.0f, 1.0f);
+        for (int i = 0; i < 3; ++i) A.hangRgb[i] = rgb[i];
+    }
+    void Release(RE::FormID id, float amount) {
+        std::lock_guard lk(g_mx);
+        auto it = g_act.find(id);
+        if (it == g_act.end()) { g_land.push_back({id, amount}); return; }
+        Actor& A = it->second;
+        for (auto& r : A.ropes)
+            if (r.type == Type::Strand && r.lip >= 0 && r.holdFor <= 0.0f && !r.dead) {
+                r.vol = std::max(r.vol, amount);
+                r.dropNow = true;   // drops off on the next step
+                return;
+            }
+        g_land.push_back({id, amount});   // nothing hanging (not loaded): straight to a puddle
+    }
+    void Squirt(RE::FormID id, float amount, const float rgb[3], Kind kind, float hold) {
+        std::lock_guard lk(g_mx);
+        auto& A = Get(id);
+        Emitter e;
+        e.kind = kind; e.amount = amount; e.hold = hold;
+        e.dur = 1.0f; e.pulses = kind == Kind::Land ? 1 : (amount > 0.5f ? 3 : 2);
+        for (int i = 0; i < 3; ++i) e.rgb[i] = rgb[i];
+        A.emit.push_back(e);
+    }
+    void String(RE::FormID id, RE::FormID partner, const float rgb[3]) {
+        std::lock_guard lk(g_mx);
+        auto& A = Get(id);
+        auto& P = Get(partner);
+        P.tipTrack = 30.0f;   // keep his tip tracked while the string lasts
+        Rope r;
+        r.type = Type::String; r.partner = partner; r.vol = 0.35f;
+        for (int i = 0; i < 3; ++i) r.rgb[i] = rgb[i];
+        r.breakAt = g.breakDist * Rand(0.7f, 1.3f);
+        const V3 a = A.lip.empty() ? V3{} : A.lipC;
+        for (int i = 0; i < 16; ++i) { Pt p; p.x = p.xp = a; p.r = 0.05f; r.p.push_back(p); }
+        r.p.front().pin = r.p.back().pin = true;
+        r.rest.assign(15, 0.02f);
+        r.life = 30.0f;
+        A.ropes.push_back(std::move(r));
+    }
+    bool TestString(RE::Actor* a, const float rgb[3]) {
+        if (!a) return false;
+        std::lock_guard lk(g_mx);
+        auto& A = Get(a->GetFormID());
+        Rope r;
+        r.type = Type::String; r.virtualPartner = true; r.vol = 0.35f;
+        for (int i = 0; i < 3; ++i) r.rgb[i] = rgb[i];
+        r.breakAt = g.breakDist * Rand(0.7f, 1.3f);
+        if (A.lip.empty()) {   // not posed yet: start from his pelvis
+            auto* root = a->Get3D(false);
+            auto* pel = root ? root->GetObjectByName(RE::BSFixedString("NPC Pelvis [Pelv]")) : nullptr;
+            if (!pel) return false;
+            const Xf P(pel->world);
+            r.vpStart = P.Apply(V3(0, -5.6f, -6.4f));
+            r.vpDir = Norm(P.Rot(V3(0, -0.9f, -0.2f)));
+        } else {
+            r.vpStart = A.lipC + A.lipN * 0.3f;
+            r.vpDir = Norm(A.lipN + V3(0, 0, 0.3f));
+        }
+        for (int i = 0; i < 16; ++i) { Pt p; p.x = p.xp = r.vpStart; p.r = 0.05f; r.p.push_back(p); }
+        r.p.front().pin = r.p.back().pin = true;
+        r.rest.assign(15, 0.02f);
+        r.life = 20.0f;
+        A.ropes.push_back(std::move(r));
+        A.hang = std::max(A.hang, 0.0f);
+        return true;
+    }
+    void Trail(RE::FormID id, float level, int side, const float rgb[3]) {
+        std::lock_guard lk(g_mx);
+        if (level <= 0.05f) {
+            auto it = g_act.find(id);
+            if (it == g_act.end()) return;
+            it->second.trail = 0.0f; it->second.trailDone = 0.0f;
+            return;
+        }
+        auto& A = Get(id);
+        A.trail = level; A.trailSide = side;
+        for (int i = 0; i < 3; ++i) A.trailRgb[i] = rgb[i];
+    }
+    void Coat(RE::FormID giver, float amount, const float rgb[3], float seconds) {
+        std::lock_guard lk(g_mx);
+        auto& A = Get(giver);
+        A.coat = std::clamp(amount, 0.1f, 1.5f);
+        A.coatLeft = 1.0f; A.coatSecs = std::max(seconds, 10.0f);
+        for (int i = 0; i < 3; ++i) A.coatRgb[i] = rgb[i];
+        A.coatDrip = Now() + 1.5;
+        A.tipOk = true;
+    }
+    void Clear(RE::FormID id) {
+        std::lock_guard lk(g_mx);
+        auto it = g_act.find(id);
+        if (it == g_act.end()) return;
+        auto& A = it->second;
+        A.ropes.clear(); A.emit.clear();
+        A.hang = 0.0f; A.trail = 0.0f; A.trailDone = 0.0f; A.coatLeft = 0.0f; A.coat = 0.0f; A.tipOk = false;
+    }
+    bool Busy(RE::FormID id) {
+        std::lock_guard lk(g_mx);
+        auto it = g_act.find(id);
+        return it != g_act.end() && !it->second.emit.empty();
+    }
+    std::vector<std::pair<RE::FormID, float>> TakeLandings() {
+        std::lock_guard lk(g_mx);
+        std::vector<std::pair<RE::FormID, float>> out;
+        out.swap(g_land);
+        return out;
+    }
+    std::string Status(RE::FormID id) {
+        std::lock_guard lk(g_mx);
+        auto it = g_act.find(id);
+        if (it == g_act.end()) return "no cum on him";
+        const auto& A = it->second;
+        int n[4] = {};
+        for (auto& r : A.ropes) n[static_cast<int>(r.type)]++;
+        return std::format("{} hanging, {} string, {} drops, {} on the skin | lip {} | body {} | schlong {}", n[0], n[1], n[2], n[3],
+                           A.lipOk ? "found" : "estimated", A.body.ok ? std::format("{} pts", A.body.wp.size()) : "-",
+                           A.schlong.ok ? std::format("{} pts", A.schlong.wp.size()) : "-");
+    }
+
+    void Ini(CSimpleIniA& ini, bool save) {
+        constexpr const char* S = "Fluid";
+        auto B = [&](const char* k, bool& v) { if (save) ini.SetBoolValue(S, k, v); else v = ini.GetBoolValue(S, k, v); };
+        auto F = [&](const char* k, float& v, float lo, float hi) {
+            if (save) ini.SetDoubleValue(S, k, v);
+            else v = std::clamp(static_cast<float>(ini.GetDoubleValue(S, k, v)), lo, hi);
+        };
+        auto I = [&](const char* k, int& v, int lo, int hi) {
+            if (save) ini.SetLongValue(S, k, v);
+            else v = std::clamp(static_cast<int>(ini.GetLongValue(S, k, v)), lo, hi);
+        };
+        B("On", g.on); F("Thickness", g.thick, 0.4f, 2.5f); F("Opacity", g.opacity, 0.2f, 1.0f);
+        F("Shine", g.shine, 0.0f, 2.0f); F("Gloss", g.gloss, 20.0f, 1000.0f); F("Gravity", g.gravity, 100.0f, 1200.0f);
+        F("Viscosity", g.viscosity, 0.0f, 1.0f); F("Stickiness", g.stick, 0.0f, 1.0f); F("MaxLength", g.maxLen, 2.0f, 30.0f);
+        F("BreakDistance", g.breakDist, 2.0f, 40.0f); F("Flow", g.flow, 0.2f, 3.0f); F("DryTime", g.dry, 20.0f, 1200.0f);
+        I("MaxPieces", g.maxPieces, 4, 48); B("Collide", g.collide); B("WetFilm", g.wetFilm); B("CoatShine", g.coatShine); I("Quality", g.quality, 1, 3);
+    }
+
+    void RenderSettings() {
+        bool ch = false;
+        ch |= ImGuiMCP::Checkbox("Simulated cum (strands, streams, drops, running down him)", &g.on);
+        Help("Everything here is simulated by the DLL every frame: it hangs from the real edge of his hole, runs down his "
+             "actual body (OBody / BodySlide shape included) and drops to the floor. Off = none of it is shown.");
+        if (!g.on) { if (ch) Colour::SaveNow(); return; }
+        ImGuiMCP::SeparatorText("Look");
+        ch |= ImGuiMCP::SliderFloat("Thickness", &g.thick, 0.4f, 2.5f, "x%.2f");
+        ch |= ImGuiMCP::SliderFloat("Opacity", &g.opacity, 0.2f, 1.0f, "%.2f");
+        Help("How see-through it is (the colour itself is on this page: per race or your own).");
+        ch |= ImGuiMCP::SliderFloat("Shine", &g.shine, 0.0f, 2.0f, "%.2f");
+        ch |= ImGuiMCP::SliderFloat("Gloss", &g.gloss, 20.0f, 1000.0f, "%.0f");
+        Help("Higher = a smaller, sharper highlight, like a wet glassy surface. Also used for the wet look on his anus.");
+        ImGuiMCP::SeparatorText("How it moves");
+        ch |= ImGuiMCP::SliderFloat("Thickness of the fluid (viscosity)", &g.viscosity, 0.0f, 1.0f, "%.2f");
+        Help("0 = runny: falls fast, strands snap back. 1 = thick and gooey: stretches slowly, clings, drips late.");
+        ch |= ImGuiMCP::SliderFloat("Stickiness on skin", &g.stick, 0.0f, 1.0f, "%.2f");
+        ch |= ImGuiMCP::SliderFloat("Runs down the skin", &g.flow, 0.2f, 3.0f, "x%.1f");
+        ch |= ImGuiMCP::SliderFloat("Gravity", &g.gravity, 100.0f, 1200.0f, "%.0f");
+        ch |= ImGuiMCP::SliderFloat("Longest strand before it drips", &g.maxLen, 2.0f, 30.0f, "%.1f");
+        ch |= ImGuiMCP::SliderFloat("String to him snaps at", &g.breakDist, 2.0f, 40.0f, "%.1f");
+        Help("When he pulls out a string can stretch between his hole and the tip of the partner's schlong. It thins as "
+             "it gets longer and snaps around this distance (+-30%): one half springs back and hangs from the hole, the "
+             "other stays on his tip and drips.");
+        ch |= ImGuiMCP::Checkbox("Collides with the body", &g.collide);
+        ImGuiMCP::SeparatorText("Wet and leftovers");
+        ch |= ImGuiMCP::Checkbox("Wet beads and film around his hole", &g.wetFilm);
+        Help("While he is wet (After sex page: wetness) small glossy beads sit on the skin around the hole and creep down. "
+             "The hole itself gets the wet gloss too.");
+        ch |= ImGuiMCP::Checkbox("The giver's schlong glistens while coated", &g.coatShine);
+        ch |= ImGuiMCP::SliderFloat("Drying time", &g.dry, 20.0f, 1200.0f, "%.0f s");
+        Help("How long trails on the skin, beads and streaks take to dry off.");
+        ImGuiMCP::SeparatorText("Performance");
+        ch |= ImGuiMCP::SliderInt("Pieces drawn per man", &g.maxPieces, 4, 48);
+        ch |= ImGuiMCP::SliderInt("Simulation quality", &g.quality, 1, 3);
+        if (ch) Colour::SaveNow();
+    }
+}
