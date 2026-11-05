@@ -1,6 +1,7 @@
 #include "Fluid.h"
 #include "Colour.h"
 #include "Drip.h"
+#include "Engine.h"
 #include "Wink.h"
 #include "SKSEMenuFramework.h"
 
@@ -400,28 +401,42 @@ namespace {
         if (!tpl) return nullptr;
         auto* node = A.root3D ? A.root3D->AsNode() : nullptr;
         if (!node) return nullptr;
-        auto* cl = tpl->Clone();
-        auto* cn = cl ? cl->AsNode() : nullptr;
+        // a clone of the template, its contents moved into a plain node: the template's root comes back from the
+        // model loader as a fade node, and a fade node inside the actor's own one is not something to risk
+        RE::NiPointer<RE::NiObject> keep(tpl->Clone());
+        auto* cn = keep ? keep->AsNode() : nullptr;
         if (!cn) return nullptr;
+        auto* box = RE::NiNode::Create(2);
+        if (!box) return nullptr;
+        box->name = "AnatomicaFluid";
+        std::vector<RE::NiAVObject*> kids;
+        for (auto& c : cn->GetChildren()) if (c) kids.push_back(c.get());
+        RE::NiPointer<RE::NiNode> boxRef(box);
+        for (auto* c : kids) {
+            RE::NiPointer<RE::NiAVObject> hold(c);
+            cn->DetachChild2(c);
+            box->AttachChild(c, true);
+        }
         Visual v;
-        v.root.reset(cn);
+        v.root = boxRef;
         v.flat = flat;
         for (int k = 0; k < kBones; ++k) {
             const auto nm = std::format("ADF{:02d}", k);
-            v.bone[k] = cn->GetObjectByName(RE::BSFixedString(nm.c_str()));
+            v.bone[k] = box->GetObjectByName(RE::BSFixedString(nm.c_str()));
             if (!v.bone[k]) return nullptr;
         }
-        RE::BSVisit::TraverseScenegraphGeometries(cn, [&](RE::BSGeometry* geo) {
+        RE::BSVisit::TraverseScenegraphGeometries(box, [&](RE::BSGeometry* geo) {
             if (!v.geo) v.geo = geo;
             return RE::BSVisit::BSVisitControl::kContinue;
         });
         if (!v.geo) return nullptr;
-        // always drawn while he is: the bones move far from where the template was made
-        v.geo->GetModelData().modelBound.center = {0.0f, 0.0f, 50.0f};
-        v.geo->GetModelData().modelBound.radius = 400.0f;
-        cn->local = RE::NiTransform();
-        cn->GetFlags().set(RE::NiAVObject::Flag::kHidden);
-        node->AttachChild(cn, true);
+        if (auto* si = v.geo->GetGeometryRuntimeData().skinInstance.get()) si->rootParent = box;
+        // drawn whenever his hips are on screen: the bones move away from where the template was made
+        v.geo->GetModelData().modelBound.center = {0.0f, 0.0f, 55.0f};
+        v.geo->GetModelData().modelBound.radius = 90.0f;
+        box->local = RE::NiTransform();
+        box->GetFlags().set(RE::NiAVObject::Flag::kHidden);
+        node->AttachChild(box, true);
         if (A.rootRef.get() != A.root3D) A.rootRef.reset(A.root3D);
         v.tex = "?";
         A.vis[flat ? 1 : 0].push_back(std::move(v));
@@ -1064,6 +1079,9 @@ namespace {
 
     // ------------------------------------------------------------------------------------------- gloss (NiOverride)
     void Gloss(RE::Actor* a, const char* node, float gloss, float spec, bool remove) {
+        // straight through RaceMenu's interface when it is there (no Papyrus queue)
+        if (remove) { if (Engine::NodeRemove(a, node, 2, -1) && Engine::NodeRemove(a, node, 3, -1)) return; }
+        else if (Engine::NodeFloat(a, node, 2, gloss) && Engine::NodeFloat(a, node, 3, spec)) return;
         auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
         if (!vm || !a) return;
         RE::TESObjectREFR* ref = a;

@@ -273,6 +273,8 @@ namespace Wink {
         logger::info("Anatomica motion: Papyrus functions (AnatomicaNative) {}", ok ? "registered" : "FAILED to register");
         std::thread(Loop).detach();
     }
+    void SetGapeNow(RE::Actor* a, float g) { SetGape(nullptr, a, g); }
+    void BlinkNow(RE::Actor* a) { Blink(nullptr, a); }
     bool TestClench(RE::Actor* a) {
         if (!a) return false;
         {

@@ -1,6 +1,7 @@
 #include "Colour.h"
 #include "Drip.h"
 #include "Fluid.h"
+#include "Engine.h"
 #include "SKSEMenuFramework.h"
 #include "UI.h"
 #include "Wink.h"
@@ -1456,6 +1457,7 @@ namespace {
             st.schlong = it->second.peak * g.schlongStrength * Fade(Now() - it->second.last, g.schlongTime);
         if (auto it = g_looseSeen.find(id); it != g_looseSeen.end()) st.loose = it->second;
         st.gape = Wink::GapeOf(id);
+        if (const float eg = Engine::GapeOf(id); eg >= 0.0f) st.gape = std::max(st.gape, eg);
         return st;
     }
     std::string StatusLine(const Status& st) {
@@ -1771,6 +1773,19 @@ namespace {
 
 namespace Colour {
     std::vector<WetInfo> WetNow() { return WetNowImpl(); }
+    void WorkedNow(RE::Actor* a, float dil, float partners, RE::Actor* partner) { Worked(nullptr, a, dil, partners, partner); }
+    std::vector<std::int32_t> LookNow(RE::Actor* a) { return LookFor(nullptr, a); }
+    std::string ColourPath(RE::Actor* a) { const RE::BSFixedString f = ColourFor(nullptr, a); return f.c_str() ? f.c_str() : ""; }
+    float CloseSlowFor(RE::Actor* a) { return CloseSlow(nullptr, a); }
+    float LooseNow(RE::Actor* a, float cur, float days) { return LooseFor(nullptr, a, cur, days); }
+    std::vector<RE::Actor*> Men() { return NearbyMen(nullptr, 0.0f); }
+    float Interval() { return ColourInterval(nullptr); }
+    float LoadPauseNow() { return LoadPause(nullptr); }
+    std::vector<std::string> SchlongShapeNames(RE::Actor* a) {
+        std::vector<std::string> out;
+        for (auto& n : SchlongNodes(nullptr, a)) out.emplace_back(n.c_str() ? n.c_str() : "");
+        return out;
+    }
     // a button that asks "Are you sure?" before it counts as pressed
     bool ConfirmButton(const char* label) {
         static std::string pending;
@@ -1802,6 +1817,7 @@ namespace Colour {
         vm->RegisterFunction("CloseSlow"sv, "AnatomicaNative"sv, CloseSlow);
         vm->RegisterFunction("LooseFor"sv, "AnatomicaNative"sv, LooseFor);
         Drip::RegisterFuncs(vm);
+        Engine::RegisterFuncs(vm);
     }
 
     // the giver's race cum colour (Cum & drips page); false = none set
@@ -2344,6 +2360,7 @@ namespace Colour {
             else ImGuiMCP::TextDisabled("The Anatomica script is running (last check %.0f s ago, %d men checked since loading).", ago, g_looks.load());
             ImGuiMCP::SameLine();
             act("Restart the script", [&] { KickScript(); return std::string("asked the gape script to start again"); });
+            ImGuiMCP::TextDisabled("%s", Engine::Status().c_str());
         }
         ImGuiMCP::SeparatorText(a ? a->GetName() : "nobody");
         if (!a) return;
@@ -2368,7 +2385,7 @@ namespace Colour {
         act("Clear after-sex looks", [&] { std::lock_guard lk(g_lock); g_work.erase(a->GetFormID()); g_schlong.erase(a->GetFormID()); g_sent.erase(a->GetFormID()); return std::string("back to normal on the next check"); });
 
         ImGuiMCP::SeparatorText("Gape and movement");
-        act("Gape him open", [&] { GapeTest(a, 0.8f); return std::string("opened; it holds, then closes on its own (Gape page timings)"); });
+        act("Gape him open", [&] { if (!Engine::TestGape(a, 0.8f)) GapeTest(a, 0.8f); return std::string("opened; it holds, then closes on its own (Gape page timings)"); });
         ImGuiMCP::SameLine();
         act("Clench now", [&] { return std::string(Wink::TestClench(a) ? "clenched" : "only works while he is gaping (the movement code follows him then)"); });
         act("Loosen to the cap", [&] { std::lock_guard lk(g_lock); const float v = g.looseCap; SetMorph(a, "Anatomica Gape", "AnatomicaLoose", v); return std::format("lasting looseness {:.0f}%", v * 100.0f); });

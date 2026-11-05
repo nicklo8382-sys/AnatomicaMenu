@@ -10,4 +10,7 @@ namespace Wink {
     float GapeOf(RE::FormID id);
     // Testing page: a clench right now (only for a man the movement code is already following)
     bool TestClench(RE::Actor* a);
+    // the DLL gape engine talks to the movement code directly (same as the script's SetGape / Blink)
+    void SetGapeNow(RE::Actor* a, float g);
+    void BlinkNow(RE::Actor* a);
 }

@@ -21,6 +21,16 @@ namespace Colour {
     void __stdcall RenderStatus();
     void __stdcall RenderTesting();    // the Testing page: every effect on demand
     void RegisterWindow();             // the live status window + hotkey input (call after the menu sections)
+    // for the DLL gape engine (Engine.cpp): the same answers the script got from AnatomicaNative
+    void WorkedNow(RE::Actor* a, float dil, float partners, RE::Actor* partner);
+    std::vector<std::int32_t> LookNow(RE::Actor* a);
+    std::string ColourPath(RE::Actor* a);
+    float CloseSlowFor(RE::Actor* a);
+    float LooseNow(RE::Actor* a, float cur, float days);
+    std::vector<RE::Actor*> Men();
+    float Interval();
+    float LoadPauseNow();
+    std::vector<std::string> SchlongShapeNames(RE::Actor* a);
     struct WetInfo { RE::FormID id; float wet; float rgb[3]; };
     std::vector<WetInfo> WetNow();     // every man who is wet right now (0-1) and the colour of it (Fluid draws it)
 }
