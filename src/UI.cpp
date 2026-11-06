@@ -185,7 +185,7 @@ void UI::Register() {
     SKSEMenuFramework::AddSectionItem("Per race", Colour::RenderRaces);
     SKSEMenuFramework::AddSectionItem("Skin rules", Colour::RenderRules);
     SKSEMenuFramework::AddSectionItem("After sex", Colour::RenderAfter);
-    SKSEMenuFramework::AddSectionItem("Cum & drips", Drip::RenderPage);
+    if (kCum) SKSEMenuFramework::AddSectionItem("Cum & drips", Drip::RenderPage);   // off for now (Features.h)
     SKSEMenuFramework::AddSectionItem("Status", Colour::RenderStatus);
     SKSEMenuFramework::AddSectionItem("Testing", Colour::RenderTesting);
     SKSEMenuFramework::AddSectionItem("Jiggle", Jiggle::Render);

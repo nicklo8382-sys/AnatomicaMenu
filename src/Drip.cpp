@@ -374,6 +374,7 @@ namespace {
     }
 
     void AddLoad(RE::FormID recvId, const float col[3], int key, float amount) {
+        if (!kCum) return;
         auto& s = g_st[recvId];
         s.self = recvId;
         const double now = Now();
@@ -436,6 +437,7 @@ namespace {
     // ---------------------------------------------------------------- Papyrus
     // recv got a load from giver; key: OStim thread + 1, SexLab 1000 + thread, 0 = none
     void DripClimax(RE::StaticFunctionTag*, RE::Actor* recv, RE::Actor* giver, std::int32_t key) {
+        if (!kCum) return;   // cum is off in this build (Features.h)
         if (!recv || !giver || recv == giver) return;
         const auto* gb = giver->GetActorBase();
         const auto* rb = recv->GetActorBase();
@@ -537,7 +539,7 @@ namespace {
             ++it;
             if (!a->Is3DLoaded()) continue;
             s.self = id;
-            if (!g.on) { if (s.worn || s.vol > 0.0f) ClearActor(id, s); continue; }
+            if (!(g.on || !kCum)) { if (s.worn || s.vol > 0.0f) ClearActor(id, s); continue; }   // without cum (Features.h): still here for the wet layer
 
             // ---- round tracking (penetration seen by the gape script)
             if (!s.roundOver && now - s.lastWorked > 3.0) {
@@ -877,7 +879,7 @@ namespace Drip {
     }
 
     void OnWorked(RE::Actor* recv, RE::Actor* partner, float dil) {
-        if (!recv) return;
+        if (!kCum || !recv) return;
         std::array<float, 3> pc{};
         const bool male = partner && partner != recv && partner->GetActorBase() && partner->GetActorBase()->GetSex() == RE::SEX::kMale;
         if (male) GiverColour(partner, pc.data());
@@ -899,6 +901,7 @@ namespace Drip {
     }
 
     void OnClench(RE::FormID id, float amp) {
+        if (!kCum) return;
         std::lock_guard lk(g_mx);
         if (!g.on || !g.clench) return;
         auto it = g_st.find(id);
@@ -915,8 +918,9 @@ namespace Drip {
     }
 
     bool Film(RE::FormID id, float rgb[3], float& amt) {
-        std::lock_guard lk(g_mx);
         amt = 0.0f;
+        if (!kCum) return false;
+        std::lock_guard lk(g_mx);
         if (!g.on || !g.film) return false;
         auto it = g_st.find(id);
         if (it == g_st.end()) return false;
@@ -929,6 +933,7 @@ namespace Drip {
     }
 
     float Froth(RE::FormID id) {
+        if (!kCum) return 0.0f;
         std::lock_guard lk(g_mx);
         if (!g.on || !g.froth) return 0.0f;
         auto it = g_st.find(id);
@@ -938,6 +943,7 @@ namespace Drip {
     }
 
     float HoldOpen(RE::FormID id) {
+        if (!kCum) return 1.0f;
         std::lock_guard lk(g_mx);
         if (!g.on || !g.fullOpen) return 1.0f;
         auto it = g_st.find(id);
@@ -952,6 +958,7 @@ namespace Drip {
     }
     std::string RunTest(RE::Actor* a, std::string what) {
         if (!a) return "nobody to test on";
+        if (!kCum) return "cum is switched off in this build";
         for (auto& c : what) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         float col[3]; GiverColour(nullptr, col);
         std::lock_guard lk(g_mx);
@@ -983,6 +990,7 @@ namespace Drip {
     }
 
     void RenderTests(RE::Actor* who) {
+        if (!kCum) return;
         static std::string last;
         const char* tests[][3] = {
             {"Add a load", "load", "one load in him (strands, film, ooze)"},
@@ -1011,6 +1019,7 @@ namespace Drip {
 
     std::string Status(RE::Actor* a) {
         if (!a) return {};
+        if (!kCum) return Fluid::Status(a->GetFormID());   // wetness only
         std::lock_guard lk(g_mx);
         auto it = g_st.find(a->GetFormID());
         if (it == g_st.end() || (it->second.vol <= 0.0f && it->second.leaked <= 0.0f)) return "Cum: none | " + Fluid::Status(a->GetFormID());

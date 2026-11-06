@@ -321,6 +321,13 @@ namespace {
         bool wetColourOn = false;    // lube / cum colour on the rim
         float wetColour[3] = {0.95f, 0.93f, 0.88f};
         float wetColourAmt = 0.4f;
+        bool wetCumOn = false;       // cum in the wetness (separate from the lube colour): a cum film on the rim, cum-coloured beads
+        float wetCum[3] = {0.96f, 0.95f, 0.90f};
+        float wetCumAmt = 0.5f;      // its opacity
+        bool schlongCum = true;      // the giver's schlong: cum on it (streaks, a drip from the tip), not only the wet shine
+        bool schlongCumRace = true;  // his race's cum colour when it has one
+        float schlongCumCol[3] = {0.96f, 0.95f, 0.90f};
+        float schlongCumAmt = 0.85f; // its opacity
         bool waterDry = true;        // swimming / rain dries it faster
         float waterDryMul = 4.0f;
         bool schlongWet = true;      // the partner's schlong gets the shine too
@@ -514,6 +521,8 @@ namespace {
         B("WetColourOn", g.wetColourOn); C("WetColour", g.wetColour); F("WetColourAmt", g.wetColourAmt, 0.0f, 1.0f);
         B("WaterDry", g.waterDry); F("WaterDryMul", g.waterDryMul, 1.0f, 10.0f);
         B("SchlongWet", g.schlongWet); F("SchlongStrength", g.schlongStrength, 0.0f, 1.0f); F("SchlongTime", g.schlongTime, 10.0f, 3600.0f);
+        B("WetCumOn", g.wetCumOn); C("WetCum", g.wetCum); F("WetCumAmt", g.wetCumAmt, 0.0f, 1.0f);
+        B("SchlongCum", g.schlongCum); B("SchlongCumRace", g.schlongCumRace); C("SchlongCumColour", g.schlongCumCol); F("SchlongCumAmt", g.schlongCumAmt, 0.0f, 1.0f);
         B("TenderStages", g.tenderStages); C("TenderColour1", g.tenderCol1); C("TenderColour2", g.tenderCol2);
         F("TenderSplit", g.tenderSplit, 0.05f, 0.95f);
         B("TenderPartners", g.tenderPartners); F("TenderPerPartner", g.tenderPerPartner, 0.0f, 1.0f);
@@ -1122,8 +1131,13 @@ namespace {
         // rim texture, made for this man: colour x his skin tone x reddening, plus wetness colour and
         // bruising. (The rim is not skin-tinted by the game - that shader path streaks it.)
         const bool lubeOn = g.wetColourOn && wet > 0.0f;
-        const float film = 0.0f;   // the cum film is a mesh now (Drip): the rim is never repainted with cum
-        const float filmCol[3] = {1, 1, 1};
+        // cum in the wetness (its own colour and opacity, apart from the lube colour): a cum film on the rim
+        const float film = g.wetCumOn && wet > 0.0f ? Quant(std::clamp(wet, 0.0f, 1.0f) * g.wetCumAmt) : 0.0f;
+        float filmCol[3] = {g.wetCum[0], g.wetCum[1], g.wetCum[2]};
+        if (film > 0.0f && g.cumByRace)
+            if (auto wi = g_work.find(a->GetFormID()); wi != g_work.end() && !wi->second.giverRace.empty())
+                if (auto ri = g_races.find(wi->second.giverRace); ri != g_races.end() && ri->second.cumOwn)
+                    for (int i = 0; i < 3; ++i) filmCol[i] = ri->second.cum[i];
         const float froth = Quant(Drip::Froth(a->GetFormID()));
         if (pk.active || tender > 0.0f || lubeOn || bruise > 0.0f || film > 0.0f || froth > 0.0f) {
             const int col = choice >= 0 ? choice : InstalledPreset();
@@ -1191,7 +1205,35 @@ namespace {
             if (lv.wet <= 0.0f) continue;
             Colour::WetInfo wi{id, lv.wet, {0.93f, 0.93f, 0.92f}};
             if (g.wetColourOn) for (int i = 0; i < 3; ++i) wi.rgb[i] = g.wetColour[i];
+            if (g.wetCumOn) {   // the beads are cum then
+                for (int i = 0; i < 3; ++i) wi.rgb[i] = g.wetCum[i];
+                if (g.cumByRace)
+                    if (auto wk = g_work.find(id); wk != g_work.end() && !wk->second.giverRace.empty())
+                        if (auto ri = g_races.find(wk->second.giverRace); ri != g_races.end() && ri->second.cumOwn)
+                            for (int i = 0; i < 3; ++i) wi.rgb[i] = ri->second.cum[i];
+                wi.cum = g.wetCumAmt;
+            }
             out.push_back(wi);
+        }
+        // the giver's schlong, wet from the round (with cum off this is all there is to it)
+        if (g.schlongWet) {
+            const double now = Now();
+            for (auto& [id, sw] : g_schlong) {
+                if (sw.last <= 0.0) continue;
+                const float sc = sw.peak * g.schlongStrength * Fade(now - sw.last, g.schlongTime);
+                if (sc <= 0.01f) continue;
+                auto f = std::find_if(out.begin(), out.end(), [&](const Colour::WetInfo& w) { return w.id == id; });
+                if (f == out.end()) { out.push_back(Colour::WetInfo{id, 0.0f, {0.93f, 0.93f, 0.92f}}); f = out.end() - 1; }
+                f->schlong = sc;
+                if (g.schlongCum) {   // cum on it: streaks and a drip from the tip, in his own cum colour
+                    f->scum = g.schlongCumAmt;
+                    for (int i = 0; i < 3; ++i) f->srgb[i] = g.schlongCumCol[i];
+                    if (g.schlongCumRace)
+                        if (auto* who = RE::TESForm::LookupByID<RE::Actor>(id))
+                            if (auto ri = g_races.find(RaceKey(who->GetRace())); ri != g_races.end() && ri->second.cumOwn)
+                                for (int i = 0; i < 3; ++i) f->srgb[i] = ri->second.cum[i];
+                }
+            }
         }
         return out;
     }
@@ -1858,7 +1900,8 @@ namespace Colour {
         bool changed = false;
         changed |= ImGuiMCP::Checkbox("The wetness colour (After sex page) follows the giver's race too", &g.cumByRace);
         Help("With the wetness colour switched on, the gloss on his anus takes the cum colour of the man who gave.");
-        ImGuiMCP::TextDisabled("Tick a race to give it its own cum colour (used for his drips, squirts, puddles, the film on the rim, ...)");
+        ImGuiMCP::TextDisabled(kCum ? "Tick a race to give it its own cum colour (used for his drips, squirts, puddles, the film on the rim, ...)"
+                                    : "Tick a race to give it its own cum colour (the cum in the wetness, and the cum on his schlong - After sex page)");
         if (g_raceRows.empty()) ImGuiMCP::TextDisabled("Races appear here once a game is loaded.");
         if (!g_raceRows.empty() && ImGuiMCP::TreeNode("Cum colour per race")) {
             for (const auto& r : g_raceRows) {
@@ -2093,14 +2136,22 @@ namespace Colour {
         if (changed) SaveIni();
     }
 
+    void RenderRacesBody();
     void __stdcall RenderRaces() {
+        RenderRacesBody();
+        if (!kCum) {   // the Cum & drips page is off (Features.h): the race cum colours live here
+            ImGuiMCP::SeparatorText("Cum colour per race");
+            RenderCumColours();
+        }
+    }
+    void RenderRacesBody() {
         std::lock_guard lk(g_lock);
         if (!g_loaded) LoadIni();
         BuildRaces();
         bool changed = false;
         if (!g_raceDefaults.empty())
             ImGuiMCP::TextDisabled("Races set in the installer start with that colour; Reset all races goes back to them.");
-        ImGuiMCP::TextDisabled("Cum colours per race are on the Cum & drips page.");
+        ImGuiMCP::TextDisabled(kCum ? "Cum colours per race are on the Cum & drips page." : "Cum colours per race are at the bottom of this page.");
         ImGuiMCP::TextWrapped("Colour per playable race. \"Use the default\" follows Everyone on the Colours page. "
                               "Custom (and Random, when it lands on Custom) uses this race's own colour - click the "
                               "swatch for the colour wheel. Own colour strength only applies with the Tint method.");
@@ -2399,7 +2450,8 @@ namespace Colour {
         act("Wet only", [&] { FakeRound(a, 0.6f, 1, 20.0f); std::lock_guard lk(g_lock); g_work[a->GetFormID()].peak = 0.0f; return std::string("wet, not red"); });
         act("First time in a while", [&] { std::lock_guard lk(g_lock); g_lastRound.erase(a->GetFormID()); return std::string("his next round counts as rested (redder)"); });
         ImGuiMCP::SameLine();
-        act("Schlong coated (as giver)", [&] { const float c[3] = {0.96f, 0.95f, 0.90f}; Fluid::Coat(a->GetFormID(), 1.0f, c, 90.0f); return std::string("his schlong is wet with cum (needs a schlong on him)"); });
+        if (kCum) act("Schlong coated (as giver)", [&] { const float c[3] = {0.96f, 0.95f, 0.90f}; Fluid::Coat(a->GetFormID(), 1.0f, c, 90.0f); return std::string("his schlong is wet with cum (needs a schlong on him)"); });
+        else act("Schlong wet (as giver)", [&] { std::lock_guard lk(g_lock); auto& sw = g_schlong[a->GetFormID()]; sw.peak = 1.0f; sw.last = Now(); return std::string("his schlong is wet (needs a schlong on him; Wet schlong on the After sex page)"); });
         ImGuiMCP::SameLine();
         act("Clear after-sex looks", [&] { std::lock_guard lk(g_lock); g_work.erase(a->GetFormID()); g_schlong.erase(a->GetFormID()); g_sent.erase(a->GetFormID()); return std::string("back to normal on the next check"); });
 
@@ -2411,8 +2463,10 @@ namespace Colour {
         ImGuiMCP::SameLine();
         act("Remove looseness", [&] { SetMorph(a, "Anatomica Gape", "AnatomicaLoose", 0.0f); return std::string("tight again"); });
 
-        ImGuiMCP::SeparatorText("Cum");
-        Drip::RenderTests(a);
+        if (kCum) {
+            ImGuiMCP::SeparatorText("Cum");
+            Drip::RenderTests(a);
+        }
 
         ImGuiMCP::SeparatorText("Status");
         act("Open the status window on him", [&] { g_inspect = a->GetFormID(); g_winOpen = true; g_winMove = false; ApplyWindowState(); return std::string("open"); });
@@ -2444,8 +2498,8 @@ namespace Colour {
         changed |= ImGuiMCP::Checkbox("Wet shine after sex", &g.wet);
         Indented(g.wet, [&] {
             changed |= Pct("Shine strength", &g.wetStrength);
-            Help("How wet he gets: the gloss on the hole, and glossy beads of fluid sitting on the skin around it that creep "
-                 "down and dry off (the beads can be switched off on the Cum & drips page, Look and physics).");
+            Help("How wet he gets: the gloss on the hole, a clear wet layer over the rim, and a glossy layer on the skin "
+                 "around it and up the crevice (below).");
             changed |= Minutes("Dries in", &g.wetTime, 0.5f, 30.0f);
             changed |= ImGuiMCP::Checkbox("Builds up over rounds", &g.wetBuild);
             Help("Another round before he has dried adds to the wetness instead of starting again - he stays wet longer.");
@@ -2459,7 +2513,7 @@ namespace Colour {
                 }
             }
             changed |= ImGuiMCP::Checkbox("Coloured wetness (lube / cum)", &g.wetColourOn);
-            Help("Lays a colour over the rim while it is wet, fading as it dries. The wet beads around the hole take this colour too.");
+            Help("Lays a colour over the rim while it is wet, fading as it dries.");
             Indented(g.wetColourOn, [&] {
                 changed |= ImGuiMCP::ColorEdit3("Wetness colour", g.wetColour, kWheel);
                 changed |= Pct("Colour amount", &g.wetColourAmt);
@@ -2483,6 +2537,16 @@ namespace Colour {
                 changed |= ImGuiMCP::SliderFloat("for##burst", &g.wetBurstSecs, 5.0f, 120.0f, "%.0f s");
                 changed |= Pct("extra##burst", &g.wetBurstBoost);
             });
+            changed |= ImGuiMCP::Checkbox("Cum in the wetness", &g.wetCumOn);
+            Help("Separate from the lube colour above: a film of cum on the rim in its own colour and opacity, drying off "
+                 "with the wetness.");
+            Indented(g.wetCumOn, [&] {
+                changed |= ImGuiMCP::ColorEdit3("Cum colour##wc", g.wetCum, kWheel);
+                changed |= Pct("Cum opacity##wc", &g.wetCumAmt);
+                changed |= ImGuiMCP::Checkbox("The giver's race colour when it has one##wc", &g.cumByRace);
+                Help("Per race page: races with a cum colour of their own use it here (also for the lube colour above).");
+            });
+            if (!kCum) Fluid::RenderWetSettings();   // with cum on these sit on the Cum & drips page
             changed |= ImGuiMCP::Checkbox("Water dries it faster", &g.waterDry);
             Help("Swimming, or standing outside in the rain, dries him faster.");
             if (g.waterDry) {
@@ -2493,8 +2557,25 @@ namespace Colour {
         });
 
         ImGuiMCP::SeparatorText("Wet schlong");
-        ImGuiMCP::TextWrapped("The giver's schlong coming out wet with cum (gloss, streaks, a drip from the tip) is on the "
-                              "Cum & drips page now: \"His schlong comes out wet with cum\".");
+        if (kCum) {
+            ImGuiMCP::TextWrapped("The giver's schlong coming out wet with cum (gloss, streaks, a drip from the tip) is on the "
+                                  "Cum & drips page now: \"His schlong comes out wet with cum\".");
+        } else {
+            changed |= ImGuiMCP::Checkbox("The giver's schlong comes out wet", &g.schlongWet);
+            Help("After a round the partner's schlong is glossy, with a clear wet layer over it (head included), drying off "
+                 "over the time set here.");
+            Indented(g.schlongWet, [&] {
+                changed |= Pct("Shine strength##sw", &g.schlongStrength);
+                changed |= Minutes("Dries in##sw", &g.schlongTime, 0.5f, 60.0f);
+                changed |= ImGuiMCP::Checkbox("Cum on it (streaks, a drip from the tip)", &g.schlongCum);
+                Help("Cum streaks running down his schlong and now and then a drip falling from the tip, fading with the shine.");
+                Indented(g.schlongCum, [&] {
+                    changed |= ImGuiMCP::ColorEdit3("Cum colour##sc", g.schlongCumCol, kWheel);
+                    changed |= Pct("Cum opacity##sc", &g.schlongCumAmt);
+                    changed |= ImGuiMCP::Checkbox("His race's cum colour when it has one##sc", &g.schlongCumRace);
+                });
+            });
+        }
 
         // ---------------------------------------------------------------- reddening
         ImGuiMCP::SeparatorText("Tender reddening");
@@ -2507,7 +2588,6 @@ namespace Colour {
             Help("Starts as the first colour, turns into the second, then fades back to normal.");
             Indented(g.tenderStages, [&] {
                 changed |= ImGuiMCP::ColorEdit3("Fresh", g.tenderCol1, kWheel);
-                ImGuiMCP::SameLine();
                 changed |= ImGuiMCP::ColorEdit3("Later", g.tenderCol2, kWheel);
                 changed |= Pct("Turns to \"Later\" after (part of the fade time)", &g.tenderSplit);
             });
@@ -2566,8 +2646,10 @@ namespace Colour {
             changed |= Pct("Heals per game day", &g.looseRecover);
         });
 
-        ImGuiMCP::SeparatorText("Drips");
-        ImGuiMCP::TextDisabled("Strands, squirts, puddles and the leg trail have their own page: Cum & drips.");
+        if (kCum) {
+            ImGuiMCP::SeparatorText("Drips");
+            ImGuiMCP::TextDisabled("Strands, squirts, puddles and the leg trail have their own page: Cum & drips.");
+        }
 
         // ---------------------------------------------------------------- healing
         ImGuiMCP::SeparatorText("Healing");
@@ -2582,6 +2664,9 @@ namespace Colour {
             std::copy(std::begin(d.wetColour), std::end(d.wetColour), g.wetColour);
             g.waterDry = d.waterDry, g.waterDryMul = d.waterDryMul;
             g.schlongWet = d.schlongWet, g.schlongStrength = d.schlongStrength, g.schlongTime = d.schlongTime;
+            g.wetCumOn = d.wetCumOn, g.wetCumAmt = d.wetCumAmt, g.schlongCum = d.schlongCum, g.schlongCumRace = d.schlongCumRace, g.schlongCumAmt = d.schlongCumAmt;
+            std::copy(std::begin(d.wetCum), std::end(d.wetCum), g.wetCum);
+            std::copy(std::begin(d.schlongCumCol), std::end(d.schlongCumCol), g.schlongCumCol);
             g.tender = d.tender, g.tenderStrength = d.tenderStrength, g.tenderTime = d.tenderTime, g.tenderBlend = d.tenderBlend;
             g.tenderStages = d.tenderStages, g.tenderSplit = d.tenderSplit;
             std::copy(std::begin(d.tenderCol1), std::end(d.tenderCol1), g.tenderCol1);

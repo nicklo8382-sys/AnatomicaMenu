@@ -33,6 +33,12 @@ namespace Colour {
     std::vector<std::string> SchlongShapeNames(RE::Actor* a);
     struct RingWant { int col = -1; int swap = 0; int add = -1; };
     RingWant RingNow(RE::Actor* a);
-    struct WetInfo { RE::FormID id; float wet; float rgb[3]; };
+    struct WetInfo {
+        RE::FormID id; float wet; float rgb[3];
+        float cum = 0.0f;                 // cum in the wetness: opacity (0 = the beads are clear / lube)
+        float schlong = 0.0f;             // his schlong wet from the round (giver), 0-1
+        float scum = 0.0f;                // cum on his schlong: opacity (0 = only the wet shine)
+        float srgb[3] = {0.96f, 0.95f, 0.90f};
+    };
     std::vector<WetInfo> WetNow();     // every man who is wet right now (0-1) and the colour of it (Fluid draws it)
 }

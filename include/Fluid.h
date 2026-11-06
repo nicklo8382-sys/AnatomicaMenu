@@ -13,6 +13,7 @@ namespace Fluid {
     void Reset();                                    // a save was loaded: forget everything
     void Ini(CSimpleIniA& ini, bool save);           // [Fluid] in AnatomicaMenu.ini
     void RenderSettings();                           // "Look and physics" (Cum & drips page)
+    void RenderWetSettings();                        // the glossy layer around the hole and crevice (After sex page, Wetness)
 
     // ---- what Drip asks for (any thread) ----
     void Hang(RE::FormID id, float amount, float phase, const float rgb[3]);   // strands from the lip; amount 0 = none, phase 0-1 = how far the next drip has grown
