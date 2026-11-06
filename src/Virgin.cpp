@@ -686,7 +686,13 @@ namespace Virgin {
             Help("After a set time: the wait gets shorter. Smart: counts as rest, so his experience wears off sooner. "
                  "One and done: no effect.");
             ch |= ImGuiMCP::Checkbox("Lasting looseness healing", &s.healLoose);
+            Help("Lasting looseness (After sex page) heals a little every game day. A potion or spell counts as that many "
+                 "extra hours of healing: with \"Heals per game day\" at 5%, a potion taking 6 hours off heals about "
+                 "1.25% of looseness on top. It never adds looseness, only takes it away faster.");
             ch |= ImGuiMCP::Checkbox("The first-time reaction", &s.healFirst);
+            Help("After losing his virginity he is redder, more swollen and clenches more for a while (\"Lasts\", above, "
+                 "in game days). A potion or spell makes that time run out sooner by the hours it takes off - it eases him "
+                 "back to normal faster. His virginity stays lost either way.");
             ImGuiMCP::Unindent();
             ImGuiMCP::TextDisabled("Redness, bruising and swelling: After sex page (healing clears them).");
         }

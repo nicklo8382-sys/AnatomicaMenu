@@ -355,6 +355,7 @@ namespace {
         float wetCum = 0.0f;             // cum in the wetness: bead opacity (0 = clear water / lube)
         float gloss = 0.0f;              // glossy skin round the hole (After sex page), 0-1
         float coatAlpha = 1.0f;          // cum on his schlong: opacity
+        bool dripOn = true;              // a drip from his tip now and then
         float coat = 0.0f, coatLeft = 0.0f, coatSecs = 90.0f; float coatRgb[3] = {0.96f, 0.95f, 0.90f}; double coatDrip = 0.0;
         float glossSent = -1.0f, sglossSent = -1.0f; double glossAt = 0.0;
         float sheenSent = -1.0f;
@@ -1180,7 +1181,7 @@ namespace {
                 const V3 p = A.schlong.wp[s];
                 if (Dot(p - A.tip, A.tipAxis) > -4.0f) StartRivulet(A, A.schlong, p, Rand(0.04f, 0.1f) * A.coat, A.coatRgb, true);
             }
-            if (drips == 0 && now > A.coatDrip && A.tipOk && A.tipSurf >= 0 && A.coatLeft > 0.25f) {
+            if (A.dripOn && drips == 0 && now > A.coatDrip && A.tipOk && A.tipSurf >= 0 && A.coatLeft > 0.25f) {
                 Rope& r = NewRope(A, Type::Strand, A.coatRgb);
                 r.onSchlong = true; r.anchorSurf = A.tipSurf; r.vol = 0.15f * A.coat; r.r0 = Radius(r.vol);
                 const V3 a = A.tip;
@@ -1467,7 +1468,7 @@ namespace {
         return w * w * (3.0f - 2.0f * w);
     }
 
-    bool WriteMaskDds(const std::filesystem::path& p, int n, const std::vector<float>& alpha, const std::uint8_t bgr[3]) {
+    bool WriteMaskDds(const std::filesystem::path& p, int n, const std::vector<float>& alpha, const std::uint8_t bgr[3], int specBase = -1) {
         int mips = 1; for (int s_ = n; s_ > 1; s_ /= 2) ++mips;
         std::uint32_t h[31] = {};
         h[0] = 124; h[1] = 0x1 | 0x2 | 0x4 | 0x1000 | 0x20000 | 0x8; h[2] = n; h[3] = n; h[4] = n * 4; h[6] = mips;
@@ -1481,8 +1482,14 @@ namespace {
         f.write(reinterpret_cast<const char*>(h), 124);
         std::vector<std::uint8_t> cur(static_cast<size_t>(n) * n * 4);
         for (int i = 0; i < n * n; ++i) {
-            cur[i * 4 + 0] = bgr[0]; cur[i * 4 + 1] = bgr[1]; cur[i * 4 + 2] = bgr[2];
-            cur[i * 4 + 3] = static_cast<std::uint8_t>(std::clamp(alpha[i] * 255.0f, 0.0f, 255.0f));
+            if (specBase >= 0) {   // a specular map: grey, bright where the mask is
+                const auto v = static_cast<std::uint8_t>(std::clamp(specBase + (255.0f - specBase) * alpha[i], 0.0f, 255.0f));
+                cur[i * 4 + 0] = cur[i * 4 + 1] = cur[i * 4 + 2] = v;
+                cur[i * 4 + 3] = 255;
+            } else {
+                cur[i * 4 + 0] = bgr[0]; cur[i * 4 + 1] = bgr[1]; cur[i * 4 + 2] = bgr[2];
+                cur[i * 4 + 3] = static_cast<std::uint8_t>(std::clamp(alpha[i] * 255.0f, 0.0f, 255.0f));
+            }
         }
         int sz = n;
         for (int m = 0; m < mips; ++m) {
@@ -1504,7 +1511,7 @@ namespace {
     using MaskWeight = std::function<float(const V3& pos, const float w[4], const float boneK[4])>;
     std::unordered_map<std::string, std::string> g_cleftTex;
     std::string MakeMask(RE::BSGeometry* geo, const std::string& keyBase, const MaskWeight& weight, const std::function<float(const char*)>& boneFactor,
-                         const std::uint8_t bgr[3]) {
+                         const std::uint8_t bgr[3], int specBase = -1, float* covered = nullptr) {
         auto* si = geo ? geo->GetGeometryRuntimeData().skinInstance.get() : nullptr;
         RE::NiSkinPartition* sp = si ? si->skinPartition.get() : nullptr;
         if (!sp && si && si->skinData) sp = si->skinData->skinPartition.get();
@@ -1528,12 +1535,13 @@ namespace {
             boneK.assign(nb, 0.0f);
             for (std::uint32_t b = 0; b < nb; ++b) if (si->bones[b]) boneK[b] = boneFactor(si->bones[b]->name.c_str());
         }
-        const std::string key = std::format("{}_{}_{:02X}{:02X}{:02X}", keyBase, nv, bgr[2], bgr[1], bgr[0]);
-        if (auto it = g_cleftTex.find(key); it != g_cleftTex.end()) return it->second;
+        const std::string key = specBase >= 0 ? std::format("{}_{}_s{}", keyBase, nv, specBase) : std::format("{}_{}_{:02X}{:02X}{:02X}", keyBase, nv, bgr[2], bgr[1], bgr[0]);
+        static std::unordered_map<std::string, float> s_cover;
+        if (auto it = g_cleftTex.find(key); it != g_cleftTex.end()) { if (covered) *covered = s_cover[key]; return it->second; }
         const std::filesystem::path path = std::filesystem::path(kGenDirF) / (key + ".dds");
         const std::string tex = std::string(kGenTexF) + key + ".dds";
         std::error_code ec;
-        if (std::filesystem::exists(path, ec)) return g_cleftTex[key] = tex;
+        const bool onDisk = std::filesystem::exists(path, ec);
         // every vertex: how much layer, and where it is on the texture
         const std::uint8_t* d = part0.buffData->rawVertexData;
         std::vector<float> w(nv), u(nv), v(nv);
@@ -1554,7 +1562,10 @@ namespace {
             w[i] = weight(pos, sw, bk);
             if (w[i] > 0.01f) ++any;
         }
+        s_cover[key] = nv ? static_cast<float>(any) / static_cast<float>(nv) : 0.0f;
+        if (covered) *covered = s_cover[key];
         if (any == 0) { logger::info("Anatomica wet: nothing to cover on {} for {}", geo->name.c_str() ? geo->name.c_str() : "?", keyBase); return g_cleftTex[key] = std::string{}; }
+        if (onDisk) return g_cleftTex[key] = tex;
         constexpr int N = 512;
         std::vector<float> A(static_cast<size_t>(N) * N, 0.0f);
         auto put = [&](int x, int y, float a) { if (x >= 0 && y >= 0 && x < N && y < N) { float& c = A[static_cast<size_t>(y) * N + x]; c = std::max(c, a); } };
@@ -1613,7 +1624,7 @@ namespace {
                 }
             A.swap(B);
         }
-        if (!WriteMaskDds(path, N, A, bgr)) { logger::info("Anatomica wet: could not write {}", path.string()); return g_cleftTex[key] = std::string{}; }
+        if (!WriteMaskDds(path, N, A, bgr, specBase)) { logger::info("Anatomica wet: could not write {}", path.string()); return g_cleftTex[key] = std::string{}; }
         logger::info("Anatomica wet: {} mask made for {} ({} of {} vertices, {} triangles)", keyBase, geo->name.c_str() ? geo->name.c_str() : "?", any, nv, tris);
         return g_cleftTex[key] = tex;
     }
@@ -1646,6 +1657,42 @@ namespace {
         if (std::abs(q - A.cleftSent) > 0.01f) { SetAlpha(sh.obj->AsGeometry(), 0.35f + 0.65f * q); A.cleftSent = q; }
     }
 
+    // ---- the glans' specular map (see UpdateGloss)
+    std::unordered_map<RE::BSGeometry*, std::string> g_glansOrig;   // its own specular map, to put back when he is dry
+    bool IsMSN(RE::BSGeometry* geo) {
+        auto* lsp = geo ? geo->lightingShaderProp_cast() : nullptr;
+        return lsp && lsp->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kModelSpaceNormals);
+    }
+    std::string SpecOf(RE::BSGeometry* geo) {
+        auto* lsp = geo ? geo->lightingShaderProp_cast() : nullptr;
+        auto* mat = lsp ? static_cast<RE::BSLightingShaderMaterialBase*>(lsp->material) : nullptr;
+        const char* p = (mat && mat->textureSet) ? mat->textureSet->GetTexturePath(RE::BSTextureSet::Texture::kSpecular) : nullptr;
+        return p ? p : "";
+    }
+    bool SetSpecTex(RE::BSGeometry* geo, const std::string& path) {
+        auto* lsp = geo ? geo->lightingShaderProp_cast() : nullptr;
+        auto* mat = lsp ? static_cast<RE::BSLightingShaderMaterialBase*>(lsp->material) : nullptr;
+        if (!mat || !mat->textureSet) return false;
+        auto* nm = static_cast<RE::BSLightingShaderMaterialBase*>(mat->Create());
+        if (!nm) return false;
+        nm->CopyMembers(mat);
+        if (auto* ts = RE::BSShaderTextureSet::Create()) {
+            for (std::uint32_t i = 0; i < RE::BSTextureSet::Texture::kTotal; ++i) {
+                const char* pth = mat->textureSet->GetTexturePath(static_cast<RE::BSTextureSet::Texture>(i));
+                if (pth && *pth) ts->SetTexturePath(static_cast<RE::BSTextureSet::Texture>(i), pth);
+            }
+            ts->SetTexturePath(RE::BSTextureSet::Texture::kSpecular, path.c_str());
+            nm->ClearTextures();
+            nm->OnLoadTextureSet(0, ts);
+        }
+        lsp->SetMaterial(nm, true);
+        lsp->SetupGeometry(geo);
+        lsp->FinishSetupGeometry(geo);
+        nm->~BSLightingShaderMaterialBase();
+        RE::free(nm);
+        return true;
+    }
+
     void UpdateGloss(Actor& A, RE::Actor* a) {
         auto* root = a->Get3D(false);
         if (!root) return;
@@ -1668,52 +1715,48 @@ namespace {
         // his schlong while coated: glossier skin and a clear wet layer, fading as it dries
         const float sc = std::max(g.coatShine ? std::clamp(A.coatLeft, 0.0f, 1.0f) : 0.0f, std::clamp(A.swet, 0.0f, 1.0f));
         const float sq = std::round(sc * 20.0f) / 20.0f;
+        // wet glans: the skin itself glossy (no layer on top). For a shape drawn with a model-space normal map the shine
+        // has a texture of its own (specular map): we give it one that is bright on the glans and dull elsewhere, so only
+        // the glans glistens. Other shapes can only be glossy as a whole: the shape that is mostly glans gets it.
+        if (!A.sheens.empty()) { DropSheens(A); A.sheenKey.clear(); }   // the old clear layer on top: gone
         auto geos = SchlongGeos(a);
-        for (auto* geo : AllSchlongGeos(a)) Shine(geo, 0.0f, 0.0f, 0.0f);   // the whole shaft no longer: only the glans layer below
-        // a very glossy, clear (or cum-coloured) layer on the glans only: the parts of his schlong that follow the tip bones
-        const bool cumOn = A.coatLeft > 0.0f && A.coat > 0.05f;
-        std::uint8_t bgr[3] = {240, 236, 236};
-        if (cumOn) for (int i = 0; i < 3; ++i) bgr[2 - i] = static_cast<std::uint8_t>(std::clamp(std::lround(A.coatRgb[i] * 15.0f) * 17, 0L, 255L));
+        auto tipBones = [](const char* n) -> float {
+            const std::string_view v(n ? n : "");
+            if (v.find("Gen06") != std::string_view::npos || v.find("Genitals06") != std::string_view::npos) return 1.0f;
+            if (v.find("Gen05") != std::string_view::npos || v.find("Genitals05") != std::string_view::npos) return 0.45f;
+            return 0.0f;
+        };
+        auto glans = [](const V3&, const float w[4], const float k[4]) {
+            float t = 0.0f;
+            for (int i = 0; i < 4; ++i) t += w[i] * k[i];
+            t = std::clamp((t - 0.15f) / 0.6f, 0.0f, 1.0f);
+            return t * t * (3.0f - 2.0f * t);
+        };
         if (sq > 0.0f) {
-            std::string key = std::format("{:02X}{:02X}{:02X}", bgr[2], bgr[1], bgr[0]);
-            for (auto* geo : geos) key += std::format("|{}", static_cast<const void*>(geo));
-            bool stale = key != A.sheenKey;
-            for (size_t i = 0; !stale && i < A.sheens.size(); ++i) stale = !A.sheens[i].obj || !A.sheens[i].src || A.sheens[i].obj->parent != A.sheens[i].parent.get();
-            if (stale) {
-                DropSheens(A);
-                A.sheenKey = key;
-                auto tipBones = [](const char* n) -> float {
-                    const std::string_view v(n ? n : "");
-                    if (v.find("Gen06") != std::string_view::npos || v.find("Genitals06") != std::string_view::npos) return 1.0f;
-                    if (v.find("Gen05") != std::string_view::npos || v.find("Genitals05") != std::string_view::npos) return 0.45f;
-                    return 0.0f;
-                };
-                auto glans = [](const V3&, const float w[4], const float k[4]) {
-                    float t = 0.0f;
-                    for (int i = 0; i < 4; ++i) t += w[i] * k[i];
-                    t = std::clamp((t - 0.15f) / 0.6f, 0.0f, 1.0f);
-                    return t * t * (3.0f - 2.0f * t);
-                };
-                std::string told;
-                for (auto* geo : geos) {
-                    const std::string tex = MakeMask(geo, "ad_glans", glans, tipBones, bgr);
-                    if (tex.empty()) continue;
-                    if (auto* sh = MakeSheen(geo, tex.c_str(), 700.0f, 4.0f * g.shine)) {
-                        A.sheens.push_back({RE::NiPointer<RE::NiAVObject>(sh), geo, RE::NiPointer<RE::NiNode>(sh->parent)});
-                        told += std::format(" [{}]", geo->name.c_str() ? geo->name.c_str() : "?");
-                    }
+            std::string told;
+            for (auto* geo : geos) {
+                static const std::uint8_t grey[3] = {255, 255, 255};
+                float cover = 0.0f;
+                if (IsMSN(geo)) {
+                    const std::string tex = MakeMask(geo, "ad_glanspec", glans, tipBones, grey, 20, &cover);
+                    if (tex.empty()) { Shine(geo, 0.0f, 0.0f, 0.0f); continue; }
+                    if (!g_glansOrig.count(geo)) g_glansOrig[geo] = SpecOf(geo);
+                    if (SpecOf(geo).find("ad_glanspec") == std::string::npos) SetSpecTex(geo, tex);
+                    Shine(geo, sq, 450.0f, 14.0f * g.shine);
+                    told += std::format(" [{}: glans only]", geo->name.c_str() ? geo->name.c_str() : "?");
+                } else {
+                    MakeMask(geo, "ad_glans", glans, tipBones, grey, -1, &cover);
+                    if (cover > 0.5f) { Shine(geo, sq, 450.0f, 14.0f * g.shine); told += std::format(" [{}: whole shape, it is mostly glans]", geo->name.c_str() ? geo->name.c_str() : "?"); }
+                    else { Shine(geo, 0.0f, 0.0f, 0.0f); told += std::format(" [{}: left dry - not mostly glans and no specular map of its own]", geo->name.c_str() ? geo->name.c_str() : "?"); }
                 }
-                if (!A.coatLogged) {
-                    A.coatLogged = true;
-                    logger::info("Anatomica wet: glans layer on {:08X}:{}", A.id, told.empty() ? " none (no part follows the tip bones)" : told);
-                }
-                A.sheenSent = -1.0f;
             }
-            const float alpha = (0.5f + 0.5f * sq) * (cumOn ? std::clamp(A.coatAlpha, 0.05f, 1.0f) : 1.0f);
-            if (std::abs(alpha - A.sheenSent) > 0.01f)
-                for (auto& sh : A.sheens) SetAlpha(sh.obj ? sh.obj->AsGeometry() : nullptr, alpha);
-            A.sheenSent = alpha;
-        } else if (!A.sheens.empty()) { DropSheens(A); A.sheenKey.clear(); }
+            if (!A.coatLogged) { A.coatLogged = true; logger::info("Anatomica wet: wet glans on {:08X}:{}", A.id, told.empty() ? " nothing to make wet" : told); }
+        } else {
+            for (auto* geo : AllSchlongGeos(a)) {
+                Shine(geo, 0.0f, 0.0f, 0.0f);
+                if (auto it = g_glansOrig.find(geo); it != g_glansOrig.end()) { SetSpecTex(geo, it->second); g_glansOrig.erase(it); }
+            }
+        }
         A.sglossSent = sq;
     }
 
@@ -1860,6 +1903,7 @@ namespace {
                     A.coatLeft = std::clamp(w.schlong, 0.0f, 1.0f);
                     A.coatSecs = 1e6f;   // the After sex page decides how long: no drying of our own on top
                     A.coatAlpha = std::clamp(w.scum, 0.05f, 1.0f);
+                    A.dripOn = w.sdrip;
                     for (int i = 0; i < 3; ++i) A.coatRgb[i] = w.srgb[i];
                 }
             }
@@ -2116,6 +2160,7 @@ namespace Fluid {
         A.coatDrip = Now() + 1.5;
         A.tipOk = true;
         A.coatLogged = false;
+        A.dripOn = true;
     }
     void Clear(RE::FormID id) {
         std::lock_guard lk(g_mx);

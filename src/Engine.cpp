@@ -10,7 +10,10 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstring>
+#include <filesystem>
 #include <format>
+#include <fstream>
 #include <mutex>
 #include <random>
 #include <string>
@@ -368,6 +371,45 @@ namespace {
     bool IsTint(RE::BSLightingShaderMaterialBase* m) {
         return m && (m->GetFeature() == RE::BSShaderMaterial::Feature::kFaceGenRGBTint || m->GetFeature() == RE::BSShaderMaterial::Feature::kHairTint);
     }
+    // The ring's own texture, coloured in the file: the game does not draw a tint on these paint overlays (a white ring
+    // although the material says reddish-brown), so the colour goes into the texture instead. The texture is DXT5:
+    // every 4x4 block keeps two colours and blends between them, so scaling those two colours colours the whole block
+    // (alpha untouched, mipmaps included) - same size, same detail, written once per colour.
+    std::unordered_map<int, std::string> g_ringTex;
+    std::string TintedRing(int rgb) {
+        auto q = [](int c) { return std::clamp((c + 4) / 8 * 8, 0, 255); };   // a few dozen files at most
+        const int r = q((rgb >> 16) & 255), gg = q((rgb >> 8) & 255), b = q(rgb & 255);
+        const int key = (r << 16) | (gg << 8) | b;
+        if (auto it = g_ringTex.find(key); it != g_ringTex.end()) return it->second;
+        const std::string name = std::format("anatomica_blend_tint_{:06X}.dds", key);
+        const std::filesystem::path out = std::filesystem::path("Data/textures/actors/character/male/Anatomica/gen") / name;
+        const std::string tex = std::string("textures\\actors\\character\\male\\Anatomica\\gen\\") + name;
+        std::error_code ec;
+        if (std::filesystem::exists(out, ec)) return g_ringTex[key] = tex;
+        std::ifstream in("Data/textures/actors/character/male/Anatomica/colours/anatomica_blend_base.dds", std::ios::binary);
+        std::vector<std::uint8_t> d((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        if (d.size() < 128 + 16 || std::memcmp(d.data(), "DDS ", 4) != 0 || std::memcmp(d.data() + 84, "DXT5", 4) != 0) {
+            logger::info("Anatomica: the ring texture could not be read as a loose DXT5 file - the ring keeps the tint");
+            return g_ringTex[key] = std::string{};
+        }
+        const float k[3] = {r / 255.0f, gg / 255.0f, b / 255.0f};
+        auto tint = [&](std::uint8_t* p) {
+            std::uint16_t c; std::memcpy(&c, p, 2);
+            const int r5 = static_cast<int>(std::lround(((c >> 11) & 31) * k[0]));
+            const int g6 = static_cast<int>(std::lround(((c >> 5) & 63) * k[1]));
+            const int b5 = static_cast<int>(std::lround((c & 31) * k[2]));
+            c = static_cast<std::uint16_t>((std::clamp(r5, 0, 31) << 11) | (std::clamp(g6, 0, 63) << 5) | std::clamp(b5, 0, 31));
+            std::memcpy(p, &c, 2);
+        };
+        for (size_t o = 128; o + 16 <= d.size(); o += 16) { tint(&d[o + 8]); tint(&d[o + 10]); }   // colour half of each block
+        std::filesystem::create_directories(out.parent_path(), ec);
+        std::ofstream f(out, std::ios::binary);
+        if (!f || !f.write(reinterpret_cast<const char*>(d.data()), static_cast<std::streamsize>(d.size()))) return g_ringTex[key] = std::string{};
+        logger::info("Anatomica: made {}", tex);
+        return g_ringTex[key] = tex;
+    }
+    bool IsTintedRing(const std::string& diffuse) { return diffuse.find("blend_tint_") != std::string::npos; }
+
     // tex: "" = keep; rgb < 0 = keep the tint; alpha < 0 = keep
     void RingLook(RE::BSGeometry* geo, const char* tex, int rgb, float alpha) {
         auto* lsp = geo ? geo->lightingShaderProp_cast() : nullptr;
@@ -478,21 +520,29 @@ namespace {
             if (w.add < 0) { RingReport(a, any ? "no Anatomica ring among his RaceMenu paints, none to add" : "no RaceMenu paint slots", nullptr, w); return; }
             if (!any) { RingReport(a, "no RaceMenu paint slots yet: asked RaceMenu for them", nullptr, w); AskOverlays(a); done.root = nullptr; return; }   // look again once RaceMenu has added them
             if (!freeSlot) { RingReport(a, "no free RaceMenu paint slot for a ring", nullptr, w); return; }
-            RingLook(freeSlot, kBlendBase, w.add, 1.0f);   // a ring for a man without one (NPC ring option)
+            if (const std::string tt = TintedRing(w.add); !tt.empty()) RingLook(freeSlot, tt.c_str(), -1, 1.0f);   // a ring for a man without one (NPC ring option)
+            else RingLook(freeSlot, kBlendBase, w.add, 1.0f);
             done.geo = RE::NiPointer<RE::BSGeometry>(freeSlot);
             RingReport(a, "added a ring in a free slot", freeSlot, w);
             return;
         }
         done.geo = RE::NiPointer<RE::BSGeometry>(ring);
-        const bool isBase = DiffuseOf(ring).find("blend_base") != std::string::npos;
+        const bool isBase = DiffuseOf(ring).find("blend_base") != std::string::npos || IsTintedRing(DiffuseOf(ring));
         if (w.col < 0) {   // his own paint, as installed
             if (isBase) RingLook(ring, kRingOrigTex, IsTint(MatOf(ring)) ? 0xFFFFFF : -1, -1.0f);
             else if (IsTint(MatOf(ring))) RingLook(ring, nullptr, 0xFFFFFF, -1.0f);
             RingReport(a, "left as his own paint", ring, w);
             return;
         }
+        if (w.swap == 1) {
+            if (const std::string tt = TintedRing(w.col); !tt.empty()) {
+                RingLook(ring, tt.c_str(), IsTint(MatOf(ring)) ? 0xFFFFFF : -1, -1.0f);   // the colour is in the texture now
+                RingReport(a, "coloured (in the texture)", ring, w);
+                return;
+            }
+        }
         RingLook(ring, w.swap == 1 ? kBlendBase : kRingOrigTex, w.col, -1.0f);
-        RingReport(a, "coloured", ring, w);
+        RingReport(a, "coloured (tint)", ring, w);
     }
 
     void Tick() {
@@ -612,7 +662,8 @@ namespace Engine {
 
     bool SetLooseNow(RE::Actor* a, float v) {
         if (!a || !g_morph) return false;
-        SetMorph(a, "Anatomica Gape", "AnatomicaLoose", std::max(0.0f, v));
+        if (v <= 0.0f) g_morph->ClearMorph(a, "Anatomica Gape", "AnatomicaLoose");   // gone, not just 0
+        else SetMorph(a, "Anatomica Gape", "AnatomicaLoose", v);
         const float gt = RE::Calendar::GetSingleton() ? RE::Calendar::GetSingleton()->GetCurrentGameTime() : 0.0f;
         SetMorph(a, "AGLooseT", K, v > 0.0f ? gt : 0.0f);   // healing counts from now
         g_morph->UpdateModelWeight(a, false);

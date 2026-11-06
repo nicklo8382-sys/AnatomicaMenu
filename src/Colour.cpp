@@ -330,6 +330,7 @@ namespace {
         bool schlongCumRace = true;  // his race's cum colour when it has one
         float schlongCumCol[3] = {0.96f, 0.95f, 0.90f};
         float schlongCumAmt = 0.85f; // its opacity
+        bool schlongDrip = false;    // a drip from the tip now and then (off: only streaks)
         bool waterDry = true;        // swimming / rain dries it faster
         float waterDryMul = 4.0f;
         bool schlongWet = true;      // the partner's schlong gets the shine too
@@ -537,7 +538,7 @@ namespace {
         B("WaterDry", g.waterDry); F("WaterDryMul", g.waterDryMul, 1.0f, 10.0f);
         B("SchlongWet", g.schlongWet); F("SchlongStrength", g.schlongStrength, 0.0f, 1.0f); F("SchlongTime", g.schlongTime, 10.0f, 3600.0f);
         B("WetCumOn", g.wetCumOn); C("WetCum", g.wetCum); F("WetCumAmt", g.wetCumAmt, 0.0f, 1.0f);
-        B("SchlongCum", g.schlongCum); B("SchlongCumRace", g.schlongCumRace); C("SchlongCumColour", g.schlongCumCol); F("SchlongCumAmt", g.schlongCumAmt, 0.0f, 1.0f);
+        B("SchlongCum", g.schlongCum); B("SchlongDrip", g.schlongDrip); B("SchlongCumRace", g.schlongCumRace); C("SchlongCumColour", g.schlongCumCol); F("SchlongCumAmt", g.schlongCumAmt, 0.0f, 1.0f);
         B("TenderStages", g.tenderStages); C("TenderColour1", g.tenderCol1); C("TenderColour2", g.tenderCol2);
         F("TenderSplit", g.tenderSplit, 0.05f, 0.95f);
         B("TenderPartners", g.tenderPartners); F("TenderPerPartner", g.tenderPerPartner, 0.0f, 1.0f);
@@ -1260,8 +1261,9 @@ namespace {
                 auto f = std::find_if(out.begin(), out.end(), [&](const Colour::WetInfo& w) { return w.id == id; });
                 if (f == out.end()) { out.push_back(Colour::WetInfo{id, 0.0f, {0.93f, 0.93f, 0.92f}}); f = out.end() - 1; }
                 f->schlong = sc;
-                if (g.schlongCum) {   // cum on it: streaks and a drip from the tip, in his own cum colour
+                if (g.schlongCum) {   // cum on it: streaks (and a drip from the tip if wanted), in his own cum colour
                     f->scum = g.schlongCumAmt;
+                    f->sdrip = kCum && g.schlongDrip;   // the drip from the tip: only with the cum system (Features.h)
                     for (int i = 0; i < 3; ++i) f->srgb[i] = g.schlongCumCol[i];
                     if (g.schlongCumRace)
                         if (auto* who = RE::TESForm::LookupByID<RE::Actor>(id))
@@ -2591,7 +2593,13 @@ namespace Colour {
         act("Clench now", [&] { return std::string(Wink::TestClench(a) ? "clenched" : "only works while he is gaping (the movement code follows him then)"); });
         act("Loosen to the cap", [&] { const float v = LooseCapFor(a); if (!Engine::SetLooseNow(a, v)) SetMorph(a, "Anatomica Gape", "AnatomicaLoose", v); { std::lock_guard lk(g_lock); g_looseSeen[a->GetFormID()] = v; } return std::format("lasting looseness {:.0f}%", v * 100.0f); });
         ImGuiMCP::SameLine();
-        act("Remove looseness", [&] { if (!Engine::SetLooseNow(a, 0.0f)) SetMorph(a, "Anatomica Gape", "AnatomicaLoose", 0.0f); { std::lock_guard lk(g_lock); g_looseSeen[a->GetFormID()] = 0.0f; } return std::string("tight again"); });
+        act("Remove looseness", [&] {
+            if (!Engine::SetLooseNow(a, 0.0f)) SetMorph(a, "Anatomica Gape", "AnatomicaLoose", 0.0f);
+            std::lock_guard lk(g_lock);
+            g_looseSeen[a->GetFormID()] = 0.0f;
+            g_looseRest.erase(a->GetFormID());
+            if (auto it = g_work.find(a->GetFormID()); it != g_work.end()) it->second.looseDone = true;   // the last round must not add it back
+            return std::string("tight again"); });
 
         if (kCum) {
             ImGuiMCP::SeparatorText("Cum");
@@ -2695,14 +2703,15 @@ namespace Colour {
                                   "Cum & drips page now: \"His schlong comes out wet with cum\".");
         } else {
             changed |= ImGuiMCP::Checkbox("The giver's schlong comes out wet", &g.schlongWet);
-            Help("After a round the partner's schlong is glossy, with a clear wet layer over it (head included), drying off "
-                 "over the time set here.");
+            Help("After a round the partner's glans glistens wet (the skin itself, nothing on top), drying off over the "
+                 "time set here.");
             Indented(g.schlongWet, [&] {
                 changed |= Pct("Shine strength##sw", &g.schlongStrength);
                 changed |= Minutes("Dries in##sw", &g.schlongTime, 0.5f, 60.0f);
-                changed |= ImGuiMCP::Checkbox("Cum on it (streaks, a drip from the tip)", &g.schlongCum);
-                Help("Cum streaks running down his schlong and now and then a drip falling from the tip, fading with the shine.");
+                changed |= ImGuiMCP::Checkbox("Cum on it (streaks)", &g.schlongCum);
+                Help("Cum streaks running down his schlong in the colour and opacity set here, fading with the shine.");
                 Indented(g.schlongCum, [&] {
+                    if (kCum) changed |= ImGuiMCP::Checkbox("A drip from the tip now and then", &g.schlongDrip);
                     changed |= ImGuiMCP::ColorEdit3("Cum colour##sc", g.schlongCumCol, kWheel);
                     changed |= Pct("Cum opacity##sc", &g.schlongCumAmt);
                     changed |= ImGuiMCP::Checkbox("His race's cum colour when it has one##sc", &g.schlongCumRace);

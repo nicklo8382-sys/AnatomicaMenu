@@ -6,6 +6,7 @@
 #include "SKSEMenuFramework.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <format>
@@ -50,6 +51,10 @@ namespace {
     } g;
 
     double Now() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+    // what SkyrimNet has done with us this session (Integrations page)
+    std::atomic<int> g_decOk{0}, g_actOk{0}, g_decAsk{0}, g_actAsk{0}, g_actRun{0}, g_sentMem{0}, g_sentReact{0}, g_sentScene{0}, g_sentRemark{0};
+    std::atomic<int> g_callsSelf{0}, g_callsSeen{0}, g_callsKnows{0};
+    double g_regAt = 0.0;
     std::mt19937 g_rng{std::random_device{}()};
     float Rand01() { return std::uniform_real_distribution<float>(0.0f, 1.0f)(g_rng); }
 
@@ -111,10 +116,12 @@ namespace {
     }
     void Narrate(const std::string& text, RE::Actor* speaker, RE::Actor* target) {
         if (!SN() || text.empty()) return;
+        ++g_sentReact;
         Static("SkyrimNetApi", "DirectNarration", RE::BSFixedString(text), speaker, target);
     }
     void Remember(const std::string& text, RE::Actor* a, RE::Actor* b) {
         if (!SN() || text.empty()) return;
+        ++g_sentMem;
         Static("SkyrimNetApi", "RegisterPersistentEvent", RE::BSFixedString(text), a, b);
     }
     void Exposure(RE::FormID id, int amount) {   // SexLab Aroused's own way to arouse someone
@@ -210,10 +217,17 @@ namespace {
         return o;
     }
 
+    // ---- what SkyrimNet has done with us this session (Integrations page)
+    struct CountOk : RE::BSScript::IStackCallbackFunctor {   // SkyrimNetApi.Register*: 0 = accepted
+        std::atomic<int>* ok = nullptr;
+        void operator()(RE::BSScript::Variable r) override { if (ok && r.IsInt() && r.GetSInt() == 0) ++*ok; }
+        void SetObject(const RE::BSTSmartPointer<RE::BSScript::Object>&) override {}
+    };
+
     // ---- natives (AnatomicaNative.SN*)
-    std::string SNSelf(RE::StaticFunctionTag*, RE::Actor* a) { return g.snStatus ? Self(a) : std::string{}; }
-    std::string SNSeen(RE::StaticFunctionTag*, RE::Actor* a) { return g.snStatus ? Seen(a, true) : std::string{}; }
-    std::string SNKnows(RE::StaticFunctionTag*, RE::Actor* a) { return g.snStatus ? Knows(a) : std::string{}; }
+    std::string SNSelf(RE::StaticFunctionTag*, RE::Actor* a) { ++g_callsSelf; return g.snStatus ? Self(a) : std::string{}; }
+    std::string SNSeen(RE::StaticFunctionTag*, RE::Actor* a) { ++g_callsSeen; return g.snStatus ? Seen(a, true) : std::string{}; }
+    std::string SNKnows(RE::StaticFunctionTag*, RE::Actor* a) { ++g_callsKnows; return g.snStatus ? Knows(a) : std::string{}; }
 
     // a man near the speaker who fits (naked when it needs to be)
     RE::Actor* ManNear(RE::Actor* speaker, bool naked) {
@@ -237,6 +251,7 @@ namespace {
     void SNDo(RE::StaticFunctionTag*, RE::BSFixedString what, RE::Actor* sp, RE::Actor* t, RE::BSFixedString how) {
         const std::string w = what.c_str() ? what.c_str() : "";
         if (!sp) return;
+        ++g_actRun;
         if (!t || !IsMan(t)) t = ManNear(sp, w != "ask");
         if (!t) return;
         const std::string S = Name(sp), T = Name(t);
@@ -276,14 +291,20 @@ namespace {
         tasks->AddTask([]() {
             auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
             if (!vm) return;
-            RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb;
+            g_decOk = 0; g_actOk = 0; g_decAsk = 0; g_actAsk = 0; g_regAt = Now();
             auto dec = [&](const char* id, const char* fn) {
+                auto c = RE::make_smart<CountOk>(); c->ok = &g_decOk;
+                RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb(c);
+                ++g_decAsk;
                 vm->DispatchStaticCall("SkyrimNetApi", "RegisterDecorator", RE::MakeFunctionArguments(RE::BSFixedString(id), RE::BSFixedString("AnatomicaNative"), RE::BSFixedString(fn)), cb);
             };
             dec("anatomica_self", "SNSelf");
             dec("anatomica_seen", "SNSeen");
             dec("anatomica_knows", "SNKnows");
             auto act = [&](const char* name, const char* desc, const char* elig, const char* exec, const char* schema) {
+                auto c = RE::make_smart<CountOk>(); c->ok = &g_actOk;
+                RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb(c);
+                ++g_actAsk;
                 vm->DispatchStaticCall("SkyrimNetApi", "RegisterAction",
                     RE::MakeFunctionArguments(RE::BSFixedString(name), RE::BSFixedString(desc), RE::BSFixedString("AnatomicaNative"), RE::BSFixedString(elig),
                                               RE::BSFixedString("AnatomicaNative"), RE::BSFixedString(exec), RE::BSFixedString(""), RE::BSFixedString("PAPYRUS"),
@@ -471,7 +492,7 @@ namespace Bridge {
             if (g.snScene && shows) {
                 std::lock_guard lk(g_mx);
                 if (g_sceneSent[id] != seen || now - g_sceneAt[id] > 20.0) {
-                    g_sceneSent[id] = seen; g_sceneAt[id] = now;
+                    g_sceneSent[id] = seen; g_sceneAt[id] = now; ++g_sentScene;
                     Static("SkyrimNetApi", "RegisterShortLivedEvent", RE::BSFixedString(std::format("anatomica_seen_{:08X}", id)), RE::BSFixedString("anatomica_seen"),
                            RE::BSFixedString(seen), RE::BSFixedString(""), static_cast<std::int32_t>(30000), man, static_cast<RE::Actor*>(nullptr));
                 }
@@ -492,6 +513,7 @@ namespace Bridge {
                 }
                 if (!who) continue;
                 { std::lock_guard lk(g_mx); g_lastRemark = now; }
+                ++g_sentRemark;
                 Narrate(std::format("{} notices {} naked - {}", Name(who), Name(man), seen), who, man);
             }
         }
@@ -503,6 +525,36 @@ namespace Bridge {
 
         ImGuiMCP::SeparatorText("SkyrimNet");
         if (!HasSkyrimNet()) Missing("SkyrimNet");
+        else {
+            // is it working? (this session)
+            const ImGuiMCP::ImVec4 good{0.5f, 0.9f, 0.5f, 1.0f}, bad{1.0f, 0.55f, 0.4f, 1.0f};
+            if (g_regAt <= 0.0) ImGuiMCP::TextColored(bad, "Not registered with SkyrimNet yet this session (it happens a few seconds after loading a save).");
+            else {
+                const bool all = g_decOk == g_decAsk && g_actOk == g_actAsk;
+                ImGuiMCP::TextColored(all ? good : bad, "SkyrimNet accepted %d of %d status functions and %d of %d actions (%.0f s ago).",
+                                      g_decOk.load(), g_decAsk.load(), g_actOk.load(), g_actAsk.load(), Now() - g_regAt);
+            }
+            ImGuiMCP::TextDisabled("Since loading: SkyrimNet asked for his state %d / what is seen %d / what partners know %d times; actions done %d.",
+                                   g_callsSelf.load(), g_callsSeen.load(), g_callsKnows.load(), g_actRun.load());
+            ImGuiMCP::TextDisabled("Sent: memories %d, reactions and remarks %d, scene notes %d.", g_sentMem.load(), g_sentReact.load(), g_sentScene.load());
+            Help("SkyrimNet only asks for a man's state when it writes a prompt about him (when someone talks to or about "
+                 "him), so the first numbers stay at 0 until then.");
+            static std::string pv[3];
+            static std::string who;
+            if (ImGuiMCP::Button("Show what SkyrimNet gets for the selected man")) {
+                RE::Actor* a = nullptr;
+                if (auto sel = RE::Console::GetSelectedRef()) a = sel->As<RE::Actor>();
+                if (!a) a = RE::PlayerCharacter::GetSingleton();
+                who = Name(a);
+                pv[0] = Self(a); pv[1] = Seen(a, true); pv[2] = Knows(a);
+            }
+            Help("The man you click in the console (~), or you. Exactly the text SkyrimNet's prompts get.");
+            if (!who.empty()) {
+                ImGuiMCP::TextWrapped("%s - what he knows: %s", who.c_str(), pv[0].empty() ? "(nothing)" : pv[0].c_str());
+                ImGuiMCP::TextWrapped("What others see (naked only): %s", pv[1].empty() ? "(nothing - dressed, or nothing shows)" : pv[1].c_str());
+                ImGuiMCP::TextWrapped("What he remembers of men he has had: %s", pv[2].empty() ? "(nothing)" : pv[2].c_str());
+            }
+        }
         ch |= ImGuiMCP::Checkbox("Use SkyrimNet", &g.sn);
         if (g.sn) {
             ImGuiMCP::Indent();

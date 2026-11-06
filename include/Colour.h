@@ -46,6 +46,7 @@ namespace Colour {
         float gloss = 0.0f;               // glossy skin round the hole and up the crevice (0-1)
         float schlong = 0.0f;             // his schlong wet from the round (giver), 0-1
         float scum = 0.0f;                // cum on his schlong: opacity (0 = only the wet shine)
+        bool sdrip = false;               // and now and then a drip from the tip
         float srgb[3] = {0.96f, 0.95f, 0.90f};
     };
     std::vector<WetInfo> WetNow();     // every man who is wet right now (0-1) and the colour of it (Fluid draws it)
