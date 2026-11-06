@@ -1,5 +1,7 @@
 #include "Colour.h"
 #include "Drip.h"
+#include "Virgin.h"
+#include "Bridge.h"
 #include "Fluid.h"
 #include "Engine.h"
 #include "SKSEMenuFramework.h"
@@ -348,13 +350,21 @@ namespace {
         float bruiseLong = 180.0f;   // seconds of penetration in one go
         float bruiseCol[3] = {0.62f, 0.48f, 0.78f};
         float bruiseStrength = 0.6f;
+        bool glossy = true;          // glossy skin round the hole and up the crevice after sex (its own effect, like bruising)
+        float glossyStrength = 0.8f;
+        float glossyTime = 900.0f;   // seconds to fade
         bool swell = true;           // puffy rim (needs the body built with morphs)
         float swellStrength = 0.6f;
         bool sensitive = true;       // sharper clench, slower breathing while tender
         float sensClench = 0.5f;
         float sensBreath = 0.4f;
         bool healSleep = true;       // sleeping / waiting clears it
-        bool healMagic = true;       // healing spells and potions clear it
+        bool healMagic = true;       // healing spells, potions and food heal it, a bit at a time
+        float healPotion = 0.5f;     // % of the redness / bruising / swelling healed per point of health a potion gives back
+        float healFood = 0.1f;       // the same for food and drink
+        float healSpell = 10.0f;     // % per healing spell cast
+        bool healFoodOn = false;     // food and drink count too (off: wine, stews... and their effects never heal)
+        bool healSpellOn = false;    // healing spells count too (off: only health potions heal)
         bool wetBurst = true;        // extra gloss for the first moments after a round
         float wetBurstSecs = 20.0f;
         float wetBurstBoost = 0.5f;
@@ -456,11 +466,16 @@ namespace {
         std::string giverRace;   // race of the last man giving (wetness colour)
         bool dripDone = false;   // SMP Cum Drip already started for this round
         bool looseDone = false;  // looseness already added for this round
+        float glossPeak = 0.0f;  // glossy skin (0-1)
+        float bruiseMul = 1.0f;  // healing takes the bruising down bit by bit
         float restedBoost = 0.0f;
     };
     std::unordered_map<RE::FormID, Work> g_work;
     std::unordered_map<RE::FormID, double> g_lastRound;   // when his last round was (for "first time in a while")
     std::unordered_map<RE::FormID, float> g_looseSeen;    // looseness the script last reported (Status page)
+    std::unordered_map<RE::FormID, float> g_looseRest;    // extra days of rest for his looseness (healing potions / spells)
+    struct Arousal { float wet = 0.0f, sens = 0.0f; };
+    std::unordered_map<RE::FormID, Arousal> g_arousal;     // arousal mods (Bridge.cpp): a little wet, twitchier
     struct SchlongWork {
         float peak = 0.0f;
         double last = 0.0;
@@ -528,9 +543,12 @@ namespace {
         B("TenderPartners", g.tenderPartners); F("TenderPerPartner", g.tenderPerPartner, 0.0f, 1.0f);
         B("Bruise", g.bruise); I("BruisePartners", g.bruisePartners, 2, 6); F("BruiseLong", g.bruiseLong, 30.0f, 1800.0f);
         C("BruiseColour", g.bruiseCol); F("BruiseStrength", g.bruiseStrength, 0.0f, 1.0f);
+        B("Glossy", g.glossy); F("GlossyStrength", g.glossyStrength, 0.0f, 1.0f); F("GlossyTime", g.glossyTime, 30.0f, 7200.0f);
         B("Swell", g.swell); F("SwellStrength", g.swellStrength, 0.0f, 1.0f);
         B("Sensitive", g.sensitive); F("SensClench", g.sensClench, 0.0f, 1.0f); F("SensBreath", g.sensBreath, 0.0f, 0.8f);
         B("HealSleep", g.healSleep); B("HealMagic", g.healMagic);
+        F("HealPotion", g.healPotion, 0.0f, 5.0f); F("HealFood", g.healFood, 0.0f, 2.0f); F("HealSpell", g.healSpell, 0.0f, 100.0f);
+        B("HealFoodOn", g.healFoodOn); B("HealSpellOn", g.healSpellOn);
         B("WetBurst", g.wetBurst); F("WetBurstSecs", g.wetBurstSecs, 5.0f, 120.0f); F("WetBurstBoost", g.wetBurstBoost, 0.0f, 1.0f);
         B("CumByRace", g.cumByRace);
         B("SlowClose", g.slowClose); F("SlowCloseAmt", g.slowCloseAmt, 0.0f, 2.0f);
@@ -721,6 +739,8 @@ namespace {
             CSimpleIniA di;
             di.LoadFile(kIni);
             Drip::Ini(di, false);
+            Virgin::Ini(di, false);
+            Bridge::Ini(di, false);
         }
         g_loaded = true;
     }
@@ -798,6 +818,8 @@ namespace {
         ini.SetDoubleValue("Colour", "SkinOnRim", g.skinOnRim);
         ini.SetLongValue("Colour", "Follower", g.follower);
         Drip::Ini(ini, true);
+        Virgin::Ini(ini, true);
+        Bridge::Ini(ini, true);
         ini.SaveFile(kIni);
     }
 
@@ -1067,11 +1089,14 @@ namespace {
     // smooth 0-1 levels for one man (also used by the movement code)
     struct Levels {
         float wet = 0.0f, tender = 0.0f, bruise = 0.0f, stage = 0.0f;   // stage 0 = bright red, 1 = deep red
+        float gloss = 0.0f;   // glossy skin round the hole
     };
     Levels LevelsFor(RE::FormID id, RE::Actor* a) {
         Levels lv;
+        float aroused = 0.0f;
+        if (g.wet) if (auto ar = g_arousal.find(id); ar != g_arousal.end()) aroused = ar->second.wet * g.wetStrength;
         auto it = g_work.find(id);
-        if (it == g_work.end()) return lv;
+        if (it == g_work.end()) { lv.wet = aroused; return lv; }
         Work& w = it->second;
         const double now = Now();
         // water dries it faster
@@ -1096,16 +1121,19 @@ namespace {
             if (g.wetBurst && ew < g.wetBurstSecs) lv.wet = std::min(1.0f, lv.wet * (1.0f + g.wetBurstBoost * static_cast<float>(1.0 - ew / g.wetBurstSecs)));
         }
         if (g.tender) {
-            float p = w.peak;
+            const Virgin::Mods vm = Virgin::For(id);   // his first time: redder, and it fades slower
+            float p = w.peak * vm.tender;
             if (g.tenderPartners && w.partners > 1) p *= 1.0f + g.tenderPerPartner * static_cast<float>(w.partners - 1);
             if (g.rested) p *= 1.0f + w.restedBoost;
-            lv.tender = std::min(1.0f, p * g.tenderStrength * Fade(e, g.tenderTime));
+            lv.tender = std::min(1.0f, p * g.tenderStrength * Fade(e, g.tenderTime * vm.tenderTime));
             lv.stage = std::clamp(static_cast<float>(e / (g.tenderTime * g.tenderSplit)), 0.0f, 1.0f);
             lv.stage = lv.stage * lv.stage * (3.0f - 2.0f * lv.stage);
             if (g.bruise && (w.partners >= g.bruisePartners || w.workSecs >= g.bruiseLong))
-                lv.bruise = g.bruiseStrength * Fade(e, g.tenderTime * 1.5f);
+                lv.bruise = g.bruiseStrength * w.bruiseMul * Fade(e, g.tenderTime * 1.5f);
         }
-        const double keep = std::max({static_cast<double>(g.wetTime) * std::max(1.0f, w.wetPeak) + w.dryShift, g.tenderTime * 1.5});
+        lv.wet = std::max(lv.wet, aroused);
+        if (g.glossy) lv.gloss = std::min(1.0f, w.glossPeak * g.glossyStrength * Fade(e, g.glossyTime));
+        const double keep = std::max({static_cast<double>(g.wetTime) * std::max(1.0f, w.wetPeak) + w.dryShift, g.tenderTime * 1.5, static_cast<double>(g.glossyTime)});
         if (e > keep + 5.0 && now - w.wetLast > keep + 5.0) g_work.erase(it);
         return lv;
     }
@@ -1139,7 +1167,10 @@ namespace {
                 if (auto ri = g_races.find(wi->second.giverRace); ri != g_races.end() && ri->second.cumOwn)
                     for (int i = 0; i < 3; ++i) filmCol[i] = ri->second.cum[i];
         const float froth = Quant(Drip::Froth(a->GetFormID()));
-        if (pk.active || tender > 0.0f || lubeOn || bruise > 0.0f || film > 0.0f || froth > 0.0f) {
+        // his experience (Virginity page): a virgin's rim paler and pinker, a well-used man's darker and softer
+        const Virgin::Mods vmod = Virgin::For(a->GetFormID());
+        const float rimExp = std::round(std::clamp(vmod.rim, -1.0f, 1.0f) * 4.0f) / 4.0f;
+        if (pk.active || tender > 0.0f || lubeOn || bruise > 0.0f || film > 0.0f || froth > 0.0f || rimExp != 0.0f) {
             const int col = choice >= 0 ? choice : InstalledPreset();
             const float s = (g.method == 0 && choice >= 0) ? pk.strength : 1.0f;
             float pick[3], base[3];
@@ -1148,6 +1179,8 @@ namespace {
             RimTex t{};
             for (int i = 0; i < 3; ++i) {
                 t.colour[i] = (base[i] + (pick[i] - base[i]) * s) / 255.0f * red[i] * skin[i];
+                if (rimExp < 0.0f) t.colour[i] += (std::min(1.0f, (i == 0 ? 0.98f : i == 1 ? 0.80f : 0.84f)) - t.colour[i]) * 0.14f * -rimExp;
+                else if (rimExp > 0.0f) t.colour[i] *= 1.0f - (i == 0 ? 0.10f : 0.20f) * rimExp;
                 t.lube[i] = g.wetColour[i];
                 if (g.cumByRace) {
                     if (auto wi = g_work.find(a->GetFormID()); wi != g_work.end() && !wi->second.giverRace.empty())
@@ -1185,7 +1218,7 @@ namespace {
         }
 
         (void)wet;   // wet gloss: Fluid.cpp applies it straight from the DLL now (L.gloss / L.spec stay -1 = removed)
-        if (g.swell) L.swell = static_cast<int>(std::lround(Quant(lv.tender * g.swellStrength) * 1000.0f));
+        if (g.swell) L.swell = static_cast<int>(std::lround(Quant(std::min(1.0f, lv.tender * g.swellStrength + vmod.swell)) * 1000.0f));
 
         // his schlong: coated with cum and glossy (Fluid.cpp, started by the drip code when he pulls out)
         return L;
@@ -1198,12 +1231,14 @@ namespace {
         if (!g_loaded) LoadIni();
         std::vector<RE::FormID> ids;
         for (auto& [id, w] : g_work) ids.push_back(id);
+        for (auto& [id, ar] : g_arousal) if (ar.wet > 0.0f && !g_work.count(id)) ids.push_back(id);
         for (auto id : ids) {
             auto* a = RE::TESForm::LookupByID<RE::Actor>(id);
             if (!a) continue;
             const Levels lv = LevelsFor(id, a);
-            if (lv.wet <= 0.0f) continue;
+            if (lv.wet <= 0.0f && lv.gloss <= 0.0f) continue;
             Colour::WetInfo wi{id, lv.wet, {0.93f, 0.93f, 0.92f}};
+            wi.gloss = lv.gloss;
             if (g.wetColourOn) for (int i = 0; i < 3; ++i) wi.rgb[i] = g.wetColour[i];
             if (g.wetCumOn) {   // the beads are cum then
                 for (int i = 0; i < 3; ++i) wi.rgb[i] = g.wetCum[i];
@@ -1385,6 +1420,7 @@ namespace {
     void Worked(RE::StaticFunctionTag*, RE::Actor* a, float dil, float partners, RE::Actor* partner) {
         if (!a) return;
         Drip::OnWorked(a, partner, dil);   // before our lock (it has its own)
+        Virgin::OnWorked(a, partner);
         std::lock_guard lk(g_lock);
         if (!g_loaded) LoadIni();
         const double now = Now();
@@ -1396,6 +1432,10 @@ namespace {
         float cur = 0.0f;
         if (w.last > 0.0) cur = w.peak * Fade(now - w.last, g.tenderTime);
         w.peak = std::clamp(std::max(cur, dil), 0.0f, 1.0f);
+        {   // glossy skin: like the redness, but on its own clock
+            const float gc = w.last > 0.0 ? w.glossPeak * Fade(now - w.last, g.glossyTime) : 0.0f;
+            w.glossPeak = std::clamp(std::max(gc, dil), 0.0f, 1.0f);
+        }
         // wetness: a new round adds to what is left (up to the cap)
         if (newRound) {
             w.wetBase = (g.wetBuild && g.wetStrength > 0.0f) ? before.wet / g.wetStrength : 0.0f;
@@ -1404,6 +1444,7 @@ namespace {
             w.dryShift = 0.0;
             w.dripDone = false;
             w.looseDone = false;
+            w.bruiseMul = 1.0f;
             // first time in a while = redder
             const auto lr = g_lastRound.find(a->GetFormID());
             const bool restedNow = lr == g_lastRound.end() || now - lr->second > g.restedMinutes * 60.0;
@@ -1461,15 +1502,18 @@ namespace {
         std::lock_guard lk(g_lock);
         if (!g_loaded) LoadIni();
         if (!g.loose) return 0.0f;
-        float v = std::max(0.0f, cur - g.looseRecover * std::max(0.0f, days));
+        const Virgin::Mods vm = Virgin::For(a->GetFormID());   // experience: how much a round adds, how loose he can get
+        float rest = 0.0f;
+        if (auto r = g_looseRest.find(a->GetFormID()); r != g_looseRest.end()) { rest = r->second; g_looseRest.erase(r); }
+        float v = std::max(0.0f, cur - g.looseRecover * (std::max(0.0f, days) + rest));
         if (auto it = g_work.find(a->GetFormID()); it != g_work.end()) {
             Work& w = it->second;
             if (!w.looseDone && Now() - w.last >= 3.0) {
                 w.looseDone = true;
-                v += g.looseAdd * std::max(0.25f, w.peak);
+                v += g.looseAdd * vm.looseAdd * std::max(0.25f, w.peak);
             }
         }
-        v = std::clamp(v, 0.0f, g.looseCap);
+        v = std::clamp(v, 0.0f, std::min(0.6f, g.looseCap * vm.looseCap));
         g_looseSeen[a->GetFormID()] = v;
         return v;
     }
@@ -1511,7 +1555,7 @@ namespace {
         const auto id = a->GetFormID();
         const Levels lv = LevelsFor(id, nullptr);
         st.wet = lv.wet, st.tender = lv.tender, st.bruise = lv.bruise;
-        st.swell = g.swell ? lv.tender * g.swellStrength : 0.0f;
+        st.swell = g.swell ? std::min(1.0f, lv.tender * g.swellStrength + Virgin::For(id).swell) : 0.0f;
         if (auto it = g_work.find(id); it != g_work.end()) st.partners = it->second.partners, st.secs = it->second.workSecs;
         if (auto it = g_schlong.find(id); it != g_schlong.end())
             st.schlong = it->second.peak * g.schlongStrength * Fade(Now() - it->second.last, g.schlongTime);
@@ -1718,6 +1762,7 @@ namespace {
                 if (st.schlong > 0.01f) Bar("Schlong shine", st.schlong);
                 ImGuiMCP::Text("This round: %d partner(s), %.0f s", st.partners, st.secs);
                 ImGuiMCP::TextUnformatted(Drip::Status(a).c_str());
+                ImGuiMCP::TextUnformatted(Virgin::Status(a).c_str());
             }
             if (moving) {
                 ImGuiMCP::Separator();
@@ -1738,9 +1783,48 @@ namespace {
         RE::BSEventNotifyControl ProcessEvent(const RE::TESSleepStopEvent*, RE::BSTEventSource<RE::TESSleepStopEvent>*) override {
             std::lock_guard lk(g_lock);
             if (g.healSleep) {
+                if (!g_work.empty()) logger::info("Anatomica: sleeping / waiting cleared the after-sex looks of {} men", g_work.size());
                 g_work.clear();
                 g_schlong.clear();
             }
+            return RE::BSEventNotifyControl::kContinue;
+        }
+    };
+    bool HealthRestore(const RE::EffectSetting* mgef) {
+        if (!mgef || mgef->IsHostile() || mgef->data.primaryAV != RE::ActorValue::kHealth) return false;
+        const auto arch = mgef->GetArchetype();
+        return arch == RE::EffectSetting::Archetype::kValueModifier || arch == RE::EffectSetting::Archetype::kPeakValueModifier ||
+               arch == RE::EffectSetting::Archetype::kDualValueModifier;
+    }
+    std::unordered_map<RE::FormID, double> g_drankAt;   // a potion / food just now: its own effect is not counted again as a spell
+    // heal part of his redness, bruising and swelling (fraction 0-1). Caller holds g_lock.
+    void HealPart(RE::FormID id, float frac, const char* what) {
+        auto it = g_work.find(id);
+        if (it == g_work.end() || frac <= 0.0f) return;
+        frac = std::clamp(frac, 0.0f, 1.0f);
+        Work& w = it->second;
+        if (w.peak <= 0.01f && w.bruiseMul <= 0.01f) return;
+        w.peak *= 1.0f - frac;
+        w.bruiseMul *= 1.0f - frac;
+        logger::info("Anatomica: {} healed {:.1f}% of the redness of {:08X}", what, frac * 100.0f, id);
+    }
+    // drinking a potion / eating: how much health it gives back decides how much it heals
+    struct DrinkSink : RE::BSTEventSink<RE::TESEquipEvent> {
+        RE::BSEventNotifyControl ProcessEvent(const RE::TESEquipEvent* e, RE::BSTEventSource<RE::TESEquipEvent>*) override {
+            if (!e || !e->equipped || !e->actor) return RE::BSEventNotifyControl::kContinue;
+            auto* item = RE::TESForm::LookupByID<RE::AlchemyItem>(e->baseObject);
+            if (!item || item->IsPoison()) return RE::BSEventNotifyControl::kContinue;
+            float total = 0.0f;
+            for (auto* eff : item->effects)
+                if (eff && HealthRestore(eff->baseEffect)) total += eff->effectItem.magnitude * static_cast<float>(std::max<std::uint32_t>(1, eff->effectItem.duration));
+            if (total <= 0.0f) return RE::BSEventNotifyControl::kContinue;
+            const RE::FormID id = e->actor->GetFormID();
+            std::lock_guard lk(g_lock);
+            g_drankAt[id] = Now();
+            if (!g.healMagic) return RE::BSEventNotifyControl::kContinue;
+            const bool food = item->IsFood();
+            if (food && !g.healFoodOn) return RE::BSEventNotifyControl::kContinue;
+            HealPart(id, total * (food ? g.healFood : g.healPotion) / 100.0f, food ? "food / drink" : "a potion");
             return RE::BSEventNotifyControl::kContinue;
         }
     };
@@ -1748,21 +1832,18 @@ namespace {
         RE::BSEventNotifyControl ProcessEvent(const RE::TESMagicEffectApplyEvent* e, RE::BSTEventSource<RE::TESMagicEffectApplyEvent>*) override {
             if (!e || !e->target) return RE::BSEventNotifyControl::kContinue;
             const auto* mgef = RE::TESForm::LookupByID<RE::EffectSetting>(e->magicEffect);
-            if (!mgef || mgef->IsHostile() || mgef->data.primaryAV != RE::ActorValue::kHealth) return RE::BSEventNotifyControl::kContinue;
-            const auto arch = mgef->GetArchetype();
-            if (arch != RE::EffectSetting::Archetype::kValueModifier && arch != RE::EffectSetting::Archetype::kPeakValueModifier &&
-                arch != RE::EffectSetting::Archetype::kDualValueModifier)
-                return RE::BSEventNotifyControl::kContinue;
+            if (!HealthRestore(mgef)) return RE::BSEventNotifyControl::kContinue;
+            // only real healing: not abilities and always-on effects that games and mods (re)apply all the time
+            if (mgef->data.castingType == RE::MagicSystem::CastingType::kConstantEffect) return RE::BSEventNotifyControl::kContinue;
+            const RE::FormID id = e->target->GetFormID();
             std::lock_guard lk(g_lock);
-            if (!g.healMagic) return RE::BSEventNotifyControl::kContinue;
-            if (auto it = g_work.find(e->target->GetFormID()); it != g_work.end()) {
-                it->second.peak = 0.0f;       // redness, bruising and swelling gone
-                it->second.partners = 0;
-                it->second.workSecs = 0.0f;
-            }
+            if (!g.healMagic || !g.healSpellOn) return RE::BSEventNotifyControl::kContinue;
+            if (auto d = g_drankAt.find(id); d != g_drankAt.end() && Now() - d->second < 2.0) return RE::BSEventNotifyControl::kContinue;   // the potion itself
+            HealPart(id, g.healSpell / 100.0f, "a healing spell");
             return RE::BSEventNotifyControl::kContinue;
         }
     };
+    DrinkSink g_drinkSink;
     SleepSink g_sleepSink;
     MagicSink g_magicSink;
 
@@ -1838,6 +1919,44 @@ namespace Colour {
     std::string ColourPath(RE::Actor* a) { const RE::BSFixedString f = ColourFor(nullptr, a); return f.c_str() ? f.c_str() : ""; }
     float CloseSlowFor(RE::Actor* a) { return CloseSlow(nullptr, a); }
     float LooseNow(RE::Actor* a, float cur, float days) { return LooseFor(nullptr, a, cur, days); }
+    Snapshot SnapshotOf(RE::Actor* a) {
+        Snapshot o;
+        if (!a) return o;
+        std::lock_guard lk(g_lock);
+        if (!g_loaded) LoadIni();
+        const Status st = StatusOf(a);
+        o.wet = st.wet; o.tender = st.tender; o.bruise = st.bruise; o.swell = st.swell; o.schlong = st.schlong;
+        o.gape = st.gape; o.loose = st.loose; o.partners = st.partners;
+        o.lube = g.wetColourOn; o.cum = g.wetCumOn;
+        if (auto ar = g_arousal.find(a->GetFormID()); ar != g_arousal.end()) o.aroused = ar->second.wet > 0.0f;
+        return o;
+    }
+    void AddWet(RE::Actor* a, float amount) {   // lube: wet, nothing else
+        if (!a) return;
+        std::lock_guard lk(g_lock);
+        if (!g_loaded) LoadIni();
+        auto& w = g_work[a->GetFormID()];
+        const double now = Now();
+        if (w.last <= 0.0) { w.last = now - 3.5; w.looseDone = true; }
+        w.wetPeak = std::clamp(std::max(w.wetPeak, amount), 0.0f, g.wetBuild ? g.wetCap : 1.0f);
+        w.wetLast = now;
+        g_sent.erase(a->GetFormID());
+    }
+    void Bathed(RE::FormID id, bool clearWet, float soothe) {   // washing: dry him, ease the redness
+        std::lock_guard lk(g_lock);
+        if (auto it = g_work.find(id); it != g_work.end()) {
+            if (clearWet) { it->second.wetPeak = 0.0f; it->second.wetBase = 0.0f; it->second.glossPeak = 0.0f; }
+            it->second.peak *= std::clamp(1.0f - soothe, 0.0f, 1.0f);
+        }
+        if (clearWet) g_schlong.erase(id);
+        g_sent.erase(id);
+    }
+    void SetArousal(RE::FormID id, float wet, float sens) {
+        std::lock_guard lk(g_lock);
+        if (wet <= 0.0f && sens <= 0.0f) { g_arousal.erase(id); return; }
+        g_arousal[id] = {wet, sens};
+    }
+    void RestHours(RE::FormID id, float hours) { std::lock_guard lk(g_lock); g_looseRest[id] += std::max(0.0f, hours) / 24.0f; }
     std::vector<RE::Actor*> Men() { return NearbyMen(nullptr, 0.0f); }
     RingWant RingNow(RE::Actor* a) { return RingImpl(a); }
     float Interval() { return ColourInterval(nullptr); }
@@ -1878,6 +1997,7 @@ namespace Colour {
         vm->RegisterFunction("CloseSlow"sv, "AnatomicaNative"sv, CloseSlow);
         vm->RegisterFunction("LooseFor"sv, "AnatomicaNative"sv, LooseFor);
         Drip::RegisterFuncs(vm);
+        Bridge::RegisterFuncs(vm);
         Engine::RegisterFuncs(vm);
     }
 
@@ -1949,6 +2069,7 @@ namespace Colour {
             if (auto* src = RE::ScriptEventSourceHolder::GetSingleton()) {
                 src->AddEventSink<RE::TESSleepStopEvent>(&g_sleepSink);
                 src->AddEventSink<RE::TESMagicEffectApplyEvent>(&g_magicSink);
+                src->AddEventSink<RE::TESEquipEvent>(&g_drinkSink);
                 scriptSinks = true;
             }
         }
@@ -1967,7 +2088,9 @@ namespace Colour {
     float TenderLevel(RE::FormID id) {
         std::lock_guard lk(g_lock);
         if (!g_loaded || !g.sensitive) return 0.0f;
-        return LevelsFor(id, nullptr).tender;
+        float sens = 0.0f;
+        if (auto ar = g_arousal.find(id); ar != g_arousal.end()) sens = ar->second.sens;
+        return std::max(LevelsFor(id, nullptr).tender, sens);
     }
     float SensClench() { std::lock_guard lk(g_lock); return g.sensClench; }
     float SensBreath() { std::lock_guard lk(g_lock); return g.sensBreath; }
@@ -2341,6 +2464,7 @@ namespace Colour {
         ImGuiMCP::Text("Gape %.0f%%   Looseness %.0f%%   Schlong shine %.0f%%", st.gape * 100, st.loose * 100, st.schlong * 100);
         ImGuiMCP::Text("This round: %d partner(s), %.0f s of penetration", st.partners, st.secs);
         ImGuiMCP::TextUnformatted(Drip::Status(a).c_str());
+        ImGuiMCP::TextUnformatted(Virgin::Status(a).c_str());
 
         ImGuiMCP::SeparatorText("His own colour");
         const std::string key = RefKey(a);
@@ -2401,11 +2525,17 @@ namespace Colour {
         return RE::PlayerCharacter::GetSingleton();
     }
     // a whole round of sex that just ended: dil = how rough (0-1), partners, seconds
+    float LooseCapFor(RE::Actor* a) {   // the most lasting looseness he can have (his experience included)
+        const float k = Virgin::For(a->GetFormID()).looseCap;
+        std::lock_guard lk(g_lock);
+        return std::min(0.6f, g.looseCap * k);
+    }
     void FakeRound(RE::Actor* a, float dil, int partners, float secs) {
         Worked(nullptr, a, dil, static_cast<float>(partners), nullptr);
         std::lock_guard lk(g_lock);
         auto& w = g_work[a->GetFormID()];
         w.peak = std::clamp(dil, 0.0f, 1.0f);
+        w.glossPeak = std::clamp(dil, 0.0f, 1.0f);
         w.wetPeak = g.wetBuild ? std::min(g.wetCap, w.wetBase + dil) : dil;
         w.partners = partners;
         w.workSecs = secs;
@@ -2459,14 +2589,17 @@ namespace Colour {
         act("Gape him open", [&] { if (!Engine::TestGape(a, 0.8f)) GapeTest(a, 0.8f); return std::string("opened; it holds, then closes on its own (Gape page timings)"); });
         ImGuiMCP::SameLine();
         act("Clench now", [&] { return std::string(Wink::TestClench(a) ? "clenched" : "only works while he is gaping (the movement code follows him then)"); });
-        act("Loosen to the cap", [&] { std::lock_guard lk(g_lock); const float v = g.looseCap; SetMorph(a, "Anatomica Gape", "AnatomicaLoose", v); return std::format("lasting looseness {:.0f}%", v * 100.0f); });
+        act("Loosen to the cap", [&] { const float v = LooseCapFor(a); if (!Engine::SetLooseNow(a, v)) SetMorph(a, "Anatomica Gape", "AnatomicaLoose", v); { std::lock_guard lk(g_lock); g_looseSeen[a->GetFormID()] = v; } return std::format("lasting looseness {:.0f}%", v * 100.0f); });
         ImGuiMCP::SameLine();
-        act("Remove looseness", [&] { SetMorph(a, "Anatomica Gape", "AnatomicaLoose", 0.0f); return std::string("tight again"); });
+        act("Remove looseness", [&] { if (!Engine::SetLooseNow(a, 0.0f)) SetMorph(a, "Anatomica Gape", "AnatomicaLoose", 0.0f); { std::lock_guard lk(g_lock); g_looseSeen[a->GetFormID()] = 0.0f; } return std::string("tight again"); });
 
         if (kCum) {
             ImGuiMCP::SeparatorText("Cum");
             Drip::RenderTests(a);
         }
+
+        ImGuiMCP::SeparatorText("Virginity");
+        Virgin::RenderTests(a);
 
         ImGuiMCP::SeparatorText("Status");
         act("Open the status window on him", [&] { g_inspect = a->GetFormID(); g_winOpen = true; g_winMove = false; ApplyWindowState(); return std::string("open"); });
@@ -2498,8 +2631,8 @@ namespace Colour {
         changed |= ImGuiMCP::Checkbox("Wet shine after sex", &g.wet);
         Indented(g.wet, [&] {
             changed |= Pct("Shine strength", &g.wetStrength);
-            Help("How wet he gets: the gloss on the hole, a clear wet layer over the rim, and a glossy layer on the skin "
-                 "around it and up the crevice (below).");
+            Help("How wet he gets: a glassy, water-like shine on the rim and a clear wet layer over it. (The glossy skin "
+                 "around the hole and up the crevice is its own effect, further down.)");
             changed |= Minutes("Dries in", &g.wetTime, 0.5f, 30.0f);
             changed |= ImGuiMCP::Checkbox("Builds up over rounds", &g.wetBuild);
             Help("Another round before he has dried adds to the wetness instead of starting again - he stays wet longer.");
@@ -2546,7 +2679,7 @@ namespace Colour {
                 changed |= ImGuiMCP::Checkbox("The giver's race colour when it has one##wc", &g.cumByRace);
                 Help("Per race page: races with a cum colour of their own use it here (also for the lube colour above).");
             });
-            if (!kCum) Fluid::RenderWetSettings();   // with cum on these sit on the Cum & drips page
+            Fluid::RenderWetSettings();
             changed |= ImGuiMCP::Checkbox("Water dries it faster", &g.waterDry);
             Help("Swimming, or standing outside in the rain, dries him faster.");
             if (g.waterDry) {
@@ -2605,6 +2738,14 @@ namespace Colour {
                 changed |= Pct("Bruise strength", &g.bruiseStrength);
                 Help("A faint tint toward the outer edge of the rim. Lasts a little longer than the redness.");
             });
+            changed |= ImGuiMCP::Checkbox("Glossy skin round the hole and up the crevice", &g.glossy);
+            Help("After sex the skin around his hole and up the crevice has a clear, glassy wet layer, fading over its own "
+                 "time - apart from the wetness of the hole itself (above).");
+            Indented(g.glossy, [&] {
+                changed |= Pct("Gloss strength", &g.glossyStrength);
+                changed |= Minutes("Fades in##glossy", &g.glossyTime, 0.5f, 120.0f);
+                Fluid::RenderGlossSettings();
+            });
             changed |= ImGuiMCP::Checkbox("Swelling (puffy rim)", &g.swell);
             Help("Needs the body built in BodySlide with \"Build Morphs\" ticked (Anatomica Swell).");
             if (g.swell) {
@@ -2654,7 +2795,25 @@ namespace Colour {
         // ---------------------------------------------------------------- healing
         ImGuiMCP::SeparatorText("Healing");
         changed |= ImGuiMCP::Checkbox("Sleeping or waiting clears everything", &g.healSleep);
-        changed |= ImGuiMCP::Checkbox("Healing spells and potions clear redness, bruising and swelling", &g.healMagic);
+        changed |= ImGuiMCP::Checkbox("Health potions heal redness, bruising and swelling (a bit at a time)", &g.healMagic);
+        Help("A health potion heals by how much health it gives back. Several in a row add up. Only health potions count "
+             "unless you switch the others on below - NPCs get all kinds of effects from other mods.");
+        Indented(g.healMagic, [&] {
+            changed |= ImGuiMCP::SliderFloat("Per point of health", &g.healPotion, 0.0f, 5.0f, "%.2f%%");
+            Help("A potion that restores 50 health heals 25% at 0.5%; an ultimate one (100+) about half or more.");
+            changed |= ImGuiMCP::Checkbox("Food and drink count too", &g.healFoodOn);
+            if (g.healFoodOn) {
+                ImGuiMCP::SameLine();
+                ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 8.0f);
+                changed |= ImGuiMCP::SliderFloat("per point##food", &g.healFood, 0.0f, 2.0f, "%.2f%%");
+            }
+            changed |= ImGuiMCP::Checkbox("Healing spells count too", &g.healSpellOn);
+            if (g.healSpellOn) {
+                ImGuiMCP::SameLine();
+                ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 8.0f);
+                changed |= ImGuiMCP::SliderFloat("per cast##spell", &g.healSpell, 0.0f, 100.0f, "%.0f%%");
+            }
+        });
 
         ImGuiMCP::Spacing();
         if (ConfirmButton("Reset after-sex settings")) {
@@ -2673,10 +2832,13 @@ namespace Colour {
             std::copy(std::begin(d.tenderCol2), std::end(d.tenderCol2), g.tenderCol2);
             g.tenderPartners = d.tenderPartners, g.tenderPerPartner = d.tenderPerPartner;
             g.bruise = d.bruise, g.bruisePartners = d.bruisePartners, g.bruiseLong = d.bruiseLong, g.bruiseStrength = d.bruiseStrength;
+            g.glossy = d.glossy, g.glossyStrength = d.glossyStrength, g.glossyTime = d.glossyTime;
             std::copy(std::begin(d.bruiseCol), std::end(d.bruiseCol), g.bruiseCol);
             g.swell = d.swell, g.swellStrength = d.swellStrength;
             g.sensitive = d.sensitive, g.sensClench = d.sensClench, g.sensBreath = d.sensBreath;
             g.healSleep = d.healSleep, g.healMagic = d.healMagic;
+            g.healPotion = d.healPotion, g.healFood = d.healFood, g.healSpell = d.healSpell;
+            g.healFoodOn = d.healFoodOn, g.healSpellOn = d.healSpellOn;
             g.wetBurst = d.wetBurst, g.wetBurstSecs = d.wetBurstSecs, g.wetBurstBoost = d.wetBurstBoost, g.cumByRace = d.cumByRace;
             g.slowClose = d.slowClose, g.slowCloseAmt = d.slowCloseAmt;
             g.rested = d.rested, g.restedMinutes = d.restedMinutes, g.restedExtra = d.restedExtra;

@@ -2,6 +2,7 @@
 #include "Wink.h"
 #include "Drip.h"
 #include "Engine.h"
+#include "Bridge.h"
 
 void OnMessage(SKSE::MessagingInterface::Message* message) {
     switch (message->type) {
@@ -12,6 +13,7 @@ void OnMessage(SKSE::MessagingInterface::Message* message) {
         case SKSE::MessagingInterface::kNewGame:
             Engine::Reset();
             Wink::Reset();
+            Bridge::OnGameLoaded();   // SkyrimNet decorators / actions, bathing
             UI::ApplySavedSettings();
             break;
         default:

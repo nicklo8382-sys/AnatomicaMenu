@@ -2,6 +2,8 @@
 #include "UI.h"
 #include "Colour.h"
 #include "Drip.h"
+#include "Virgin.h"
+#include "Bridge.h"
 
 #include <SimpleIni.h>
 
@@ -185,6 +187,8 @@ void UI::Register() {
     SKSEMenuFramework::AddSectionItem("Per race", Colour::RenderRaces);
     SKSEMenuFramework::AddSectionItem("Skin rules", Colour::RenderRules);
     SKSEMenuFramework::AddSectionItem("After sex", Colour::RenderAfter);
+    SKSEMenuFramework::AddSectionItem("Virginity", Virgin::RenderPage);
+    SKSEMenuFramework::AddSectionItem("Integrations", Bridge::RenderPage);
     if (kCum) SKSEMenuFramework::AddSectionItem("Cum & drips", Drip::RenderPage);   // off for now (Features.h)
     SKSEMenuFramework::AddSectionItem("Status", Colour::RenderStatus);
     SKSEMenuFramework::AddSectionItem("Testing", Colour::RenderTesting);

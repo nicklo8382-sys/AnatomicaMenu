@@ -120,6 +120,7 @@ namespace {
         bool cleft = true;           // a clear glossy layer over the skin around the hole and up the crevice while he is wet
         float cleftAmt = 0.8f;       // how strong
         float cleftSize = 1.0f;      // how far it reaches
+        float rimShine = 2.5f;       // how glassy-wet the rim gets while he is wet (x)
         int quality = 2;             // 1 fast, 2 normal, 3 smooth (simulation sub-steps)
     } g;
 
@@ -352,10 +353,12 @@ namespace {
         float wet = 0.0f; float wetRgb[3] = {0.95f, 0.93f, 0.88f};
         float swet = 0.0f;               // his schlong wet from the round (giver, After sex page), 0-1
         float wetCum = 0.0f;             // cum in the wetness: bead opacity (0 = clear water / lube)
+        float gloss = 0.0f;              // glossy skin round the hole (After sex page), 0-1
         float coatAlpha = 1.0f;          // cum on his schlong: opacity
         float coat = 0.0f, coatLeft = 0.0f, coatSecs = 90.0f; float coatRgb[3] = {0.96f, 0.95f, 0.90f}; double coatDrip = 0.0;
         float glossSent = -1.0f, sglossSent = -1.0f; double glossAt = 0.0;
         float sheenSent = -1.0f;
+        std::string sheenKey;                    // which shapes / colour the schlong's wet layers were made for
         struct Sheen { RE::NiPointer<RE::NiAVObject> obj; RE::BSGeometry* src = nullptr; RE::NiPointer<RE::NiNode> parent; };   // parent held so it can't vanish under us
         std::vector<Sheen> sheens;               // clear glossy copies over his schlong while it is coated
         Sheen cleftSheen;                        // the clear glossy copy of his body, masked to the hole and crevice
@@ -487,8 +490,10 @@ namespace {
 
     // only while we hold the node they hang on (rootRef), so it can't have been freed under us
     void DropSheens(Actor& A);
+    void DropCleft(Actor& A);
     void DropVisuals(Actor& A) {
         DropSheens(A);
+        DropCleft(A);
         for (auto& list : A.vis)
             for (auto& v : list) {
                 if (!v.root) continue;
@@ -1368,7 +1373,7 @@ namespace {
         return out;
     }
     // a clear, glassy copy of a schlong shape lying right on it (decal, so it never fights the skin)
-    RE::NiAVObject* MakeSheen(RE::BSGeometry* src, const char* tex = kSheenTex) {
+    RE::NiAVObject* MakeSheen(RE::BSGeometry* src, const char* tex = kSheenTex, float gloss = -1.0f, float spec = -1.0f) {
         if (!g_tplRope || !src || !src->parent) return nullptr;
         RE::BSGeometry* tplGeo = nullptr;
         RE::BSVisit::TraverseScenegraphGeometries(g_tplRope.get(), [&](RE::BSGeometry* g_) { if (!tplGeo) tplGeo = g_; return RE::BSVisit::BSVisitControl::kContinue; });
@@ -1409,8 +1414,8 @@ namespace {
                     nm->ClearTextures();
                     nm->OnLoadTextureSet(0, ts);
                 }
-                nm->specularPower = g.gloss;
-                nm->specularColorScale = 2.0f * g.shine;
+                nm->specularPower = gloss > 0.0f ? gloss : g.gloss;
+                nm->specularColorScale = spec > 0.0f ? spec : 2.0f * g.shine;
                 lsp->SetMaterial(nm, true);
                 nm->~BSLightingShaderMaterialBase();
                 RE::free(nm);
@@ -1429,7 +1434,6 @@ namespace {
         A.cleftSent = -1.0f;
     }
     void DropSheens(Actor& A) {
-        DropCleft(A);
         for (auto& sh : A.sheens)
             if (sh.obj && sh.parent && sh.obj->parent == sh.parent.get()) sh.parent->DetachChild2(sh.obj.get());
         A.sheens.clear();
@@ -1463,7 +1467,7 @@ namespace {
         return w * w * (3.0f - 2.0f * w);
     }
 
-    bool WriteMaskDds(const std::filesystem::path& p, int n, const std::vector<float>& alpha) {
+    bool WriteMaskDds(const std::filesystem::path& p, int n, const std::vector<float>& alpha, const std::uint8_t bgr[3]) {
         int mips = 1; for (int s_ = n; s_ > 1; s_ /= 2) ++mips;
         std::uint32_t h[31] = {};
         h[0] = 124; h[1] = 0x1 | 0x2 | 0x4 | 0x1000 | 0x20000 | 0x8; h[2] = n; h[3] = n; h[4] = n * 4; h[6] = mips;
@@ -1477,7 +1481,7 @@ namespace {
         f.write(reinterpret_cast<const char*>(h), 124);
         std::vector<std::uint8_t> cur(static_cast<size_t>(n) * n * 4);
         for (int i = 0; i < n * n; ++i) {
-            cur[i * 4 + 0] = 240; cur[i * 4 + 1] = 236; cur[i * 4 + 2] = 236;   // BGR: clear, a touch cool
+            cur[i * 4 + 0] = bgr[0]; cur[i * 4 + 1] = bgr[1]; cur[i * 4 + 2] = bgr[2];
             cur[i * 4 + 3] = static_cast<std::uint8_t>(std::clamp(alpha[i] * 255.0f, 0.0f, 255.0f));
         }
         int sz = n;
@@ -1495,9 +1499,12 @@ namespace {
         return static_cast<bool>(f);
     }
 
-    // the mask texture for this body ("" = can't be made: no UVs / no data)
+    // a mask texture for a skinned shape: weight(mesh position, skin weights, their bones' names) decides how much of the
+    // layer each vertex gets; the result is painted into its UV map. "" = can't be made (no UVs / no data / nothing)
+    using MaskWeight = std::function<float(const V3& pos, const float w[4], const float boneK[4])>;
     std::unordered_map<std::string, std::string> g_cleftTex;
-    std::string CleftMask(RE::BSGeometry* geo, const V3& c0) {
+    std::string MakeMask(RE::BSGeometry* geo, const std::string& keyBase, const MaskWeight& weight, const std::function<float(const char*)>& boneFactor,
+                         const std::uint8_t bgr[3]) {
         auto* si = geo ? geo->GetGeometryRuntimeData().skinInstance.get() : nullptr;
         RE::NiSkinPartition* sp = si ? si->skinPartition.get() : nullptr;
         if (!sp && si && si->skinData) sp = si->skinData->skinPartition.get();
@@ -1511,9 +1518,17 @@ namespace {
         const bool full = desc.HasFlag(RE::BSGraphics::Vertex::VF_FULLPREC);
         const std::uint32_t oP = desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_POSITION);
         const std::uint32_t oT = desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_TEXCOORD0);
+        const bool skinned = desc.HasFlag(RE::BSGraphics::Vertex::VF_SKINNED);
+        const std::uint32_t oS = skinned ? desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_SKINNING) : 0;
         const std::uint32_t nv = sp->vertexCount;
-        const std::string key = std::format("ad_cleft_{}_{}_{}_{}_{}", nv, std::lround(c0.x * 2.0f), std::lround(c0.y * 2.0f), std::lround(c0.z * 2.0f),
-                                            std::lround(g.cleftSize * 10.0f));
+        // per bone: how much it counts (glans: the tip bones)
+        std::vector<float> boneK;
+        if (boneFactor && si && si->bones && si->skinData) {
+            const std::uint32_t nb = si->skinData->GetBoneCount();
+            boneK.assign(nb, 0.0f);
+            for (std::uint32_t b = 0; b < nb; ++b) if (si->bones[b]) boneK[b] = boneFactor(si->bones[b]->name.c_str());
+        }
+        const std::string key = std::format("{}_{}_{:02X}{:02X}{:02X}", keyBase, nv, bgr[2], bgr[1], bgr[0]);
         if (auto it = g_cleftTex.find(key); it != g_cleftTex.end()) return it->second;
         const std::filesystem::path path = std::filesystem::path(kGenDirF) / (key + ".dds");
         const std::string tex = std::string(kGenTexF) + key + ".dds";
@@ -1530,10 +1545,16 @@ namespace {
             else { std::uint16_t h3[3]; std::memcpy(h3, q + oP, 6); pos = {Half(h3[0]), Half(h3[1]), Half(h3[2])}; }
             std::uint16_t t2[2]; std::memcpy(t2, q + oT, 4);
             u[i] = Half(t2[0]); v[i] = Half(t2[1]);
-            w[i] = CleftWeight(pos, c0, g.cleftSize);
+            float sw[4] = {0, 0, 0, 0}, bk[4] = {0, 0, 0, 0};
+            if (skinned) {
+                std::uint16_t hw[4]; std::memcpy(hw, q + oS, 8);
+                std::uint8_t bi[4]; std::memcpy(bi, q + oS + 8, 4);
+                for (int k = 0; k < 4; ++k) { sw[k] = std::max(0.0f, Half(hw[k])); bk[k] = bi[k] < boneK.size() ? boneK[bi[k]] : 0.0f; }
+            }
+            w[i] = weight(pos, sw, bk);
             if (w[i] > 0.01f) ++any;
         }
-        if (any == 0) { logger::info("Anatomica wet: no skin of his body near the hole for the glossy layer"); return g_cleftTex[key] = std::string{}; }
+        if (any == 0) { logger::info("Anatomica wet: nothing to cover on {} for {}", geo->name.c_str() ? geo->name.c_str() : "?", keyBase); return g_cleftTex[key] = std::string{}; }
         constexpr int N = 512;
         std::vector<float> A(static_cast<size_t>(N) * N, 0.0f);
         auto put = [&](int x, int y, float a) { if (x >= 0 && y >= 0 && x < N && y < N) { float& c = A[static_cast<size_t>(y) * N + x]; c = std::max(c, a); } };
@@ -1592,13 +1613,13 @@ namespace {
                 }
             A.swap(B);
         }
-        if (!WriteMaskDds(path, N, A)) { logger::info("Anatomica wet: could not write {}", path.string()); return g_cleftTex[key] = std::string{}; }
-        logger::info("Anatomica wet: glossy layer mask made for this body ({} of {} vertices, {} triangles)", any, nv, tris);
+        if (!WriteMaskDds(path, N, A, bgr)) { logger::info("Anatomica wet: could not write {}", path.string()); return g_cleftTex[key] = std::string{}; }
+        logger::info("Anatomica wet: {} mask made for {} ({} of {} vertices, {} triangles)", keyBase, geo->name.c_str() ? geo->name.c_str() : "?", any, nv, tris);
         return g_cleftTex[key] = tex;
     }
 
     void UpdateCleft(Actor& A, RE::Actor* a, float wet) {
-        const float cw = g.cleft ? std::clamp(wet, 0.0f, 1.0f) * g.cleftAmt : 0.0f;
+        const float cw = std::clamp(wet, 0.0f, 1.0f);   // strength and fading: After sex page (glossy skin)
         const float q = std::round(cw * 20.0f) / 20.0f;
         if (q <= 0.0f || !A.body.ok || !A.body.geo) { if (A.cleftSheen.obj) DropCleft(A); return; }
         RE::BSGeometry* body = A.body.geo.get();
@@ -1609,7 +1630,11 @@ namespace {
             if (s < 0) return;
             A.cleftC0 = A.body.v[s];
             A.cleftC0ok = true;
-            A.cleftTex = CleftMask(body, A.cleftC0);
+            const V3 c0 = A.cleftC0;
+            const float size = g.cleftSize;
+            static const std::uint8_t clear[3] = {240, 236, 236};
+            A.cleftTex = MakeMask(body, std::format("ad_cleft_{}_{}_{}_{}", std::lround(c0.x * 2.0f), std::lround(c0.y * 2.0f), std::lround(c0.z * 2.0f), std::lround(size * 10.0f)),
+                                  [c0, size](const V3& p, const float*, const float*) { return CleftWeight(p, c0, size); }, nullptr, clear);
         }
         if (A.cleftTex.empty()) return;
         auto& sh = A.cleftSheen;
@@ -1629,45 +1654,66 @@ namespace {
         const float q = std::round(w * 40.0f) / 40.0f;
         for (const char* nd : {"3BA_AnusRim", "3BA_Anus"}) {
             auto* o = root->GetObjectByName(RE::BSFixedString(nd));
-            Shine(o ? o->AsGeometry() : nullptr, q, 150.0f, 12.0f * g.shine);
+            Shine(o ? o->AsGeometry() : nullptr, q, 180.0f * g.rimShine, 8.0f * g.rimShine * g.shine);   // glassy, like water
         }
         if (auto* o = root->GetObjectByName(RE::BSFixedString("AnatomicaWet")); o && o->AsGeometry()) {
             if (q > 0.0f) {
                 o->GetFlags().reset(RE::NiAVObject::Flag::kHidden);
-                if (std::abs(q - A.glossSent) > 0.01f || A.glossSent < 0.0f) SetAlpha(o->AsGeometry(), 0.2f + 0.75f * q);
+                if (std::abs(q - A.glossSent) > 0.01f || A.glossSent < 0.0f) SetAlpha(o->AsGeometry(), std::min(1.0f, 0.3f + 0.7f * q * std::min(1.0f, 0.6f + 0.2f * g.rimShine)));
             } else o->GetFlags().set(RE::NiAVObject::Flag::kHidden);
         }
         A.glossSent = q;
         // the skin round his hole and up the crevice: a clear glossy layer while he is wet
-        UpdateCleft(A, a, w);
+        UpdateCleft(A, a, A.gloss);
         // his schlong while coated: glossier skin and a clear wet layer, fading as it dries
         const float sc = std::max(g.coatShine ? std::clamp(A.coatLeft, 0.0f, 1.0f) : 0.0f, std::clamp(A.swet, 0.0f, 1.0f));
         const float sq = std::round(sc * 20.0f) / 20.0f;
         auto geos = SchlongGeos(a);
-        for (auto* geo : AllSchlongGeos(a)) Shine(geo, sq, 220.0f, 16.0f * g.shine);   // every part, the head too
+        for (auto* geo : AllSchlongGeos(a)) Shine(geo, 0.0f, 0.0f, 0.0f);   // the whole shaft no longer: only the glans layer below
+        // a very glossy, clear (or cum-coloured) layer on the glans only: the parts of his schlong that follow the tip bones
+        const bool cumOn = A.coatLeft > 0.0f && A.coat > 0.05f;
+        std::uint8_t bgr[3] = {240, 236, 236};
+        if (cumOn) for (int i = 0; i < 3; ++i) bgr[2 - i] = static_cast<std::uint8_t>(std::clamp(std::lround(A.coatRgb[i] * 15.0f) * 17, 0L, 255L));
         if (sq > 0.0f) {
-            bool stale = A.sheens.size() != geos.size();
-            for (size_t i = 0; !stale && i < geos.size(); ++i) stale = A.sheens[i].src != geos[i] || !A.sheens[i].obj || A.sheens[i].obj->parent != geos[i]->parent;
+            std::string key = std::format("{:02X}{:02X}{:02X}", bgr[2], bgr[1], bgr[0]);
+            for (auto* geo : geos) key += std::format("|{}", static_cast<const void*>(geo));
+            bool stale = key != A.sheenKey;
+            for (size_t i = 0; !stale && i < A.sheens.size(); ++i) stale = !A.sheens[i].obj || !A.sheens[i].src || A.sheens[i].obj->parent != A.sheens[i].parent.get();
             if (stale) {
                 DropSheens(A);
+                A.sheenKey = key;
+                auto tipBones = [](const char* n) -> float {
+                    const std::string_view v(n ? n : "");
+                    if (v.find("Gen06") != std::string_view::npos || v.find("Genitals06") != std::string_view::npos) return 1.0f;
+                    if (v.find("Gen05") != std::string_view::npos || v.find("Genitals05") != std::string_view::npos) return 0.45f;
+                    return 0.0f;
+                };
+                auto glans = [](const V3&, const float w[4], const float k[4]) {
+                    float t = 0.0f;
+                    for (int i = 0; i < 4; ++i) t += w[i] * k[i];
+                    t = std::clamp((t - 0.15f) / 0.6f, 0.0f, 1.0f);
+                    return t * t * (3.0f - 2.0f * t);
+                };
                 std::string told;
                 for (auto* geo : geos) {
-                    auto* sh = MakeSheen(geo);
-                    if (sh) A.sheens.push_back({RE::NiPointer<RE::NiAVObject>(sh), geo, RE::NiPointer<RE::NiNode>(sh->parent)});
-                    const auto* sp = geo->GetGeometryRuntimeData().skinInstance ? geo->GetGeometryRuntimeData().skinInstance->skinPartition.get() : nullptr;
-                    told += std::format(" [{} {} pts{}]", geo->name.c_str() ? geo->name.c_str() : "?", sp ? sp->vertexCount : 0, sh ? "" : " NO SHEEN");
+                    const std::string tex = MakeMask(geo, "ad_glans", glans, tipBones, bgr);
+                    if (tex.empty()) continue;
+                    if (auto* sh = MakeSheen(geo, tex.c_str(), 700.0f, 4.0f * g.shine)) {
+                        A.sheens.push_back({RE::NiPointer<RE::NiAVObject>(sh), geo, RE::NiPointer<RE::NiNode>(sh->parent)});
+                        told += std::format(" [{}]", geo->name.c_str() ? geo->name.c_str() : "?");
+                    }
                 }
                 if (!A.coatLogged) {
                     A.coatLogged = true;
-                    std::string all;
-                    for (auto* geo : AllSchlongGeos(a)) all += std::format(" [{}{}]", geo->name.c_str() ? geo->name.c_str() : "?", geo->lightingShaderProp_cast() ? "" : " not lit");
-                    logger::info("Anatomica fluid: coat on {:08X}: sheen on{} | all shapes in his schlong slot:{}", A.id, told, all);
+                    logger::info("Anatomica wet: glans layer on {:08X}:{}", A.id, told.empty() ? " none (no part follows the tip bones)" : told);
                 }
+                A.sheenSent = -1.0f;
             }
-            if (std::abs(sq - A.sheenSent) > 0.01f)
-                for (auto& sh : A.sheens) SetAlpha(sh.obj ? sh.obj->AsGeometry() : nullptr, 0.45f + 0.5f * sq);
-            A.sheenSent = sq;
-        } else if (!A.sheens.empty()) DropSheens(A);
+            const float alpha = (0.5f + 0.5f * sq) * (cumOn ? std::clamp(A.coatAlpha, 0.05f, 1.0f) : 1.0f);
+            if (std::abs(alpha - A.sheenSent) > 0.01f)
+                for (auto& sh : A.sheens) SetAlpha(sh.obj ? sh.obj->AsGeometry() : nullptr, alpha);
+            A.sheenSent = alpha;
+        } else if (!A.sheens.empty()) { DropSheens(A); A.sheenKey.clear(); }
         A.sglossSent = sq;
     }
 
@@ -1798,11 +1844,12 @@ namespace {
         if (now - g_lastWetPoll > 0.5) { g_lastWetPoll = now; wet = Colour::WetNow(); polled = true; }
         std::lock_guard lk(g_mx);
         if (polled) {
-            for (auto& [id, A] : g_act) A.wet = 0.0f, A.swet = 0.0f;
+            for (auto& [id, A] : g_act) A.wet = 0.0f, A.swet = 0.0f, A.gloss = 0.0f;
             for (auto& w : wet) {
-                if (w.wet <= 0.0f && w.schlong <= 0.0f) continue;
+                if (w.wet <= 0.0f && w.schlong <= 0.0f && w.gloss <= 0.0f) continue;
                 auto& A = Get(w.id);
                 A.wet = w.wet;
+                A.gloss = w.gloss;
                 A.swet = w.schlong;
                 A.wetCum = w.cum;
                 for (int i = 0; i < 3; ++i) A.wetRgb[i] = w.rgb[i];
@@ -1829,7 +1876,7 @@ namespace {
             auto* a = RE::TESForm::LookupByID<RE::Actor>(A.id);
             auto* root = a && a->Is3DLoaded() ? a->Get3D(false) : nullptr;
             const bool anything = !A.ropes.empty() || !A.emit.empty() || !A.beads.empty() || A.hang > 0.01f || A.trail > 0.05f || A.wet > 0.01f || A.coatLeft > 0.0f || A.tipTrack > 0.0f ||
-                                  A.swet > 0.01f || A.glossSent > 0.0f || A.sglossSent > 0.0f;
+                                  A.swet > 0.01f || A.gloss > 0.01f || A.cleftSheen.obj || A.glossSent > 0.0f || A.sglossSent > 0.0f;
             if (!a || !root || !(g.on || !kCum)) {   // without cum (Features.h) the switch is not shown: wetness always runs
                 if (A.root3D && A.root3D != root) DropVisuals(A);
                 A.root3D = root;
@@ -1843,7 +1890,7 @@ namespace {
             if (A.root3D != root) { DropVisuals(A); A.root3D = root; A.body.ok = false; A.rim.ok = false; A.schlong.ok = false; }
             if (!A.vis[3].empty() && A.vis[3][0].host.get() != root->parent) DropVisuals(A);   // he moved into another cell
             // surfaces: re-read the mesh now and then (morphs / outfit changes), pose every frame
-            const bool needBody = !A.ropes.empty() || !A.emit.empty() || !A.beads.empty() || A.hang > 0.01f || A.trail > 0.05f || A.wet > 0.01f;
+            const bool needBody = !A.ropes.empty() || !A.emit.empty() || !A.beads.empty() || A.hang > 0.01f || A.trail > 0.05f || A.wet > 0.01f || A.gloss > 0.01f;
             if (needBody) {
                 // the shape he wears right now: an outfit change (scene end, redress) swaps it, so look every frame
                 auto* bg = BodyGeo(a, root);
@@ -2135,23 +2182,21 @@ namespace Fluid {
         F("Viscosity", g.viscosity, 0.0f, 1.0f); F("Stickiness", g.stick, 0.0f, 1.0f); F("MaxLength", g.maxLen, 2.0f, 30.0f);
         F("BreakDistance", g.breakDist, 2.0f, 40.0f); F("Flow", g.flow, 0.2f, 3.0f); F("DryTime", g.dry, 20.0f, 1200.0f);
         I("MaxPieces", g.maxPieces, 4, 48); B("Collide", g.collide); B("WetFilm", g.wetFilm); I("BeadMax", g.beadMax, 8, 64); F("BeadSize", g.beadSize, 0.3f, 3.0f); B("CoatShine", g.coatShine); I("Quality", g.quality, 1, 3);
-        B("Cleft", g.cleft); F("CleftAmount", g.cleftAmt, 0.0f, 1.0f); F("CleftSize", g.cleftSize, 0.5f, 2.0f);
+        B("Cleft", g.cleft); F("CleftAmount", g.cleftAmt, 0.0f, 1.0f); F("CleftSize", g.cleftSize, 0.5f, 2.0f); F("RimShine", g.rimShine, 0.5f, 5.0f);
     }
 
-    // the water beads (After sex page, under Wetness)
+    // the wet rim (After sex page, under Wetness)
     void RenderWetSettings() {
         bool ch = false;
-        ch |= ImGuiMCP::Checkbox("Glossy layer around the hole and crevice", &g.cleft);
-        Help("While he is wet the skin around his hole and up the crevice gets a clear, glassy wet layer (the same way the "
-             "giver's schlong gets its wet shine), fading as he dries.");
-        if (g.cleft) {
-            ImGuiMCP::Indent();
-            float pct = g.cleftAmt * 100.0f;
-            if (ImGuiMCP::SliderFloat("Layer strength", &pct, 0.0f, 100.0f, "%.0f%%")) { g.cleftAmt = pct / 100.0f; ch = true; }
-            ch |= ImGuiMCP::SliderFloat("How far it reaches", &g.cleftSize, 0.5f, 2.0f, "x%.2f");
-            Help("Around the hole and how far up the crevice. A new size is drawn for him the next time he gets wet.");
-            ImGuiMCP::Unindent();
-        }
+        ch |= ImGuiMCP::SliderFloat("Wet rim shine", &g.rimShine, 0.5f, 5.0f, "x%.1f");
+        Help("How glassy the rim gets while he is wet: higher = a sharper, brighter, more water-like shine.");
+        if (ch) Colour::SaveNow();
+    }
+    // the glossy skin's reach (After sex page, glossy skin)
+    void RenderGlossSettings() {
+        bool ch = false;
+        ch |= ImGuiMCP::SliderFloat("How far it reaches", &g.cleftSize, 0.5f, 2.0f, "x%.2f");
+        Help("Around the hole and how far up the crevice. A new size is drawn the next time he gets glossy.");
         if (ch) Colour::SaveNow();
     }
 

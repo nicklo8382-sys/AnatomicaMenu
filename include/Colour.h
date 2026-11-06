@@ -27,6 +27,13 @@ namespace Colour {
     std::string ColourPath(RE::Actor* a);
     float CloseSlowFor(RE::Actor* a);
     float LooseNow(RE::Actor* a, float cur, float days);
+    void RestHours(RE::FormID id, float hours);   // healing: this many extra hours of rest for his lasting looseness
+    // for the integrations (Bridge.cpp)
+    struct Snapshot { float wet = 0, tender = 0, bruise = 0, swell = 0, schlong = 0, gape = 0, loose = 0; int partners = 0; bool lube = false, cum = false, aroused = false; };
+    Snapshot SnapshotOf(RE::Actor* a);             // how he looks right now (0-1 each)
+    void AddWet(RE::Actor* a, float amount);       // lube him up (wet only)
+    void Bathed(RE::FormID id, bool clearWet, float soothe);   // washing: dry him (and his schlong), ease redness by this much
+    void SetArousal(RE::FormID id, float wet, float sens);     // arousal: a little wet (0-1), twitchier (0-1)
     std::vector<RE::Actor*> Men();
     float Interval();
     float LoadPauseNow();
@@ -36,6 +43,7 @@ namespace Colour {
     struct WetInfo {
         RE::FormID id; float wet; float rgb[3];
         float cum = 0.0f;                 // cum in the wetness: opacity (0 = the beads are clear / lube)
+        float gloss = 0.0f;               // glossy skin round the hole and up the crevice (0-1)
         float schlong = 0.0f;             // his schlong wet from the round (giver), 0-1
         float scum = 0.0f;                // cum on his schlong: opacity (0 = only the wet shine)
         float srgb[3] = {0.96f, 0.95f, 0.90f};

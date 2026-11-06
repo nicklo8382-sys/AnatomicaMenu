@@ -1,4 +1,5 @@
 #include "Drip.h"
+#include "Virgin.h"
 #include "Fluid.h"
 #include "Colour.h"
 #include "Wink.h"
@@ -781,6 +782,7 @@ namespace {
     // ---------------------------------------------------------------- co-save: puddles to remove next load
     constexpr std::uint32_t kRec = 'PUDL';
     void OnSave(SKSE::SerializationInterface* a) {
+        Virgin::Save(a);   // the plugin has one set of co-save callbacks: they live here
         std::lock_guard lk(g_mx);
         if (!a->OpenRecord(kRec, 1)) return;
         const std::uint32_t n = static_cast<std::uint32_t>(g_puddles.size());
@@ -791,6 +793,7 @@ namespace {
         std::uint32_t type, ver, len;
         std::lock_guard lk(g_mx);
         while (a->GetNextRecordInfo(type, ver, len)) {
+            if (Virgin::Load(a, type, ver, len)) continue;
             if (type != kRec) continue;
             std::uint32_t n = 0;
             a->ReadRecordData(&n, sizeof n);
@@ -802,6 +805,7 @@ namespace {
         }
     }
     void OnRevert(SKSE::SerializationInterface*) {
+        Virgin::Revert();
         std::lock_guard lk(g_mx);
         g_puddles.clear();
     }

@@ -284,6 +284,11 @@ namespace Wink {
         Blink(nullptr, a);
         return true;
     }
+    float ClosureNow(RE::FormID id) {
+        std::lock_guard lk(g_lock);
+        auto it = g_states.find(id);
+        return it == g_states.end() ? 0.0f : Clench(it->second);
+    }
     float GapeOf(RE::FormID id) {
         std::lock_guard lk(g_lock);
         auto it = g_states.find(id);

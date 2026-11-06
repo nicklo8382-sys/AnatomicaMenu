@@ -1,4 +1,6 @@
 #include "Engine.h"
+#include "Virgin.h"
+#include "Bridge.h"
 #include "Colour.h"
 #include "Drip.h"
 #include "SKEE.h"
@@ -150,6 +152,7 @@ namespace {
         const float mx = Glob(0x801, 0.8f), build = std::max(Glob(0x802, 30.0f), 0.5f), hold0 = Glob(0x803, 5.0f);
         const float decay = std::max(Glob(0x804, 30.0f), 0.5f), during = Glob(0x805, 0.5f), multi = std::max(Glob(0x807, 2.0f), 1.0f);
         const float rad = Glob(0x808, 3.0f), duringHold = Glob(0x80C, 2.0f);
+        const Virgin::Mods vm = Virgin::For(act->GetFormID());   // his virginity / experience (Virginity page)
         const Canal c = CanalOf(act);
         RE::Actor* partner = nullptr;
         float nearest = 1e9f;
@@ -173,7 +176,7 @@ namespace {
                 s.lastP = partner->GetFormID();
                 s.was = true;
             }
-            s.dil = std::min(1.0f, s.dil + dt / build);
+            s.dil = std::min(1.0f, s.dil + dt / (build * vm.build));
             s.worked = now;
             s.partnerNear = now;
             s.inScene = true;
@@ -190,15 +193,15 @@ namespace {
                 const float t = static_cast<float>(now - s.worked);
                 if (s.inScene) {
                     // during the scene: what is left when he slides out, held a moment, then easing shut
-                    const float e = during * Smooth(s.dil);
+                    const float e = during * vm.open * Smooth(s.dil);
                     g = t < hold ? e : e * (1.0f - Smooth((t - hold) / decay));
                 } else {
                     if (s.worked <= 0.0 || t >= hold) {
                         const float q = std::max(1.0f, Colour::CloseSlowFor(act));
-                        s.dil -= dt / (pm * decay * q);
+                        s.dil -= dt * vm.close / (pm * decay * q);
                         if (s.dil <= 0.0f) { s.dil = 0.0f; s.ep = 0.0f; }
                     }
-                    g = mx * Smooth(s.dil);
+                    g = mx * vm.open * Smooth(s.dil);
                     // clenches (the movement code does the motion)
                     if (Glob(0x80D, 1.0f) > 0.5f && g > 0.05f) {
                         gd = g;
@@ -206,6 +209,7 @@ namespace {
                             if (s.winkAt > 0.0) Wink::BlinkNow(act);
                             float lo = Glob(0x80F, 2.5f), hi = Glob(0x810, 7.0f);
                             if (hi < lo) hi = lo;
+                            lo *= vm.clench; hi *= vm.clench;   // a virgin clenches more often
                             s.winkAt = now + Rand(lo, hi) + 1.9;
                         }
                     }
@@ -215,10 +219,12 @@ namespace {
         s.g = g;
         { std::lock_guard gl(g_gapeMx); g_gape[act->GetFormID()] = g; }
         Wink::SetGapeNow(act, gd);
+        // a clench closes the gape morph itself for a moment (the bones alone get overwritten by anus physics)
+        const float shown = g * (1.0f - std::clamp(Wink::ClosureNow(act->GetFormID()), 0.0f, 0.95f));
         bool update = false;
-        if (std::abs(g - s.sent) > 0.002f || (g == 0.0f && s.sent != 0.0f)) {
-            SetMorph(act, "Anatomica Gape", K, g);
-            s.sent = g;
+        if (std::abs(shown - s.sent) > 0.002f || (shown == 0.0f && s.sent != 0.0f)) {
+            SetMorph(act, "Anatomica Gape", K, shown);
+            s.sent = shown;
             update = true;
         }
         if (std::abs(s.dil - s.dilSent) > 0.02f || (s.dil == 0.0f && s.dilSent != 0.0f)) {   // kept with the save
@@ -421,6 +427,25 @@ namespace {
     struct RingDone { RE::NiAVObject* root = nullptr; RE::NiPointer<RE::BSGeometry> geo;   // held: a redress can rebuild the overlays
                       RE::BSShaderMaterial* mat = nullptr; int col = -9, swap = -9, add = -9; };
     std::unordered_map<RE::FormID, RingDone> g_ringDone;
+    std::unordered_map<RE::FormID, std::string> g_ringLog;
+    // one line in the log whenever what we find / do on a man's ring changes (to see why a ring stays white)
+    void RingReport(RE::Actor* a, const char* what, RE::BSGeometry* geo, const Colour::RingWant& w) {
+        std::string line = std::format("ring on {} ({:08X}): {} | wanted colour {} swap {} add {}", a->GetName(), a->GetFormID(), what,
+                                       w.col >= 0 ? std::format("{:06X}", w.col) : std::string("none (his own paint)"), w.swap, w.add);
+        if (geo) {
+            auto* m = MatOf(geo);
+            line += std::format(" | {} texture {} | {}", geo->name.c_str() ? geo->name.c_str() : "?", DiffuseOf(geo), IsTint(m) ? "tint material" : "plain material");
+            if (IsTint(m) && m->GetFeature() == RE::BSShaderMaterial::Feature::kFaceGenRGBTint) {
+                auto* t = static_cast<RE::BSLightingShaderMaterialFacegenTint*>(m);
+                line += std::format(" {:.2f} {:.2f} {:.2f}", t->tintColor.red, t->tintColor.green, t->tintColor.blue);
+            }
+            if (auto* lsp = geo->lightingShaderProp_cast()) line += std::format(" alpha {:.2f}", m ? m->materialAlpha : -1.0f), (void)lsp;
+        }
+        auto& last = g_ringLog[a->GetFormID()];
+        if (last == line) return;
+        last = line;
+        logger::info("Anatomica {}", line);
+    }
     void RingOne(RE::Actor* a) {
         auto* root = a->Get3D(false);
         if (!root) return;
@@ -450,11 +475,12 @@ namespace {
             if (!freeSlot && (d.empty() || d.find("default.dds") != std::string::npos)) freeSlot = geo;
         }
         if (!ring) {
-            if (w.add < 0) return;
-            if (!any) { AskOverlays(a); done.root = nullptr; return; }   // look again once RaceMenu has added them
-            if (!freeSlot) return;
+            if (w.add < 0) { RingReport(a, any ? "no Anatomica ring among his RaceMenu paints, none to add" : "no RaceMenu paint slots", nullptr, w); return; }
+            if (!any) { RingReport(a, "no RaceMenu paint slots yet: asked RaceMenu for them", nullptr, w); AskOverlays(a); done.root = nullptr; return; }   // look again once RaceMenu has added them
+            if (!freeSlot) { RingReport(a, "no free RaceMenu paint slot for a ring", nullptr, w); return; }
             RingLook(freeSlot, kBlendBase, w.add, 1.0f);   // a ring for a man without one (NPC ring option)
             done.geo = RE::NiPointer<RE::BSGeometry>(freeSlot);
+            RingReport(a, "added a ring in a free slot", freeSlot, w);
             return;
         }
         done.geo = RE::NiPointer<RE::BSGeometry>(ring);
@@ -462,9 +488,11 @@ namespace {
         if (w.col < 0) {   // his own paint, as installed
             if (isBase) RingLook(ring, kRingOrigTex, IsTint(MatOf(ring)) ? 0xFFFFFF : -1, -1.0f);
             else if (IsTint(MatOf(ring))) RingLook(ring, nullptr, 0xFFFFFF, -1.0f);
+            RingReport(a, "left as his own paint", ring, w);
             return;
         }
         RingLook(ring, w.swap == 1 ? kBlendBase : kRingOrigTex, w.col, -1.0f);
+        RingReport(a, "coloured", ring, w);
     }
 
     void Tick() {
@@ -492,9 +520,11 @@ namespace {
                 if (!npc || npc->GetSex() != RE::SEX::kMale || a->IsDead()) continue;
                 if (!Allowed(a, player)) continue;
                 if (a != player && a->GetPosition().GetDistance(player->GetPosition()) > 4000.0f) continue;
+                Virgin::Watch(a);   // virgin or not: known (and OVirginity asked) before anything happens
                 Process(a, g_st[a->GetFormID()], dt, now, all);
             }
         }
+        Bridge::Tick(player, all);   // other mods: arousal, SkyrimNet (paces itself)
         // men out of reach: forget them (their morph stays as it is, saved by RaceMenu)
         for (auto it = g_st.begin(); it != g_st.end();) {
             auto* a = RE::TESForm::LookupByID<RE::Actor>(it->first);
@@ -580,6 +610,14 @@ namespace Engine {
         return true;
     }
 
+    bool SetLooseNow(RE::Actor* a, float v) {
+        if (!a || !g_morph) return false;
+        SetMorph(a, "Anatomica Gape", "AnatomicaLoose", std::max(0.0f, v));
+        const float gt = RE::Calendar::GetSingleton() ? RE::Calendar::GetSingleton()->GetCurrentGameTime() : 0.0f;
+        SetMorph(a, "AGLooseT", K, v > 0.0f ? gt : 0.0f);   // healing counts from now
+        g_morph->UpdateModelWeight(a, false);
+        return true;
+    }
     float GapeOf(RE::FormID id) {
         std::lock_guard gl(g_gapeMx);
         auto it = g_gape.find(id);
