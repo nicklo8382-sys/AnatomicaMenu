@@ -44,6 +44,8 @@ namespace Colour {
         RE::FormID id; float wet; float rgb[3];
         float cum = 0.0f;                 // cum in the wetness: opacity (0 = the beads are clear / lube)
         float gloss = 0.0f;               // glossy skin round the hole and up the crevice (0-1)
+        float lube = 0.0f;                // lube colour on the outer wet layer: how much (0 = clear)
+        float lrgb[3] = {1.0f, 1.0f, 1.0f};
         float schlong = 0.0f;             // his schlong wet from the round (giver), 0-1
         float scum = 0.0f;                // cum on his schlong: opacity (0 = only the wet shine)
         bool sdrip = false;               // and now and then a drip from the tip

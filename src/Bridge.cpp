@@ -66,7 +66,7 @@ namespace {
     }
     bool HasPlugin(const char* name) {
         auto* dh = RE::TESDataHandler::GetSingleton();
-        return dh && dh->LookupLoadedModByName(name);
+        return dh && (dh->LookupLoadedModByName(name) || dh->LookupLoadedLightModByName(name));   // ESL-flagged ones too
     }
     bool HasSLSF() { static int h = -1; if (h < 0) h = HasPlugin("SLSF Reloaded.esp") ? 1 : 0; return h == 1; }
     RE::TESFaction* ArousalFaction() {
@@ -363,6 +363,7 @@ namespace {
         }
     } g_bathSink;
 
+    bool Section(const char* title) { return ImGuiMCP::CollapsingHeader(title); }   // a drop-down section
     void Help(const char* t) {
         ImGuiMCP::SameLine();
         ImGuiMCP::TextDisabled("(?)");
@@ -523,7 +524,7 @@ namespace Bridge {
         bool ch = false;
         ImGuiMCP::TextWrapped("Anatomica with other mods. Each part only does something when its mod is installed.");
 
-        ImGuiMCP::SeparatorText("SkyrimNet");
+        if (Section("SkyrimNet")) {
         if (!HasSkyrimNet()) Missing("SkyrimNet");
         else {
             // is it working? (this session)
@@ -592,7 +593,8 @@ namespace Bridge {
             ImGuiMCP::Unindent();
         }
 
-        ImGuiMCP::SeparatorText("SLSF Reloaded (fame)");
+        }
+        if (Section("SLSF Reloaded (fame)")) {
         if (!HasSLSF()) Missing("SLSF Reloaded");
         ch |= ImGuiMCP::Checkbox("Being taken adds Anal fame", &g.fame);
         Help("Where it happens, each time you (the player) are taken. SLSF fame belongs to the player only.");
@@ -606,7 +608,8 @@ namespace Bridge {
             ImGuiMCP::Unindent();
         }
 
-        ImGuiMCP::SeparatorText("Arousal (SexLab Aroused / OSL Aroused / SLO Aroused NG)");
+        }
+        if (Section("Arousal (SexLab Aroused / OSL Aroused / SLO Aroused NG)")) {
         if (!ArousalFaction()) Missing("An arousal mod");
         ch |= ImGuiMCP::Checkbox("Arousal makes him wet and twitchy", &g.arousal);
         if (g.arousal) {
@@ -621,7 +624,8 @@ namespace Bridge {
             ImGuiMCP::Unindent();
         }
 
-        ImGuiMCP::SeparatorText("Bathing");
+        }
+        if (Section("Bathing")) {
         ch |= ImGuiMCP::Checkbox("Washing", &g.bath);
         Help("Bathing in Skyrim (or any bath / wash / soap effect).");
         if (g.bath) {
@@ -633,6 +637,7 @@ namespace Bridge {
             Help("Like a healing potion: hours off his waits (virginity coming back, looseness, the first-time reaction - "
                  "what counts is set on the Virginity page).");
             ImGuiMCP::Unindent();
+        }
         }
         if (ch) Colour::SaveNow();
     }

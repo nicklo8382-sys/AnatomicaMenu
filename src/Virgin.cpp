@@ -99,7 +99,8 @@ namespace {
             auto* dh = RE::TESDataHandler::GetSingleton();
             if (!dh) return nullptr;
             tried = true;
-            if (dh->LookupLoadedModByName("OVirginity.esp")) q = dh->LookupForm<RE::TESQuest>(0x800, "OVirginity.esp");
+            if (dh->LookupLoadedModByName("OVirginity.esp") || dh->LookupLoadedLightModByName("OVirginity.esp"))   // it is ESL-flagged
+                q = dh->LookupForm<RE::TESQuest>(0x800, "OVirginity.esp");
             logger::info("Anatomica virginity: OVirginity {}", q ? "found" : "not installed");
         }
         return q;
@@ -326,6 +327,7 @@ namespace {
         return "well used";
     }
 
+    bool Section(const char* title) { return ImGuiMCP::CollapsingHeader(title); }   // a drop-down section
     void Help(const char* t) {
         ImGuiMCP::SameLine();
         ImGuiMCP::TextDisabled("(?)");
@@ -595,17 +597,19 @@ namespace Virgin {
              "show in how tight he is, how his rim looks, how he reacts and how much he clenches (each can be switched off below).");
         if (!s.on) { if (ch) Colour::SaveNow(); return; }
 
-        ImGuiMCP::SeparatorText("OVirginity");
+        if (Section("OVirginity")) {
         if (OVQuest()) {
             ch |= ImGuiMCP::Checkbox("Use OVirginity", &s.useOV);
             Help("OVirginity is installed: its chances and its always / never virgin lists decide who starts a virgin, and "
                  "it is told when a man loses his virginity or gets it back (so ORomance, OProstitution and other mods see "
                  "it). When you are the one taking it, he goes on its \"virginities taken\" list.");
         } else ImGuiMCP::TextDisabled("OVirginity is not installed: the chances below decide who starts a virgin.");
+        }
+        {
 
         for (int i = 0; i < 3; ++i) {
             GroupSet& gs = s.grp[i];
-            ImGuiMCP::SeparatorText(kGroupName[i]);
+            if (!Section(kGroupName[i])) continue;   // closed drop-down
             ImGuiMCP::PushID(i);
             ch |= ImGuiMCP::Checkbox("On", &gs.on);
             if (gs.on) {
@@ -639,7 +643,8 @@ namespace Virgin {
             ImGuiMCP::PopID();
         }
 
-        ImGuiMCP::SeparatorText("What his virginity and experience change");
+        }
+        if (Section("What his virginity and experience change")) {
         ch |= ImGuiMCP::Checkbox("Tightness", &s.tight);
         Help("A virgin opens slowly, gapes less and snaps shut quickly; he loosens over his first few times instead of all at "
              "once. A well-used man opens easily, gapes wider and can keep more lasting looseness.");
@@ -660,7 +665,8 @@ namespace Virgin {
         Help("A new man takes more out of him than a regular partner: rounds with a man who has had him a few times add less "
              "experience and less lasting looseness.");
 
-        ImGuiMCP::SeparatorText("Healing potions and spells");
+        }
+        if (Section("Healing potions and spells")) {
         ImGuiMCP::TextDisabled("Each one takes time off his waits, as if he had rested that much longer.");
         ch |= ImGuiMCP::Checkbox("Potions", &s.potions);
         if (s.potions) {
@@ -695,6 +701,7 @@ namespace Virgin {
                  "back to normal faster. His virginity stays lost either way.");
             ImGuiMCP::Unindent();
             ImGuiMCP::TextDisabled("Redness, bruising and swelling: After sex page (healing clears them).");
+        }
         }
         if (ch) Colour::SaveNow();
     }

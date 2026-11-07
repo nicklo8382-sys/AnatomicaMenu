@@ -354,6 +354,8 @@ namespace {
         float swet = 0.0f;               // his schlong wet from the round (giver, After sex page), 0-1
         float wetCum = 0.0f;             // cum in the wetness: bead opacity (0 = clear water / lube)
         float gloss = 0.0f;              // glossy skin round the hole (After sex page), 0-1
+        float lube = 0.0f; float lrgb[3] = {1.0f, 1.0f, 1.0f};   // lube colour for the outer wet layer
+        std::string wetTex;              // what the wet layer shows now ("" = its own texture)
         float coatAlpha = 1.0f;          // cum on his schlong: opacity
         bool dripOn = true;              // a drip from his tip now and then
         float coat = 0.0f, coatLeft = 0.0f, coatSecs = 90.0f; float coatRgb[3] = {0.96f, 0.95f, 0.90f}; double coatDrip = 0.0;
@@ -1632,7 +1634,9 @@ namespace {
     void UpdateCleft(Actor& A, RE::Actor* a, float wet) {
         const float cw = std::clamp(wet, 0.0f, 1.0f);   // strength and fading: After sex page (glossy skin)
         const float q = std::round(cw * 20.0f) / 20.0f;
-        if (q <= 0.0f || !A.body.ok || !A.body.geo) { if (A.cleftSheen.obj) DropCleft(A); return; }
+        // dressed: the biggest shape in his body slot is the clothing, not his skin - no layer then
+        const bool dressed = a && a->GetWornArmor(RE::BGSBipedObjectForm::BipedObjectSlot::kBody);
+        if (q <= 0.0f || dressed || !A.body.ok || !A.body.geo) { if (A.cleftSheen.obj) DropCleft(A); return; }
         RE::BSGeometry* body = A.body.geo.get();
         if (A.cleftGeo != body) { A.cleftGeo = body; A.cleftC0ok = false; A.cleftTex.clear(); DropCleft(A); }
         if (!A.cleftC0ok) {   // his hole in the body's own mesh space (the mask is drawn there)
@@ -1655,6 +1659,59 @@ namespace {
             if (!sh.obj) { A.cleftTex.clear(); return; }   // could not be made: don't try every frame
         }
         if (std::abs(q - A.cleftSent) > 0.01f) { SetAlpha(sh.obj->AsGeometry(), 0.35f + 0.65f * q); A.cleftSent = q; }
+    }
+
+    // ---- the outer wet layer in the lube colour: its own little texture (uncompressed, ours), tinted
+    constexpr const char* kWetTex = "textures\\actors\\character\\male\\Anatomica\\drip\\ad_wet.dds";
+    std::unordered_map<std::uint32_t, std::string> g_wetTex;
+    std::string TintedWet(const float rgb[3]) {
+        auto q = [](float x) { return static_cast<std::uint32_t>(std::clamp(std::lround(x * 31.0f), 0L, 31L)); };
+        const std::uint32_t key = q(rgb[0]) << 10 | q(rgb[1]) << 5 | q(rgb[2]);
+        if (key == (31u << 10 | 31u << 5 | 31u)) return {};   // white: its own texture
+        if (auto it = g_wetTex.find(key); it != g_wetTex.end()) return it->second;
+        const std::string name = std::format("ad_wet_{:04X}.dds", key);
+        const std::filesystem::path out = std::filesystem::path(kGenDirF) / name;
+        const std::string tex = std::string(kGenTexF) + name;
+        std::error_code ec;
+        if (std::filesystem::exists(out, ec)) return g_wetTex[key] = tex;
+        std::ifstream in("Data/textures/actors/character/male/Anatomica/drip/ad_wet.dds", std::ios::binary);
+        std::vector<std::uint8_t> d((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        std::uint32_t pf = 0, bits = 0;
+        if (d.size() > 128) { std::memcpy(&pf, d.data() + 80, 4); std::memcpy(&bits, d.data() + 88, 4); }
+        if (d.size() <= 128 || std::memcmp(d.data(), "DDS ", 4) != 0 || !(pf & 0x40) || bits != 32) {
+            logger::info("Anatomica wet: the wet layer texture could not be read - the lube colour stays off");
+            return g_wetTex[key] = std::string{};
+        }
+        const float k[3] = {q(rgb[2]) / 31.0f, q(rgb[1]) / 31.0f, q(rgb[0]) / 31.0f};   // BGRA
+        for (size_t o = 128; o + 4 <= d.size(); o += 4)
+            for (int c = 0; c < 3; ++c) d[o + c] = static_cast<std::uint8_t>(std::lround(d[o + c] * k[c]));
+        std::filesystem::create_directories(out.parent_path(), ec);
+        std::ofstream f(out, std::ios::binary);
+        if (!f || !f.write(reinterpret_cast<const char*>(d.data()), static_cast<std::streamsize>(d.size()))) return g_wetTex[key] = std::string{};
+        return g_wetTex[key] = tex;
+    }
+    bool SetDiffuse(RE::BSGeometry* geo, const std::string& path) {
+        auto* lsp = geo ? geo->lightingShaderProp_cast() : nullptr;
+        auto* mat = lsp ? static_cast<RE::BSLightingShaderMaterialBase*>(lsp->material) : nullptr;
+        if (!mat || !mat->textureSet) return false;
+        auto* nm = static_cast<RE::BSLightingShaderMaterialBase*>(mat->Create());
+        if (!nm) return false;
+        nm->CopyMembers(mat);
+        if (auto* ts = RE::BSShaderTextureSet::Create()) {
+            for (std::uint32_t i = 0; i < RE::BSTextureSet::Texture::kTotal; ++i) {
+                const char* pth = mat->textureSet->GetTexturePath(static_cast<RE::BSTextureSet::Texture>(i));
+                if (pth && *pth) ts->SetTexturePath(static_cast<RE::BSTextureSet::Texture>(i), pth);
+            }
+            ts->SetTexturePath(RE::BSTextureSet::Texture::kDiffuse, path.c_str());
+            nm->ClearTextures();
+            nm->OnLoadTextureSet(0, ts);
+        }
+        lsp->SetMaterial(nm, true);
+        lsp->SetupGeometry(geo);
+        lsp->FinishSetupGeometry(geo);
+        nm->~BSLightingShaderMaterialBase();
+        RE::free(nm);
+        return true;
     }
 
     // ---- the glans' specular map (see UpdateGloss)
@@ -1703,9 +1760,31 @@ namespace {
             auto* o = root->GetObjectByName(RE::BSFixedString(nd));
             Shine(o ? o->AsGeometry() : nullptr, q, 180.0f * g.rimShine, 8.0f * g.rimShine * g.shine);   // glassy, like water
         }
+        if (!kCum)   // the rim armor's cum pieces (pool in the canal, film, lip): never with cum off
+            for (const char* nd : {"AnatomicaPool", "AnatomicaFilm", "AnatomicaLip"})
+                if (auto* o = root->GetObjectByName(RE::BSFixedString(nd)); o && !o->GetFlags().any(RE::NiAVObject::Flag::kHidden))
+                    o->GetFlags().set(RE::NiAVObject::Flag::kHidden);
         if (auto* o = root->GetObjectByName(RE::BSFixedString("AnatomicaWet")); o && o->AsGeometry()) {
             if (q > 0.0f) {
                 o->GetFlags().reset(RE::NiAVObject::Flag::kHidden);
+                // lube colour: the layer's own texture, tinted (clear when off)
+                std::string want;
+                if (A.lube > 0.01f) {
+                    float c[3];
+                    for (int i = 0; i < 3; ++i) c[i] = 1.0f + (std::clamp(A.lrgb[i], 0.0f, 1.0f) - 1.0f) * std::clamp(A.lube * 1.6f, 0.0f, 1.0f);
+                    want = TintedWet(c);
+                }
+                {   // compared with what the layer really shows (the game may have rebuilt it)
+                    auto* lsp = o->AsGeometry()->lightingShaderProp_cast();
+                    auto* m = lsp ? static_cast<RE::BSLightingShaderMaterialBase*>(lsp->material) : nullptr;
+                    std::string cur = (m && m->textureSet && m->textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse)) ? m->textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse) : "";
+                    for (auto& ch : cur) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                    std::string wl = want;
+                    for (auto& ch : wl) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                    const bool ok = want.empty() ? cur.find("ad_wet_") == std::string::npos : cur.find(wl.substr(wl.find_last_of('\\') + 1)) != std::string::npos;
+                    if (!ok) { SetDiffuse(o->AsGeometry(), want.empty() ? std::string(kWetTex) : want); A.glossSent = -1.0f; }
+                    A.wetTex = want;
+                }
                 if (std::abs(q - A.glossSent) > 0.01f || A.glossSent < 0.0f) SetAlpha(o->AsGeometry(), std::min(1.0f, 0.3f + 0.7f * q * std::min(1.0f, 0.6f + 0.2f * g.rimShine)));
             } else o->GetFlags().set(RE::NiAVObject::Flag::kHidden);
         }
@@ -1887,12 +1966,14 @@ namespace {
         if (now - g_lastWetPoll > 0.5) { g_lastWetPoll = now; wet = Colour::WetNow(); polled = true; }
         std::lock_guard lk(g_mx);
         if (polled) {
-            for (auto& [id, A] : g_act) A.wet = 0.0f, A.swet = 0.0f, A.gloss = 0.0f;
+            for (auto& [id, A] : g_act) A.wet = 0.0f, A.swet = 0.0f, A.gloss = 0.0f, A.lube = 0.0f;
             for (auto& w : wet) {
                 if (w.wet <= 0.0f && w.schlong <= 0.0f && w.gloss <= 0.0f) continue;
                 auto& A = Get(w.id);
                 A.wet = w.wet;
                 A.gloss = w.gloss;
+                A.lube = w.lube;
+                for (int i = 0; i < 3; ++i) A.lrgb[i] = w.lrgb[i];
                 A.swet = w.schlong;
                 A.wetCum = w.cum;
                 for (int i = 0; i < 3; ++i) A.wetRgb[i] = w.rgb[i];

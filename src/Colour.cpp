@@ -307,6 +307,7 @@ namespace {
         float custom[3] = {0.55f, 0.30f, 0.32f};
         bool blendMatch = true;
         bool autoRing = true;        // give NPCs the skin-blend ring if they don't have it
+        bool playerRing = true;      // and you
         int def = kInstalled;
         int player = kUseDefault;
         int pool = kDefaultPool;
@@ -431,6 +432,9 @@ namespace {
         std::string plain;   // shown in lists
     };
     // skin rules (Smart random): a man whose skin looks like `skin` (hue within +-tol) gets `anus`
+    // a drop-down section (closed until clicked) - keeps the pages short
+    bool Section(const char* title) { return ImGuiMCP::CollapsingHeader(title); }
+    constexpr bool kLube = true;    // lube colour: the outer wet layer of the rim (and the rim texture)
     struct Rule {
         bool on = true;
         std::string race;            // "" = all races
@@ -632,6 +636,7 @@ namespace {
             g.custom[2] = GetF(ini, "Colour", "CustomB", g.custom[2]);
             g.blendMatch = ini.GetBoolValue("Colour", "BlendMatch", g.blendMatch);
             g.autoRing = ini.GetBoolValue("Colour", "AutoRing", g.autoRing);
+            g.playerRing = ini.GetBoolValue("Colour", "PlayerRing", g.playerRing);
             g.def = static_cast<int>(ini.GetLongValue("Colour", "Default", kInstalled));
             g.player = static_cast<int>(ini.GetLongValue("Colour", "Player", kUseDefault));
             g.pool = static_cast<int>(ini.GetLongValue("Colour", "RandomPool", kDefaultPool));
@@ -764,6 +769,7 @@ namespace {
         ini.SetDoubleValue("Colour", "CustomB", g.custom[2]);
         ini.SetBoolValue("Colour", "BlendMatch", g.blendMatch);
         ini.SetBoolValue("Colour", "AutoRing", g.autoRing);
+        ini.SetBoolValue("Colour", "PlayerRing", g.playerRing);
         ini.SetLongValue("Colour", "Default", g.def);
         ini.SetLongValue("Colour", "Player", g.player);
         ini.SetLongValue("Colour", "RandomPool", g.pool);
@@ -1159,7 +1165,7 @@ namespace {
 
         // rim texture, made for this man: colour x his skin tone x reddening, plus wetness colour and
         // bruising. (The rim is not skin-tinted by the game - that shader path streaks it.)
-        const bool lubeOn = g.wetColourOn && wet > 0.0f;
+        const bool lubeOn = kLube && g.wetColourOn && wet > 0.0f;
         // cum in the wetness (its own colour and opacity, apart from the lube colour): a cum film on the rim
         const float film = g.wetCumOn && wet > 0.0f ? Quant(std::clamp(wet, 0.0f, 1.0f) * g.wetCumAmt) : 0.0f;
         float filmCol[3] = {g.wetCum[0], g.wetCum[1], g.wetCum[2]};
@@ -1199,7 +1205,7 @@ namespace {
         }
 
         // skin-blend ring
-        const bool npcRing = g.autoRing && !a->IsPlayerRef();
+        const bool npcRing = a->IsPlayerRef() ? g.playerRing : g.autoRing;   // a ring for a man without one
         if ((g.blendMatch && choice >= 0) || npcRing) {
             const int col = (g.blendMatch && choice >= 0) ? choice : InstalledPreset();
             const float s = (g.method == 0 && choice >= 0) ? pk.strength : 1.0f;   // same strength as the rim
@@ -1240,7 +1246,10 @@ namespace {
             if (lv.wet <= 0.0f && lv.gloss <= 0.0f) continue;
             Colour::WetInfo wi{id, lv.wet, {0.93f, 0.93f, 0.92f}};
             wi.gloss = lv.gloss;
-            if (g.wetColourOn) for (int i = 0; i < 3; ++i) wi.rgb[i] = g.wetColour[i];
+            if (kLube && g.wetColourOn) {
+                for (int i = 0; i < 3; ++i) wi.rgb[i] = wi.lrgb[i] = g.wetColour[i];
+                wi.lube = g.wetColourAmt;   // the outer wet layer takes this colour (Fluid)
+            }
             if (g.wetCumOn) {   // the beads are cum then
                 for (int i = 0; i < 3; ++i) wi.rgb[i] = g.wetCum[i];
                 if (g.cumByRace)
@@ -1929,7 +1938,7 @@ namespace Colour {
         const Status st = StatusOf(a);
         o.wet = st.wet; o.tender = st.tender; o.bruise = st.bruise; o.swell = st.swell; o.schlong = st.schlong;
         o.gape = st.gape; o.loose = st.loose; o.partners = st.partners;
-        o.lube = g.wetColourOn; o.cum = g.wetCumOn;
+        o.lube = kLube && g.wetColourOn; o.cum = g.wetCumOn;
         if (auto ar = g_arousal.find(a->GetFormID()); ar != g_arousal.end()) o.aroused = ar->second.wet > 0.0f;
         return o;
     }
@@ -2144,24 +2153,29 @@ namespace Colour {
         Help("The RaceMenu \"Anatomica Blend\" body paint (the soft ring around the anus) takes the same colour.");
         changed |= ImGuiMCP::Checkbox("Give NPCs the skin-blend ring", &g.autoRing);
         Help("Men who don't have the \"Anatomica Blend\" paint get it automatically (one free RaceMenu body-overlay slot), "
-             "coloured to match, so the anus fades into the skin instead of having a hard edge. Not added to you - apply "
-             "it yourself in RaceMenu (Body Paint > Anatomica Blend).");
+             "coloured to match, so the anus fades into the skin instead of having a hard edge.");
+        changed |= ImGuiMCP::Checkbox("Give you the skin-blend ring too", &g.playerRing);
+        Help("The same for you, in a free RaceMenu body-paint slot - no need to add Anatomica Blend in RaceMenu yourself. "
+             "Off: only the ring you painted on yourself in RaceMenu (if any) is coloured.");
 
-        ImGuiMCP::SeparatorText("Who gets which colour");
+        if (Section("Who gets which colour")) {
         changed |= ComboValue("Everyone (default)", &g.def, 1, kDefaultItems, 9);
         changed |= ComboValue("You (player)", &g.player, 2, kPlayerItems, 10);
         changed |= ComboValue("Your followers", &g.follower, 2, kFollowerItems, 10);
         ImGuiMCP::TextDisabled("Per-race picks: Per race page.");
 
-        ImGuiMCP::SeparatorText("Random picks from");
+        }
+        if (Section("Random picks from")) {
         changed |= PoolEditor(g.pool, g.palette);
 
-        ImGuiMCP::SeparatorText("Skin-fit colour");
+        }
+        if (Section("Skin-fit colour")) {
         changed |= ComboValue("When no Skin rule matches", &g.harmony, 0, kHarmonyItems, 3);
         Help("Skin-fit first follows your Skin rules page (e.g. red argonian -> blue anus). With no matching rule it "
              "reads his skin colour and picks an anus colour around it. Same family = his own hue, "
              "deeper. Neighbouring = hues next to his on the colour wheel (a red argonian gets reds, oranges, magentas - "
              "never green). Contrasting = the opposite side of the wheel, for bold looks.");
+        }
 
         if (ConfirmButton("Re-roll everyone")) {
             ++g.seed;
@@ -2194,7 +2208,7 @@ namespace Colour {
             g.strengthMax = d.strengthMax;
             std::copy(std::begin(d.custom), std::end(d.custom), g.custom);
             g.blendMatch = d.blendMatch;
-            g.autoRing = d.autoRing;
+            g.autoRing = d.autoRing; g.playerRing = d.playerRing;
             g.def = d.def;
             g.player = d.player;
             g.pool = d.pool;
@@ -2221,7 +2235,7 @@ namespace Colour {
         changed |= ImGuiMCP::SliderFloat("Wait after loading screens", &g.loadDelay, 0.0f, 30.0f, "%.0f s");
         Help("After every loading screen (loading a save, going through a door, fast travel) Anatomica's script waits this "
              "long before doing anything, so other mods' scripts get the busy first seconds. 0 = no wait.");
-        ImGuiMCP::SeparatorText("Presets");
+        if (Section("Presets")) {
         ImGuiMCP::TextWrapped("Save every Anatomica setting (all pages) to a slot, and load it again later - or share the "
                               "file (Data\\SKSE\\Plugins\\AnatomicaMenu\\Presets\\SlotN.ini).");
         for (int slot = 1; slot <= 5; ++slot) {
@@ -2253,6 +2267,7 @@ namespace Colour {
             ImGuiMCP::PopID();
         }
 
+        }
         ImGuiMCP::Spacing();
         if (ConfirmButton("Reset general settings")) {
             g.loadDelay = Settings{}.loadDelay;
@@ -2264,10 +2279,7 @@ namespace Colour {
     void RenderRacesBody();
     void __stdcall RenderRaces() {
         RenderRacesBody();
-        if (!kCum) {   // the Cum & drips page is off (Features.h): the race cum colours live here
-            ImGuiMCP::SeparatorText("Cum colour per race");
-            RenderCumColours();
-        }
+        if (!kCum && Section("Cum colour per race")) RenderCumColours();   // the Cum & drips page is off (Features.h): they live here
     }
     void RenderRacesBody() {
         std::lock_guard lk(g_lock);
@@ -2333,6 +2345,8 @@ namespace Colour {
         if (changed) SaveIni();
     }
 
+    std::string g_ruleNote;
+    RE::Actor* TestWho();
     void __stdcall RenderRules() {
         std::lock_guard lk(g_lock);
         if (!g_loaded) LoadIni();
@@ -2382,6 +2396,24 @@ namespace Colour {
             g_rules.push_back({});
             changed = true;
         }
+        ImGuiMCP::SameLine();
+        if (static_cast<int>(g_rules.size()) < kMaxRules && ImGuiMCP::Button("Add a rule for the selected man's skin")) {
+            if (RE::Actor* who = TestWho()) {
+                Rule r;
+                r.race = RaceKey(who->GetRace());
+                SkinTone(who, r.skin);
+                r.tol = 25.0f;
+                const Status st = StatusOf(who);   // start from the anus colour he has now
+                for (int i = 0; i < 3; ++i) r.anus[i] = st.rim[i];
+                g_rules.push_back(r);
+                g_ruleNote = std::format("added: {} ({}), skin {:02X}{:02X}{:02X}", who->GetName(), st.race,
+                                         static_cast<int>(r.skin[0] * 255), static_cast<int>(r.skin[1] * 255), static_cast<int>(r.skin[2] * 255));
+                changed = true;
+            }
+        }
+        Help("The man you click in the console (~), or you: a new rule for his race and his exact skin tone, starting with "
+             "the anus colour he has now - pick the anus colour you want for skins like his.");
+        if (!g_ruleNote.empty()) ImGuiMCP::TextDisabled("%s", g_ruleNote.c_str());
         ImGuiMCP::SameLine();
         if (ConfirmButton("Load the default rules")) {
             g_rules = DefaultRules();
@@ -2567,14 +2599,15 @@ namespace Colour {
         ImGuiMCP::SeparatorText(a ? a->GetName() : "nobody");
         if (!a) return;
 
-        ImGuiMCP::SeparatorText("Colour and ring");
+        if (Section("Colour and ring")) {
         act("Re-roll his colour", [&] { std::lock_guard lk(g_lock); ++g_reroll[RefKey(a)]; g_ringReset.insert(a->GetFormID()); SaveIni(); return std::string("new random / Skin-fit colour, ring redone"); });
         ImGuiMCP::SameLine();
         act("Re-apply his look now", [&] { std::lock_guard lk(g_lock); g_sent.erase(a->GetFormID()); return std::string("sent again on the next check"); });
         ImGuiMCP::SameLine();
         act("Reset his ring", [&] { std::lock_guard lk(g_lock); g_ringReset.insert(a->GetFormID()); return std::string("ring taken off and redone"); });
 
-        ImGuiMCP::SeparatorText("After sex");
+        }
+        if (Section("After sex")) {
         act("Gentle round", [&] { FakeRound(a, 0.35f, 1, 45.0f); return std::string("1 partner, 45 s, gentle"); });
         ImGuiMCP::SameLine();
         act("Rough round", [&] { FakeRound(a, 1.0f, std::max(3, g.bruisePartners), std::max(240.0f, g.bruiseLong + 10.0f)); return std::string("rough, several partners: wet, red, bruised, swollen"); });
@@ -2587,7 +2620,8 @@ namespace Colour {
         ImGuiMCP::SameLine();
         act("Clear after-sex looks", [&] { std::lock_guard lk(g_lock); g_work.erase(a->GetFormID()); g_schlong.erase(a->GetFormID()); g_sent.erase(a->GetFormID()); return std::string("back to normal on the next check"); });
 
-        ImGuiMCP::SeparatorText("Gape and movement");
+        }
+        if (Section("Gape and movement")) {
         act("Gape him open", [&] { if (!Engine::TestGape(a, 0.8f)) GapeTest(a, 0.8f); return std::string("opened; it holds, then closes on its own (Gape page timings)"); });
         ImGuiMCP::SameLine();
         act("Clench now", [&] { return std::string(Wink::TestClench(a) ? "clenched" : "only works while he is gaping (the movement code follows him then)"); });
@@ -2606,12 +2640,15 @@ namespace Colour {
             Drip::RenderTests(a);
         }
 
-        ImGuiMCP::SeparatorText("Virginity");
+        }
+        if (Section("Virginity")) {
         Virgin::RenderTests(a);
 
-        ImGuiMCP::SeparatorText("Status");
+        }
+        if (Section("Status")) {
         act("Open the status window on him", [&] { g_inspect = a->GetFormID(); g_winOpen = true; g_winMove = false; ApplyWindowState(); return std::string("open"); });
 
+        }
         if (!last.empty()) { ImGuiMCP::Spacing(); ImGuiMCP::TextDisabled("Last: %s", last.c_str()); }
     }
 
@@ -2635,7 +2672,7 @@ namespace Colour {
                               "(up to the strength set here). Every part can be switched off on its own.");
 
         // ---------------------------------------------------------------- wetness
-        ImGuiMCP::SeparatorText("Wetness");
+        if (Section("Wetness")) {
         changed |= ImGuiMCP::Checkbox("Wet shine after sex", &g.wet);
         Indented(g.wet, [&] {
             changed |= Pct("Shine strength", &g.wetStrength);
@@ -2653,8 +2690,10 @@ namespace Colour {
                     changed = true;
                 }
             }
-            changed |= ImGuiMCP::Checkbox("Coloured wetness (lube / cum)", &g.wetColourOn);
-            Help("Lays a colour over the rim while it is wet, fading as it dries.");
+            if (kLube) {   // coloured lube: switched off (it did not show well on the rim)
+            changed |= ImGuiMCP::Checkbox("Anus wear colour (outer rim)", &g.wetColourOn);
+            Help("Colours the clear wet layer over the outside of the rim (and tints the rim a little) while he is wet - "
+                 "lube, cum, anything you like - fading as he dries.");
             Indented(g.wetColourOn, [&] {
                 changed |= ImGuiMCP::ColorEdit3("Wetness colour", g.wetColour, kWheel);
                 changed |= Pct("Colour amount", &g.wetColourAmt);
@@ -2672,18 +2711,19 @@ namespace Colour {
                 ImGuiMCP::SameLine();
                 preset("Blue lube", 0.45f, 0.65f, 0.95f, 0.35f);
             });
+            }
             changed |= ImGuiMCP::Checkbox("Extra gloss right after", &g.wetBurst);
             Help("For the first moments after the last stroke he is glossier than the slider says, then settles.");
             Indented(g.wetBurst, [&] {
                 changed |= ImGuiMCP::SliderFloat("for##burst", &g.wetBurstSecs, 5.0f, 120.0f, "%.0f s");
                 changed |= Pct("extra##burst", &g.wetBurstBoost);
             });
-            changed |= ImGuiMCP::Checkbox("Cum in the wetness", &g.wetCumOn);
-            Help("Separate from the lube colour above: a film of cum on the rim in its own colour and opacity, drying off "
-                 "with the wetness.");
+            changed |= ImGuiMCP::Checkbox("Anus wear colour (inner rim)", &g.wetCumOn);
+            Help("Separate from the outer rim colour above: colours the inner part of the rim - where it is worked - in its own "
+                 "colour and opacity (cum, soreness, anything you like), fading as he dries.");
             Indented(g.wetCumOn, [&] {
-                changed |= ImGuiMCP::ColorEdit3("Cum colour##wc", g.wetCum, kWheel);
-                changed |= Pct("Cum opacity##wc", &g.wetCumAmt);
+                changed |= ImGuiMCP::ColorEdit3("Wear colour##wc", g.wetCum, kWheel);
+                changed |= Pct("Wear opacity##wc", &g.wetCumAmt);
                 changed |= ImGuiMCP::Checkbox("The giver's race colour when it has one##wc", &g.cumByRace);
                 Help("Per race page: races with a cum colour of their own use it here (also for the lube colour above).");
             });
@@ -2697,7 +2737,8 @@ namespace Colour {
             }
         });
 
-        ImGuiMCP::SeparatorText("Wet schlong");
+        }
+        if (Section("Wet schlong")) {
         if (kCum) {
             ImGuiMCP::TextWrapped("The giver's schlong coming out wet with cum (gloss, streaks, a drip from the tip) is on the "
                                   "Cum & drips page now: \"His schlong comes out wet with cum\".");
@@ -2720,7 +2761,8 @@ namespace Colour {
         }
 
         // ---------------------------------------------------------------- reddening
-        ImGuiMCP::SeparatorText("Tender reddening");
+        }
+        if (Section("Tender reddening")) {
         changed |= ImGuiMCP::Checkbox("Tender reddening after sex", &g.tender);
         Indented(g.tender, [&] {
             changed |= Pct("Reddening strength", &g.tenderStrength);
@@ -2786,7 +2828,8 @@ namespace Colour {
         });
 
         // ---------------------------------------------------------------- looseness
-        ImGuiMCP::SeparatorText("Lasting looseness");
+        }
+        if (Section("Lasting looseness")) {
         changed |= ImGuiMCP::Checkbox("Each round leaves him a little looser", &g.loose);
         Help("A small gape that stays after the after-sex gape has closed and heals over game days. Saved with each "
              "man (RaceMenu body morph). Turning this off lets every man heal back over the next minutes.");
@@ -2802,7 +2845,8 @@ namespace Colour {
         }
 
         // ---------------------------------------------------------------- healing
-        ImGuiMCP::SeparatorText("Healing");
+        }
+        if (Section("Healing")) {
         changed |= ImGuiMCP::Checkbox("Sleeping or waiting clears everything", &g.healSleep);
         changed |= ImGuiMCP::Checkbox("Health potions heal redness, bruising and swelling (a bit at a time)", &g.healMagic);
         Help("A health potion heals by how much health it gives back. Several in a row add up. Only health potions count "
@@ -2824,6 +2868,7 @@ namespace Colour {
             }
         });
 
+        }
         ImGuiMCP::Spacing();
         if (ConfirmButton("Reset after-sex settings")) {
             const Settings d;
