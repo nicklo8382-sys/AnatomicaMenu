@@ -348,6 +348,7 @@ namespace {
         std::vector<Bead> beads;
         double beadAt = 0.0;
         bool logged = false, purge = false, coatLogged = false;
+        int streakLog = 0;               // what the log has said about this coat's streaks (bits)
         // what Drip / Colour want
         float hang = 0.0f, hangPhase = 0.0f; float hangRgb[3] = {0.96f, 0.95f, 0.90f};
         float trail = 0.0f; int trailSide = 1; float trailRgb[3] = {0.96f, 0.95f, 0.90f}; float trailDone = 0.0f;
@@ -1176,13 +1177,25 @@ namespace {
         A.beads.clear();   // water beads: taken out (they did not look right); the glossy layer does the wet look now
         (void)&StepBeads;
         // a coated schlong: streaks running down him, and now and then a drip off the tip
+        if (A.coatLeft > 0.0f && A.coat > 0.05f && !(A.streakLog & 1) && (!A.schlong.ok || !A.tipOk)) {
+            A.streakLog |= 1;
+            logger::info("Anatomica wet: {:08X} no cum streaks: {}", A.id, !A.schlong.ok ? "his schlong mesh could not be read" : "the tip of his schlong was not found");
+        }
         if (A.coatLeft > 0.0f && A.coat > 0.05f && A.schlong.ok) {
             int streaks = 0, drips = 0;
             for (auto& r : A.ropes) if (r.onSchlong && !r.dead) (r.type == Type::Rivulet ? streaks : drips)++;
             if (streaks < static_cast<int>(1 + 3 * std::min(A.coat, 1.0f)) && Rand(0.0f, 1.0f) < h * 2.0f && A.tipOk) {
                 const int s = static_cast<int>(Rand(0.0f, static_cast<float>(A.schlong.wp.size()) - 0.01f));
                 const V3 p = A.schlong.wp[s];
-                if (Dot(p - A.tip, A.tipAxis) > -4.0f) StartRivulet(A, A.schlong, p, Rand(0.04f, 0.1f) * A.coat, A.coatRgb, true);
+                if (Dot(p - A.tip, A.tipAxis) > -4.0f) {
+                    StartRivulet(A, A.schlong, p, Rand(0.04f, 0.1f) * A.coat, A.coatRgb, true);
+                    if (!(A.streakLog & 2)) {
+                        A.streakLog |= 2;
+                        const float* c = A.coatRgb;
+                        const std::string& t = TexFor(c);
+                        logger::info("Anatomica wet: {:08X} first cum streak - texture {}", A.id, t.empty() ? "the plain white one (default colour, or the colour texture could not be made)" : t);
+                    }
+                }
             }
             if (A.dripOn && drips == 0 && now > A.coatDrip && A.tipOk && A.tipSurf >= 0 && A.coatLeft > 0.25f) {
                 Rope& r = NewRope(A, Type::Strand, A.coatRgb);
@@ -1984,7 +1997,10 @@ namespace {
                 for (int i = 0; i < 3; ++i) A.wetRgb[i] = w.rgb[i];
                 // cum on the giver's schlong (After sex page, Wet schlong): follows his wet shine as it dries
                 if (w.scum > 0.0f && w.schlong > 0.01f) {
-                    if (A.coatLeft <= 0.0f) { A.coatDrip = now + 1.5; A.tipOk = true; A.coatLogged = false; }
+                    if (A.coatLeft <= 0.0f) {
+                        A.coatDrip = now + 1.5; A.tipOk = true; A.coatLogged = false; A.streakLog = 0;
+                        logger::info("Anatomica wet: {:08X} schlong coated - cum streaks in {:.2f} {:.2f} {:.2f}, opacity {:.2f}", A.id, w.srgb[0], w.srgb[1], w.srgb[2], w.scum);
+                    }
                     A.coat = 1.0f;
                     A.coatLeft = std::clamp(w.schlong, 0.0f, 1.0f);
                     A.coatSecs = 1e6f;   // the After sex page decides how long: no drying of our own on top

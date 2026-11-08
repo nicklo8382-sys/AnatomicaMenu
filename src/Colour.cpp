@@ -190,9 +190,10 @@ namespace {
         for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
             if (!e.is_regular_file(ec)) continue;
             const std::string n = e.path().filename().string();
-            // anatomica_blend_tint_RRGGBB.dds = a full-size (2048) ring colour from 2.3j and older; cum_*.dds = cum effects (removed)
+            // anatomica_blend_tint_RRGGBB.dds = a full-size (2048) ring colour from 2.3j and older (cum_*.dds are the cum
+            // colours of the streaks on a wet schlong: still used, kept)
             const bool oldRing = n.rfind("anatomica_blend_tint_", 0) == 0 && n.size() == std::string("anatomica_blend_tint_000000.dds").size();
-            if (oldRing || n.rfind("cum_", 0) == 0) { std::filesystem::remove(e.path(), ec); ++legacy; continue; }
+            if (oldRing) { std::filesystem::remove(e.path(), ec); ++legacy; continue; }
             const auto sz = e.file_size(ec);
             total += sz;
             files.emplace_back(e.last_write_time(ec), e.path(), sz);
@@ -1333,7 +1334,7 @@ namespace {
                 auto f = std::find_if(out.begin(), out.end(), [&](const Colour::WetInfo& w) { return w.id == id; });
                 if (f == out.end()) { out.push_back(Colour::WetInfo{id, 0.0f, {0.93f, 0.93f, 0.92f}}); f = out.end() - 1; }
                 f->schlong = sc;
-                if (g.schlongCum) {   // cum on it: streaks (and a drip from the tip if wanted), in his own cum colour
+                if (kCum && g.schlongCum) {   // cum on it: streaks (and a drip from the tip) - part of the cum switched off in Features.h
                     f->scum = g.schlongCumAmt;
                     f->sdrip = kCum && g.schlongDrip;   // the drip from the tip: only with the cum system (Features.h)
                     for (int i = 0; i < 3; ++i) f->srgb[i] = g.schlongCumCol[i];
@@ -2863,6 +2864,7 @@ namespace Colour {
             Indented(g.schlongWet, [&] {
                 changed |= Pct("Shine strength##sw", &g.schlongStrength);
                 changed |= Minutes("Dries in##sw", &g.schlongTime, 0.5f, 60.0f);
+                if (kCum) {   // cum streaks: off for now with the rest of Anatomica's cum (Features.h); a fluid mod may do it later
                 changed |= ImGuiMCP::Checkbox("Cum on it (streaks)", &g.schlongCum);
                 Help("Cum streaks running down his schlong in the colour and opacity set here, fading with the shine.");
                 Indented(g.schlongCum, [&] {
@@ -2871,6 +2873,7 @@ namespace Colour {
                     changed |= Pct("Cum opacity##sc", &g.schlongCumAmt);
                     changed |= ImGuiMCP::Checkbox("His race's cum colour when it has one##sc", &g.schlongCumRace);
                 });
+                }
             });
         }
 
