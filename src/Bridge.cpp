@@ -2,6 +2,8 @@
 #include "Colour.h"
 #include "Engine.h"
 #include "Virgin.h"
+#include "Size.h"
+#include "Extras.h"
 #include "Wink.h"
 #include "SKSEMenuFramework.h"
 
@@ -88,7 +90,7 @@ namespace {
     }
     std::string NameOf(RE::FormID id) { return Name(RE::TESForm::LookupByID<RE::Actor>(id)); }
     bool IsMan(RE::Actor* a) { const auto* npc = a ? a->GetActorBase() : nullptr; return npc && npc->GetSex() == RE::SEX::kMale; }
-    bool Naked(RE::Actor* a) { return a && !a->GetWornArmor(RE::BGSBipedObjectForm::BipedObjectSlot::kBody); }
+    bool Naked(RE::Actor* a) { return a && Extras::Exposed(a); }   // no body armour (or, with the extras, armour that leaves his backside bare)
     std::string Days(float d) {
         if (d < 0.0f) return "";
         if (d < 1.0f / 24.0f) return "just now";
@@ -192,6 +194,11 @@ namespace {
             if (!v.virgin && v.mode == 2 && v.daysSince > 1.0f) out.push_back(std::format("He was last taken {}; with the rest he is tightening up again.", Days(v.daysSince)));
             for (auto& [pid, c] : v.partners)
                 if (c >= 4) { out.push_back(std::format("{} has had him {} times - a regular.", NameOf(pid), c)); break; }
+            {   // the biggest who has had him (partner size, as far as it is known)
+                RE::FormID big = 0; int bc = -1;
+                for (auto& [pid, c] : v.partners) { const int sc = Size::CatOf(pid); if (sc > bc) { bc = sc; big = pid; } }
+                if (big && bc >= 3) out.push_back(std::format("The biggest to have had him is {}, {} - he felt every inch.", NameOf(big), bc == Size::kCreature ? "a monstrous creature" : (bc == 4 ? "who is huge" : "who is big")));
+            }
         }
         const std::string seen = Seen(man, false);
         if (!seen.empty() && (s.gape > 0.15f || s.tender > 0.25f || s.wet > 0.2f || s.swell > 0.25f || s.schlong > 0.15f)) out.push_back("Right now: " + seen);
@@ -318,7 +325,8 @@ namespace {
                 "SNCanClench", "SNClench", "{\"target\": \"Actor\", \"how\": \"clench or relax\"}");
             act("AnatomicaAskVirgin", "Ask a man whether he is still an anal virgin. He will answer.",
                 "SNCanAsk", "SNAsk", "{\"target\": \"Actor\"}");
-            logger::info("Anatomica: registered with SkyrimNet (3 decorators, 4 actions)");
+            Extras::RegisterSN(vm);   // anatomica_lot (only with the extras mod)
+            logger::info("Anatomica: registered with SkyrimNet (3 decorators, 4 actions{})", Extras::On() ? ", extras' anatomica_lot" : "");
         });
     }
 
@@ -386,6 +394,8 @@ namespace Bridge {
         I("ArousalFirstTime", g.exposureFirst, 0, 100); I("ArousalEachTime", g.exposureEach, 0, 50);
         B("Bathing", g.bath); B("BathDries", g.bathDry); F("BathSoothes", g.bathSoothe, 0.0f, 1.0f); F("BathHours", g.bathHours, 0.0f, 48.0f);
         if (g.fameHi < g.fameLo) g.fameHi = g.fameLo;
+        Size::Ini(ini, save);
+        Extras::Ini(ini, save);
     }
 
     void RegisterFuncs(RE::BSScript::IVirtualMachine* vm) {
@@ -397,6 +407,7 @@ namespace Bridge {
         vm->RegisterFunction("SNCanClench"sv, "AnatomicaNative"sv, SNCanClench);
         vm->RegisterFunction("SNCanAsk"sv, "AnatomicaNative"sv, SNCanAsk);
         vm->RegisterFunction("SNDo"sv, "AnatomicaNative"sv, SNDo);
+        Extras::RegisterFuncs(vm);
     }
 
     void OnGameLoaded() {
@@ -426,10 +437,24 @@ namespace Bridge {
         if (!first || !SN()) return;
         // SkyrimNet: both remember it; the partner reacts once the round is over
         const std::string M = Name(man), P = partner ? Name(partner) : std::string{};
+        std::string with;   // the partner's size, when it stands out (TNG)
+        if (partner) {   // "with his huge, knotted cock" / "with his uncut cock"
+            const std::string d = Size::Describe(partner);
+            if (!d.empty()) with = std::format(" with {} {} cock", Size::Cat(partner) == Size::kCreature ? "its" : "his", d);
+        }
         std::string mem, react;
-        if (lostBefore == 0) {
-            mem = partner ? std::format("{} took {}'s anal virginity - his first time with any man.", P, M) : std::format("{} lost his anal virginity.", M);
-            react = partner ? std::format("{} has just taken {}'s virginity: his first time with any man.", P, M) : std::string{};
+        const Extras::How how = Extras::HowNow(man, partner);   // with the extras: taken as a captive / for money
+        if (lostBefore == 0 && how == Extras::How::captive) {
+            mem = partner ? std::format("{} took {}'s anal virginity{} while he was a helpless captive - he had no say in it.", P, M, with)
+                          : std::format("{} lost his anal virginity as a captive, with no say in it.", M);
+            react = partner ? std::format("{} has just taken captive {}'s virginity{}: his first time with any man, and not by his choice.", P, M, with) : std::string{};
+        } else if (lostBefore == 0 && how == Extras::How::paid) {
+            mem = partner ? std::format("{} paid to take {}'s anal virginity{} - his first time with any man, sold for coin.", P, M, with)
+                          : std::format("{} sold his anal virginity.", M);
+            react = partner ? std::format("{} has just had {}'s virginity{}, paid for: his first time with any man.", P, M, with) : std::string{};
+        } else if (lostBefore == 0) {
+            mem = partner ? std::format("{} took {}'s anal virginity{} - his first time with any man.", P, M, with) : std::format("{} lost his anal virginity.", M);
+            react = partner ? std::format("{} has just taken {}'s virginity{}: his first time with any man.", P, M, with) : std::string{};
         } else if (partner && prevBy == partnerId) {
             mem = std::format("{} had {} again after his body had tightened back up - tight as a virgin again.", P, M);
             react = std::format("{} has just had {} again and found him as tight as a virgin after his rest.", P, M);
@@ -594,6 +619,7 @@ namespace Bridge {
         }
 
         }
+        ch |= Size::RenderSection();
         if (Section("SLSF Reloaded (fame)")) {
         if (!HasSLSF()) Missing("SLSF Reloaded");
         ch |= ImGuiMCP::Checkbox("Being taken adds Anal fame", &g.fame);

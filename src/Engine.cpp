@@ -1,5 +1,6 @@
 #include "Engine.h"
 #include "Virgin.h"
+#include "Size.h"
 #include "Bridge.h"
 #include "Colour.h"
 #include "Drip.h"
@@ -121,6 +122,8 @@ namespace {
         double worked = 0.0, winkAt = 0.0, partnerNear = 0.0;
         float sent = -1.0f, dilSent = -1.0f, g = 0.0f;
         bool inScene = false;
+        float sz = 1.0f;          // partner size (TNG): how far he opens this round
+        RE::FormID szFirst = 0;   // the round's first partner (his size can still be on its way from TNG)
     };
     std::mutex g_mx;
     std::unordered_map<RE::FormID, St> g_st;
@@ -164,6 +167,7 @@ namespace {
                 if (o == act) continue;
                 const float d = act->GetPosition().GetDistance(o->GetPosition());
                 if (d > 90.0f) continue;
+                Size::Cat(o);   // close enough to be his partner: ask TNG now, so his size is known when it starts
                 if (s.lastP && o->GetFormID() == s.lastP) {
                     auto* oroot = o->Get3D(false);
                     if (auto* op = Node(oroot, "NPC Pelvis [Pelv]")) nearest = std::min(nearest, Len(V(op->world.translate) - c.pelvis));
@@ -179,7 +183,10 @@ namespace {
                 s.lastP = partner->GetFormID();
                 s.was = true;
             }
-            s.dil = std::min(1.0f, s.dil + dt / (build * vm.build));
+            const Size::K sk = Size::For(partner);   // a bigger man opens him further and faster
+            if (!s.szFirst || partner->GetFormID() == s.szFirst) { s.sz = sk.open; s.szFirst = partner->GetFormID(); }
+            else s.sz = std::max(s.sz, sk.open);
+            s.dil = std::min(1.0f, s.dil + dt / (build * vm.build * sk.build));
             s.worked = now;
             s.partnerNear = now;
             s.inScene = true;
@@ -196,15 +203,15 @@ namespace {
                 const float t = static_cast<float>(now - s.worked);
                 if (s.inScene) {
                     // during the scene: what is left when he slides out, held a moment, then easing shut
-                    const float e = during * vm.open * Smooth(s.dil);
+                    const float e = during * vm.open * s.sz * Smooth(s.dil);
                     g = t < hold ? e : e * (1.0f - Smooth((t - hold) / decay));
                 } else {
                     if (s.worked <= 0.0 || t >= hold) {
                         const float q = std::max(1.0f, Colour::CloseSlowFor(act));
                         s.dil -= dt * vm.close / (pm * decay * q);
-                        if (s.dil <= 0.0f) { s.dil = 0.0f; s.ep = 0.0f; }
+                        if (s.dil <= 0.0f) { s.dil = 0.0f; s.ep = 0.0f; s.sz = 1.0f; s.szFirst = 0; }
                     }
-                    g = mx * vm.open * Smooth(s.dil);
+                    g = mx * vm.open * s.sz * Smooth(s.dil);
                     // clenches (the movement code does the motion)
                     if (Glob(0x80D, 1.0f) > 0.5f && g > 0.05f) {
                         gd = g;

@@ -1,4 +1,5 @@
 #include "Fluid.h"
+#include "Extras.h"
 #include "Colour.h"
 #include "Drip.h"
 #include "Engine.h"
@@ -1635,7 +1636,7 @@ namespace {
         const float cw = std::clamp(wet, 0.0f, 1.0f);   // strength and fading: After sex page (glossy skin)
         const float q = std::round(cw * 20.0f) / 20.0f;
         // dressed: the biggest shape in his body slot is the clothing, not his skin - no layer then
-        const bool dressed = a && a->GetWornArmor(RE::BGSBipedObjectForm::BipedObjectSlot::kBody);
+        const bool dressed = a && !Extras::Exposed(a);   // (with the extras, armour that leaves his backside bare does not count)
         if (q <= 0.0f || dressed || !A.body.ok || !A.body.geo) { if (A.cleftSheen.obj) DropCleft(A); return; }
         RE::BSGeometry* body = A.body.geo.get();
         if (A.cleftGeo != body) { A.cleftGeo = body; A.cleftC0ok = false; A.cleftTex.clear(); DropCleft(A); }

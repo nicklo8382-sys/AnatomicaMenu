@@ -1,6 +1,8 @@
 #include "Colour.h"
 #include "Drip.h"
 #include "Virgin.h"
+#include "Size.h"
+#include "Extras.h"
 #include "Bridge.h"
 #include "Fluid.h"
 #include "Engine.h"
@@ -474,6 +476,9 @@ namespace {
         float glossPeak = 0.0f;  // glossy skin (0-1)
         float bruiseMul = 1.0f;  // healing takes the bruising down bit by bit
         float restedBoost = 0.0f;
+        float szLoose = 1.0f, szTender = 1.0f;   // partner size this round (TNG): looseness / soreness
+        float roughTender = 1.0f, roughTime = 1.0f;   // extras: taken as a captive - sorer, for longer
+        RE::FormID szFirst = 0;
     };
     std::unordered_map<RE::FormID, Work> g_work;
     std::unordered_map<RE::FormID, double> g_lastRound;   // when his last round was (for "first time in a while")
@@ -1097,6 +1102,7 @@ namespace {
     struct Levels {
         float wet = 0.0f, tender = 0.0f, bruise = 0.0f, stage = 0.0f;   // stage 0 = bright red, 1 = deep red
         float gloss = 0.0f;   // glossy skin round the hole
+        float worn = 0.0f;    // the part of the wetness that came from sex (arousal alone never colours him)
     };
     Levels LevelsFor(RE::FormID id, RE::Actor* a) {
         Levels lv;
@@ -1129,18 +1135,19 @@ namespace {
         }
         if (g.tender) {
             const Virgin::Mods vm = Virgin::For(id);   // his first time: redder, and it fades slower
-            float p = w.peak * vm.tender;
+            float p = w.peak * vm.tender * w.szTender * w.roughTender;   // a bigger man / a captive: sorer
             if (g.tenderPartners && w.partners > 1) p *= 1.0f + g.tenderPerPartner * static_cast<float>(w.partners - 1);
             if (g.rested) p *= 1.0f + w.restedBoost;
-            lv.tender = std::min(1.0f, p * g.tenderStrength * Fade(e, g.tenderTime * vm.tenderTime));
+            lv.tender = std::min(1.0f, p * g.tenderStrength * Fade(e, g.tenderTime * vm.tenderTime * w.roughTime));
             lv.stage = std::clamp(static_cast<float>(e / (g.tenderTime * g.tenderSplit)), 0.0f, 1.0f);
             lv.stage = lv.stage * lv.stage * (3.0f - 2.0f * lv.stage);
             if (g.bruise && (w.partners >= g.bruisePartners || w.workSecs >= g.bruiseLong))
                 lv.bruise = g.bruiseStrength * w.bruiseMul * Fade(e, g.tenderTime * 1.5f);
         }
+        lv.worn = lv.wet;
         lv.wet = std::max(lv.wet, aroused);
         if (g.glossy) lv.gloss = std::min(1.0f, w.glossPeak * g.glossyStrength * Fade(e, g.glossyTime));
-        const double keep = std::max({static_cast<double>(g.wetTime) * std::max(1.0f, w.wetPeak) + w.dryShift, g.tenderTime * 1.5, static_cast<double>(g.glossyTime)});
+        const double keep = std::max({static_cast<double>(g.wetTime) * std::max(1.0f, w.wetPeak) + w.dryShift, g.tenderTime * 1.5 * std::max(1.0f, w.roughTime) * std::max(1.0f, Virgin::For(id).tenderTime), static_cast<double>(g.glossyTime)});
         if (e > keep + 5.0 && now - w.wetLast > keep + 5.0) g_work.erase(it);
         return lv;
     }
@@ -1155,6 +1162,7 @@ namespace {
 
         const Levels lv = LevelsFor(a->GetFormID(), a);
         const float wet = Quant(lv.wet), tender = Quant(lv.tender), bruise = Quant(lv.bruise);
+        const float worn = Quant(lv.worn);   // the wear colours: only after sex, never from arousal alone
         // reddening colour: a multiplier on the rim / ring colour
         float red[3];
         for (int i = 0; i < 3; ++i) {
@@ -1165,9 +1173,9 @@ namespace {
 
         // rim texture, made for this man: colour x his skin tone x reddening, plus wetness colour and
         // bruising. (The rim is not skin-tinted by the game - that shader path streaks it.)
-        const bool lubeOn = kLube && g.wetColourOn && wet > 0.0f;
+        const bool lubeOn = kLube && g.wetColourOn && worn > 0.0f;
         // cum in the wetness (its own colour and opacity, apart from the lube colour): a cum film on the rim
-        const float film = g.wetCumOn && wet > 0.0f ? Quant(std::clamp(wet, 0.0f, 1.0f) * g.wetCumAmt) : 0.0f;
+        const float film = g.wetCumOn && worn > 0.0f ? Quant(std::clamp(worn, 0.0f, 1.0f) * g.wetCumAmt) : 0.0f;
         float filmCol[3] = {g.wetCum[0], g.wetCum[1], g.wetCum[2]};
         if (film > 0.0f && g.cumByRace)
             if (auto wi = g_work.find(a->GetFormID()); wi != g_work.end() && !wi->second.giverRace.empty())
@@ -1195,7 +1203,7 @@ namespace {
                 }
                 t.bruise[i] = g.bruiseCol[i];
             }
-            t.lubeAmt = lubeOn ? wet * g.wetColourAmt : 0.0f;
+            t.lubeAmt = lubeOn ? worn * g.wetColourAmt : 0.0f;
             t.filmAmt = film;
             for (int i = 0; i < 3; ++i) t.film[i] = filmCol[i];
             t.frothAmt = froth;
@@ -1246,11 +1254,11 @@ namespace {
             if (lv.wet <= 0.0f && lv.gloss <= 0.0f) continue;
             Colour::WetInfo wi{id, lv.wet, {0.93f, 0.93f, 0.92f}};
             wi.gloss = lv.gloss;
-            if (kLube && g.wetColourOn) {
+            if (kLube && g.wetColourOn && lv.worn > 0.0f) {   // aroused only: clear, no wear colour
                 for (int i = 0; i < 3; ++i) wi.rgb[i] = wi.lrgb[i] = g.wetColour[i];
                 wi.lube = g.wetColourAmt;   // the outer wet layer takes this colour (Fluid)
             }
-            if (g.wetCumOn) {   // the beads are cum then
+            if (g.wetCumOn && lv.worn > 0.0f) {   // the beads are cum then
                 for (int i = 0; i < 3; ++i) wi.rgb[i] = g.wetCum[i];
                 if (g.cumByRace)
                     if (auto wk = g_work.find(id); wk != g_work.end() && !wk->second.giverRace.empty())
@@ -1432,6 +1440,8 @@ namespace {
         if (!a) return;
         Drip::OnWorked(a, partner, dil);   // before our lock (it has its own)
         Virgin::OnWorked(a, partner);
+        const Size::K sk = partner && partner != a ? Size::For(partner) : Size::K{};   // before our lock (TNG is asked on the VM)
+        const Extras::Rough rough = Extras::RoughFor(a, partner);
         std::lock_guard lk(g_lock);
         if (!g_loaded) LoadIni();
         const double now = Now();
@@ -1456,6 +1466,8 @@ namespace {
             w.dripDone = false;
             w.looseDone = false;
             w.bruiseMul = 1.0f;
+            w.szLoose = sk.loose; w.szTender = sk.tender; w.szFirst = partner ? partner->GetFormID() : 0;
+            w.roughTender = rough.tender; w.roughTime = rough.time;
             // first time in a while = redder
             const auto lr = g_lastRound.find(a->GetFormID());
             const bool restedNow = lr == g_lastRound.end() || now - lr->second > g.restedMinutes * 60.0;
@@ -1468,7 +1480,11 @@ namespace {
         w.last = now;
         w.wetLast = now;
         g_lastRound[a->GetFormID()] = now;
-        if (partner && partner != a) w.giverRace = RaceKey(partner->GetRace());
+        if (partner && partner != a) {
+            if (!w.szFirst || partner->GetFormID() == w.szFirst) { w.szLoose = sk.loose; w.szTender = sk.tender; w.szFirst = partner->GetFormID(); }
+            else { w.szLoose = std::max(w.szLoose, sk.loose); w.szTender = std::max(w.szTender, sk.tender); }
+            w.giverRace = RaceKey(partner->GetRace());
+        }
         if (partner && partner != a) {
             auto& sw = g_schlong[partner->GetFormID()];
             float sc = 0.0f;
@@ -1521,7 +1537,7 @@ namespace {
             Work& w = it->second;
             if (!w.looseDone && Now() - w.last >= 3.0) {
                 w.looseDone = true;
-                v += g.looseAdd * vm.looseAdd * std::max(0.25f, w.peak);
+                v += g.looseAdd * vm.looseAdd * w.szLoose * std::max(0.25f, w.peak);
             }
         }
         v = std::clamp(v, 0.0f, std::min(0.6f, g.looseCap * vm.looseCap));
