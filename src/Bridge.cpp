@@ -377,7 +377,9 @@ namespace {
         ImGuiMCP::TextDisabled("(?)");
         if (ImGuiMCP::IsItemHovered()) { ImGuiMCP::BeginTooltip(); ImGuiMCP::PushTextWrapPos(420.0f); ImGuiMCP::TextUnformatted(t); ImGuiMCP::PopTextWrapPos(); ImGuiMCP::EndTooltip(); }
     }
-    void Missing(const char* what) { ImGuiMCP::TextDisabled("%s is not installed: nothing here does anything.", what); }
+    // a mod that is not installed: a red line, and its settings greyed out (kept as they are, for when it is added)
+    void Missing(const char* what) { ImGuiMCP::TextColored(ImGuiMCP::ImVec4{1.0f, 0.45f, 0.4f, 1.0f}, "%s is not installed - these settings do nothing until it is (they are kept).", what); }
+    std::string Title(const char* title, const char* id, bool missing) { return std::format("{}{}###{}", title, missing ? "  (not installed)" : "", id); }
 }
 
 namespace Bridge {
@@ -549,8 +551,9 @@ namespace Bridge {
         bool ch = false;
         ImGuiMCP::TextWrapped("Anatomica with other mods. Each part only does something when its mod is installed.");
 
-        if (Section("SkyrimNet")) {
-        if (!HasSkyrimNet()) Missing("SkyrimNet");
+        const bool offSN = !HasSkyrimNet(), offFame = !HasSLSF(), offAr = !ArousalFaction();
+        if (Section(Title("SkyrimNet", "sn", offSN).c_str())) {
+        if (offSN) Missing("SkyrimNet");
         else {
             // is it working? (this session)
             const ImGuiMCP::ImVec4 good{0.5f, 0.9f, 0.5f, 1.0f}, bad{1.0f, 0.55f, 0.4f, 1.0f};
@@ -581,6 +584,7 @@ namespace Bridge {
                 ImGuiMCP::TextWrapped("What he remembers of men he has had: %s", pv[2].empty() ? "(nothing)" : pv[2].c_str());
             }
         }
+        ImGuiMCP::BeginDisabled(offSN);
         ch |= ImGuiMCP::Checkbox("Use SkyrimNet", &g.sn);
         if (g.sn) {
             ImGuiMCP::Indent();
@@ -617,11 +621,13 @@ namespace Bridge {
             Help("Done on every load. Use this if you switched SkyrimNet parts on in the middle of a game.");
             ImGuiMCP::Unindent();
         }
-
+        ImGuiMCP::EndDisabled();
         }
         ch |= Size::RenderSection();
-        if (Section("SLSF Reloaded (fame)")) {
-        if (!HasSLSF()) Missing("SLSF Reloaded");
+        ch |= Extras::RenderRevealing();   // revealing armour (main mod)
+        if (Section(Title("SLSF Reloaded (fame)", "slsf", offFame).c_str())) {
+        if (offFame) Missing("SLSF Reloaded");
+        ImGuiMCP::BeginDisabled(offFame);
         ch |= ImGuiMCP::Checkbox("Being taken adds Anal fame", &g.fame);
         Help("Where it happens, each time you (the player) are taken. SLSF fame belongs to the player only.");
         if (g.fame) {
@@ -633,10 +639,11 @@ namespace Bridge {
             ch |= ImGuiMCP::Checkbox("Several men in a row: Group fame too", &g.fameGroup);
             ImGuiMCP::Unindent();
         }
-
+        ImGuiMCP::EndDisabled();
         }
-        if (Section("Arousal (SexLab Aroused / OSL Aroused / SLO Aroused NG)")) {
-        if (!ArousalFaction()) Missing("An arousal mod");
+        if (Section(Title("Arousal (SexLab Aroused / OSL Aroused / SLO Aroused NG)", "arousal", offAr).c_str())) {
+        if (offAr) Missing("An arousal mod");
+        ImGuiMCP::BeginDisabled(offAr);
         ch |= ImGuiMCP::Checkbox("Arousal makes him wet and twitchy", &g.arousal);
         if (g.arousal) {
             ImGuiMCP::Indent();
@@ -649,7 +656,7 @@ namespace Bridge {
             ch |= ImGuiMCP::SliderInt("Every time he is taken", &g.exposureEach, 0, 50);
             ImGuiMCP::Unindent();
         }
-
+        ImGuiMCP::EndDisabled();
         }
         if (Section("Bathing")) {
         ch |= ImGuiMCP::Checkbox("Washing", &g.bath);

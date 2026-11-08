@@ -425,9 +425,11 @@ namespace Size {
     }
 
     bool RenderSection() {
-        if (!Section("Partner size and shape (The New Gentleman)")) return false;
+        const bool noTNG = !HasTNG();
+        if (!Section(noTNG ? "Partner size and shape (The New Gentleman)  (not installed)###tng" : "Partner size and shape (The New Gentleman)###tng")) return false;
         bool ch = false;
-        if (!HasTNG()) ImGuiMCP::TextDisabled("The New Gentleman is not installed: every man counts as average (creatures still count below).");
+        if (noTNG) ImGuiMCP::TextColored(ImGuiMCP::ImVec4{1.0f, 0.45f, 0.4f, 1.0f}, "The New Gentleman is not installed - every man counts as average size (greyed out). "
+                                                                                     "Creatures, and shapes set in the menu or by compatibility files, still work.");
         ch |= ImGuiMCP::Checkbox("The size of the man taking him matters", &g.on);
         Help("Read from The New Gentleman (each man's size: XS, S, M, L, XL). A bigger man opens him further and faster, "
              "loosens him more and leaves him sorer; a smaller one the reverse. An average (M) man changes nothing.");
@@ -437,7 +439,9 @@ namespace Size {
             ch |= ImGuiMCP::Checkbox("Lasting looseness", &g.loose);
             ch |= ImGuiMCP::Checkbox("How sore and red he gets", &g.tender);
             float pct = g.strength * 100.0f;
+            ImGuiMCP::BeginDisabled(noTNG);
             if (ImGuiMCP::SliderFloat("How much size matters", &pct, 0.0f, 200.0f, "%.0f%%")) { g.strength = pct / 100.0f; ch = true; }
+            ImGuiMCP::EndDisabled();
             Help("100% = an XL man opens him 30% further, loosens him 50% more and makes him 30% sorer; an XS man 25% less "
                  "open, 40% less loosening. 200% doubles those differences.");
             ch |= ImGuiMCP::Checkbox("Creatures count too", &g.creatures);

@@ -12,6 +12,8 @@ namespace Colour {
     float SensBreath();                 // how much slower breathing gets while tender (0-1)
     bool CumColour(RE::Actor* giver, float out[3]);   // his race's cum colour (Per race page); false = none
     void SaveNow();                     // write AnatomicaMenu.ini now
+    int RingTexLevel();                 // ring colour textures: mip levels to drop (0 = 2048, 1 = 1024, 2 = 512)
+    void TidyMade();                    // keep the folder of textures Anatomica makes under its size budget (game start)
     void RenderCumColours();            // cum colour per race + wetness follows the giver (Cum & drips page)
     void __stdcall RenderGeneral();   // settings for the whole script (wait after loading screens)
     void __stdcall RenderColours();

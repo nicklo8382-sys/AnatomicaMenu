@@ -6,6 +6,7 @@
 #include "Drip.h"
 #include "SKEE.h"
 #include "Wink.h"
+#include "Maker.h"
 
 #include <algorithm>
 #include <atomic>
@@ -382,23 +383,28 @@ namespace {
     // although the material says reddish-brown), so the colour goes into the texture instead. The texture is DXT5:
     // every 4x4 block keeps two colours and blends between them, so scaling those two colours colours the whole block
     // (alpha untouched, mipmaps included) - same size, same detail, written once per colour.
-    std::unordered_map<int, std::string> g_ringTex;
-    std::string TintedRing(int rgb) {
-        auto q = [](int c) { return std::clamp((c + 4) / 8 * 8, 0, 255); };   // a few dozen files at most
-        const int r = q((rgb >> 16) & 255), gg = q((rgb >> 8) & 255), b = q(rgb & 255);
-        const int key = (r << 16) | (gg << 8) | b;
-        if (auto it = g_ringTex.find(key); it != g_ringTex.end()) return it->second;
-        const std::string name = std::format("anatomica_blend_tint_{:06X}.dds", key);
-        const std::filesystem::path out = std::filesystem::path("Data/textures/actors/character/male/Anatomica/gen") / name;
-        const std::string tex = std::string("textures\\actors\\character\\male\\Anatomica\\gen\\") + name;
-        std::error_code ec;
-        if (std::filesystem::exists(out, ec)) return g_ringTex[key] = tex;
+    // Made in the background (Maker.cpp), straight at the chosen size: only the mip levels that are kept are read and
+    // coloured (1024 = the base's 2nd level onward). Returns the path, kRingPending while it is being made, "" if it
+    // cannot be made (the ring keeps the tint).
+    constexpr const char* kRingPending = "\x01pending";
+    bool MakeRing(int r, int gg, int b, int drop, const std::filesystem::path& out, const std::string& tex) {
         std::ifstream in("Data/textures/actors/character/male/Anatomica/colours/anatomica_blend_base.dds", std::ios::binary);
-        std::vector<std::uint8_t> d((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-        if (d.size() < 128 + 16 || std::memcmp(d.data(), "DDS ", 4) != 0 || std::memcmp(d.data() + 84, "DXT5", 4) != 0) {
+        std::uint8_t hdr[128]{};
+        if (!in.read(reinterpret_cast<char*>(hdr), 128) || std::memcmp(hdr, "DDS ", 4) != 0 || std::memcmp(hdr + 84, "DXT5", 4) != 0) {
             logger::info("Anatomica: the ring texture could not be read as a loose DXT5 file - the ring keeps the tint");
-            return g_ringTex[key] = std::string{};
+            return false;
         }
+        std::uint32_t h = 0, w = 0, mips = 1;
+        std::memcpy(&h, hdr + 12, 4); std::memcpy(&w, hdr + 16, 4); std::memcpy(&mips, hdr + 28, 4);
+        mips = std::max(1u, mips);
+        std::uint64_t skip = 0;
+        for (int l = 0; l < drop && mips > 1; ++l) {   // the bigger levels: not read at all
+            skip += static_cast<std::uint64_t>(std::max(1u, (w + 3) / 4)) * std::max(1u, (h + 3) / 4) * 16;
+            w = std::max(1u, w / 2); h = std::max(1u, h / 2); --mips;
+        }
+        in.seekg(static_cast<std::streamoff>(128 + skip));
+        std::vector<std::uint8_t> d((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        if (d.size() < 16) return false;
         const float k[3] = {r / 255.0f, gg / 255.0f, b / 255.0f};
         auto tint = [&](std::uint8_t* p) {
             std::uint16_t c; std::memcpy(&c, p, 2);
@@ -408,12 +414,39 @@ namespace {
             c = static_cast<std::uint16_t>((std::clamp(r5, 0, 31) << 11) | (std::clamp(g6, 0, 63) << 5) | std::clamp(b5, 0, 31));
             std::memcpy(p, &c, 2);
         };
-        for (size_t o = 128; o + 16 <= d.size(); o += 16) { tint(&d[o + 8]); tint(&d[o + 10]); }   // colour half of each block
+        for (size_t o = 0; o + 16 <= d.size(); o += 16) { tint(&d[o + 8]); tint(&d[o + 10]); }   // colour half of each block
+        const std::uint32_t lin = std::max(1u, (w + 3) / 4) * std::max(1u, (h + 3) / 4) * 16;
+        std::memcpy(hdr + 12, &h, 4); std::memcpy(hdr + 16, &w, 4); std::memcpy(hdr + 20, &lin, 4); std::memcpy(hdr + 28, &mips, 4);
+        std::error_code ec;
         std::filesystem::create_directories(out.parent_path(), ec);
-        std::ofstream f(out, std::ios::binary);
-        if (!f || !f.write(reinterpret_cast<const char*>(d.data()), static_cast<std::streamsize>(d.size()))) return g_ringTex[key] = std::string{};
+        const auto tmp = std::filesystem::path(out).concat(".tmp");   // whole file or nothing: the game never sees half of one
+        {
+            std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+            if (!f || !f.write(reinterpret_cast<const char*>(hdr), 128) || !f.write(reinterpret_cast<const char*>(d.data()), static_cast<std::streamsize>(d.size()))) return false;
+        }
+        std::filesystem::rename(tmp, out, ec);
+        if (ec) return false;
         logger::info("Anatomica: made {}", tex);
-        return g_ringTex[key] = tex;
+        return true;
+    }
+    std::string TintedRing(int rgb) {
+        auto q = [](int c) { return std::clamp((c + 4) / 8 * 8, 0, 255); };
+        const int r = q((rgb >> 16) & 255), gg = q((rgb >> 8) & 255), b = q(rgb & 255);
+        const int key = (r << 16) | (gg << 8) | b;
+        const int drop = std::clamp(Colour::RingTexLevel(), 0, 2);   // smaller copies: the ring is a soft fade
+        const std::string name = std::format("anatomica_blend_tint_{:06X}_{}.dds", key, 2048 >> drop);
+        const std::filesystem::path out = std::filesystem::path("Data/textures/actors/character/male/Anatomica/gen") / name;
+        const std::string tex = std::string("textures\\actors\\character\\male\\Anatomica\\gen\\") + name;
+        switch (Maker::Of(tex)) {
+            case Maker::State::done: return tex;
+            case Maker::State::busy: return kRingPending;
+            case Maker::State::failed: return {};
+            default: break;
+        }
+        std::error_code ec;
+        if (std::filesystem::exists(out, ec)) { Maker::MarkDone(tex); return tex; }
+        Maker::Queue(tex, [r, gg, b, drop, out, tex]() { return MakeRing(r, gg, b, drop, out, tex); });
+        return kRingPending;
     }
     bool IsTintedRing(const std::string& diffuse) { return diffuse.find("blend_tint_") != std::string::npos; }
 
@@ -527,7 +560,9 @@ namespace {
             if (w.add < 0) { RingReport(a, any ? "no Anatomica ring among his RaceMenu paints, none to add" : "no RaceMenu paint slots", nullptr, w); return; }
             if (!any) { RingReport(a, "no RaceMenu paint slots yet: asked RaceMenu for them", nullptr, w); AskOverlays(a); done.root = nullptr; return; }   // look again once RaceMenu has added them
             if (!freeSlot) { RingReport(a, "no free RaceMenu paint slot for a ring", nullptr, w); return; }
-            if (const std::string tt = TintedRing(w.add); !tt.empty()) RingLook(freeSlot, tt.c_str(), -1, 1.0f);   // a ring for a man without one (NPC ring option)
+            const std::string tt = TintedRing(w.add);
+            if (tt == kRingPending) { RingReport(a, "his ring colour is being made", nullptr, w); done.root = nullptr; return; }   // look again next pass
+            if (!tt.empty()) RingLook(freeSlot, tt.c_str(), -1, 1.0f);   // a ring for a man without one (NPC ring option)
             else RingLook(freeSlot, kBlendBase, w.add, 1.0f);
             done.geo = RE::NiPointer<RE::BSGeometry>(freeSlot);
             RingReport(a, "added a ring in a free slot", freeSlot, w);
@@ -542,7 +577,9 @@ namespace {
             return;
         }
         if (w.swap == 1) {
-            if (const std::string tt = TintedRing(w.col); !tt.empty()) {
+            const std::string tt = TintedRing(w.col);
+            if (tt == kRingPending) { RingReport(a, "his ring colour is being made", ring, w); done.root = nullptr; return; }   // keeps the ring he has for now
+            if (!tt.empty()) {
                 RingLook(ring, tt.c_str(), IsTint(MatOf(ring)) ? 0xFFFFFF : -1, -1.0f);   // the colour is in the texture now
                 RingReport(a, "coloured (in the texture)", ring, w);
                 return;

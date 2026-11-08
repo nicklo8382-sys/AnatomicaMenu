@@ -4,7 +4,8 @@
 
 // Optional extras, kept out of the main download: they only switch on when the separate "Anatomica Extras" mod is
 // installed (it ships Data/SKSE/Plugins/AnatomicaMenu/Extras.ini, which also holds the keyword / faction lists).
-//  * Revealing armour: a man whose armour leaves his backside bare (Advanced Nudity Detection / SexLab Aroused
+//  * (Revealing armour is part of the main mod now - Revealing.ini - but lives here: a man whose armour leaves his
+//    backside bare (Advanced Nudity Detection / SexLab Aroused
 //    keywords) counts as naked for what people see, the inspect action and the glossy skin.
 //  * How it happened: taken while a captive (slavery, bondage, the slave auction...) or for money (Public Whore,
 //    The Ancient Profession): memories and reactions say so, and a captive is left sorer for longer.
@@ -15,7 +16,8 @@ namespace Extras {
     void RegisterFuncs(RE::BSScript::IVirtualMachine* vm);   // AnatomicaNative.SNLot
     void RegisterSN(RE::BSScript::Internal::VirtualMachine* vm);   // the anatomica_lot decorator (Bridge, on load)
 
-    bool Exposed(RE::Actor* a);                  // nothing covers his backside (naked, or revealing armour)
+    bool Exposed(RE::Actor* a);                  // nothing covers his backside (naked, or revealing armour - main mod, no extras needed)
+    bool RenderRevealing();                      // its section of the Integrations page (true = a setting changed)
 
     enum class How { normal, captive, paid };
     How HowNow(RE::Actor* man, RE::Actor* partner);   // checked when he is taken (cached a few seconds)

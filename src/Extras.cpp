@@ -31,7 +31,7 @@ namespace {
     struct FactionRef { RE::TESFaction* f = nullptr; int minRank = 0; std::string label; };
     struct Lists {
         bool loaded = false;
-        std::vector<std::string> revealing, captiveKw;
+        std::vector<std::string> captiveKw;
         std::vector<FactionRef> captive, paid, paidPartner, lot;
         int missing = 0;   // listed factions whose mod is not installed
     } L;
@@ -68,19 +68,35 @@ namespace {
         }
         return out;
     }
+    // revealing armour (part of the main mod): Data/SKSE/Plugins/AnatomicaMenu/Revealing.ini [Revealing] Keywords = ...
+    constexpr const char* kRevealFile = "Data/SKSE/Plugins/AnatomicaMenu/Revealing.ini";
+    struct Reveal { bool loaded = false; std::vector<std::string> kw; int found = 0; } R;
+    void LoadReveal() {   // under g_mx
+        if (R.loaded) return;
+        R.loaded = true;
+        CSimpleIniA ini;
+        if (ini.LoadFile(kRevealFile) >= 0)
+            for (auto& k : Split(ini.GetValue("Revealing", "Keywords", ""), ',')) R.kw.push_back(Lower(k));
+        CSimpleIniA ex;   // older Extras.ini lists still count
+        if (ex.LoadFile(kListFile) >= 0)
+            for (auto& k : Split(ex.GetValue("Lists", "RevealingKeywords", ""), ',')) R.kw.push_back(Lower(k));
+        std::sort(R.kw.begin(), R.kw.end());
+        R.kw.erase(std::unique(R.kw.begin(), R.kw.end()), R.kw.end());
+        for (auto& k : R.kw) if (RE::TESForm::LookupByEditorID<RE::BGSKeyword>(k)) ++R.found;   // which of them exist in this game
+        logger::info("Anatomica: revealing armour - {} keywords listed, {} found in your mods", R.kw.size(), R.found);
+    }
     void LoadLists() {
         if (L.loaded) return;
         CSimpleIniA ini;
         if (ini.LoadFile(kListFile) < 0) return;
         L.loaded = true;
-        for (auto& k : Split(ini.GetValue("Lists", "RevealingKeywords", ""), ',')) L.revealing.push_back(Lower(k));
         for (auto& k : Split(ini.GetValue("Lists", "CaptiveKeywords", ""), ',')) L.captiveKw.push_back(Lower(k));
         L.captive = Factions(ini.GetValue("Lists", "CaptiveFactions", ""));
         L.paid = Factions(ini.GetValue("Lists", "PaidFactions", ""));
         L.paidPartner = Factions(ini.GetValue("Lists", "PaidPartnerFactions", ""));
         L.lot = Factions(ini.GetValue("Lists", "LotFactions", ""));
-        logger::info("Anatomica extras: {} revealing keywords, {} captive keywords, factions: {} captive / {} paid / {} client / {} auction ({} listed for mods not installed)",
-                     L.revealing.size(), L.captiveKw.size(), L.captive.size(), L.paid.size(), L.paidPartner.size(), L.lot.size(), L.missing);
+        logger::info("Anatomica extras: {} captive keywords, factions: {} captive / {} paid / {} client / {} auction ({} listed for mods not installed)",
+                     L.captiveKw.size(), L.captive.size(), L.paid.size(), L.paidPartner.size(), L.lot.size(), L.missing);
     }
 
     bool HasKw(RE::TESObjectARMO* armo, const std::vector<std::string>& names) {
@@ -147,12 +163,13 @@ namespace Extras {
     bool Exposed(RE::Actor* a) {
         if (!a) return false;
         auto* body = a->GetWornArmor(RE::BGSBipedObjectForm::BipedObjectSlot::kBody);
-        if (!On() || !g.revealing) return !body;
+        if (!g.revealing) return !body;
         std::lock_guard lk(g_mx);
-        LoadLists();
+        LoadReveal();
+        if (R.kw.empty()) return !body;
         auto* under = a->GetWornArmor(RE::BGSBipedObjectForm::BipedObjectSlot::kModPelvisPrimary);   // slot 49: underwear / loincloths
         if (under == body) under = nullptr;
-        auto covers = [&](RE::TESObjectARMO* x) { return x && !HasKw(x, L.revealing); };
+        auto covers = [&](RE::TESObjectARMO* x) { return x && !HasKw(x, R.kw); };
         return !covers(body) && !covers(under);
     }
 
@@ -195,6 +212,25 @@ namespace Extras {
         return std::format("The house has examined {}: he is no virgin ({}; taken {} time{}). The auctioneer sells him as experienced rather than pure.", N, v.level, v.times, v.times == 1 ? "" : "s");
     }
 
+    bool RenderRevealing() {   // a section of the Integrations page (main mod)
+        int listed = 0, found = 0;
+        { std::lock_guard lk(g_mx); LoadReveal(); listed = static_cast<int>(R.kw.size()); found = R.found; }
+        const bool none = found == 0;
+        if (!Section(none ? "Revealing armour  (no keyword mod found)###reveal" : "Revealing armour###reveal")) return false;
+        bool ch = false;
+        if (none)
+            ImGuiMCP::TextColored(ImGuiMCP::ImVec4{1.0f, 0.45f, 0.4f, 1.0f}, "None of the %d revealing keywords exist in your game (needs Advanced Nudity Detection "
+                                  "or SexLab Aroused keywords on armour) - only being naked counts.", listed);
+        else ImGuiMCP::TextDisabled("%d of %d listed keywords found in your mods (Data\\SKSE\\Plugins\\AnatomicaMenu\\Revealing.ini).", found, listed);
+        ImGuiMCP::BeginDisabled(none);
+        ch |= ImGuiMCP::Checkbox("Armour that leaves his backside bare counts as naked", &g.revealing);
+        Help("Thongs, C-strings, loincloths open at the back, harnesses, \"nearly naked\" sets (Advanced Nudity Detection and "
+             "SexLab Aroused keywords). People then see the state he is in (SkyrimNet), NPCs can inspect him, and the glossy skin "
+             "after sex shows.");
+        ImGuiMCP::EndDisabled();
+        return ch;
+    }
+
     void __stdcall RenderPage() {
         bool ch = false;
         ImGuiMCP::TextWrapped("Extras from the separate Anatomica Extras mod. The keyword and faction lists are in "
@@ -202,14 +238,9 @@ namespace Extras {
         {
             std::lock_guard lk(g_mx);
             LoadLists();
-            ImGuiMCP::TextDisabled("Found: %d revealing keywords, %d restraint keywords; factions %d captive, %d paid, %d client, %d auction (%d listed for mods you do not have).",
-                                   static_cast<int>(L.revealing.size()), static_cast<int>(L.captiveKw.size()), static_cast<int>(L.captive.size()),
+            ImGuiMCP::TextDisabled("Found: %d restraint keywords; factions %d captive, %d paid, %d client, %d auction (%d listed for mods you do not have).",
+                                   static_cast<int>(L.captiveKw.size()), static_cast<int>(L.captive.size()),
                                    static_cast<int>(L.paid.size()), static_cast<int>(L.paidPartner.size()), static_cast<int>(L.lot.size()), L.missing);
-        }
-        if (Section("Revealing armour")) {
-            ch |= ImGuiMCP::Checkbox("Armour that leaves his backside bare counts as naked", &g.revealing);
-            Help("Thongs, C-strings, loincloths open at the back, harnesses, \"nearly naked\" sets (Advanced Nudity Detection and "
-                 "SexLab Aroused keywords). People then see the state he is in, NPCs can inspect him, and the glossy skin after sex shows.");
         }
         if (Section("How it happened")) {
             ch |= ImGuiMCP::Checkbox("Captive or paid: memories and reactions say so", &g.how);
@@ -236,9 +267,14 @@ namespace Extras {
             Help("The man you click in the console (~), or you. Paying clients are checked on the partner when it happens.");
             if (!shown.empty()) { ImGuiMCP::SameLine(); ImGuiMCP::TextUnformatted(shown.c_str()); }
         }
-        if (Section("SkyrimNet Slave Auction")) {
+        bool noSA = false;
+        { std::lock_guard lk(g_mx); noSA = L.lot.empty(); }
+        if (Section(noSA ? "SkyrimNet Slave Auction  (not installed)###sa" : "SkyrimNet Slave Auction###sa")) {
+            if (noSA) ImGuiMCP::TextColored(ImGuiMCP::ImVec4{1.0f, 0.45f, 0.4f, 1.0f}, "SkyrimNet Slave Auction is not installed - this does nothing until it is (kept).");
+            ImGuiMCP::BeginDisabled(noSA);
             ch |= ImGuiMCP::Checkbox("The house knows what it is selling", &g.lot);
             Help("A man up for sale: the auctioneer and buyers are told whether he is an anal virgin, and how experienced he is.");
+            ImGuiMCP::EndDisabled();
         }
         if (ch) Colour::SaveNow();
     }

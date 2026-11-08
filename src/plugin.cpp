@@ -3,9 +3,13 @@
 #include "Drip.h"
 #include "Engine.h"
 #include "Bridge.h"
+#include "Colour.h"
 
 void OnMessage(SKSE::MessagingInterface::Message* message) {
     switch (message->type) {
+        case SKSE::MessagingInterface::kDataLoaded:
+            Colour::TidyMade();   // the folder of textures Anatomica makes: under its size budget before anything uses it
+            break;
         case SKSE::MessagingInterface::kPostPostLoad:
             Engine::Connect();   // RaceMenu's interfaces (it answers from its PostLoad on)
             break;

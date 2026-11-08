@@ -9,10 +9,12 @@
 #include "SKSEMenuFramework.h"
 #include "UI.h"
 #include "Wink.h"
+#include "Maker.h"
 
 #include <SimpleIni.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -165,25 +167,57 @@ namespace {
         float frothAmt = 0.0f;      // little bubbles on the inner part of the rim
     };
 
-    void CleanGenFolder() {
+    // the textures Anatomica makes for itself (rims, ring colours, glossy masks...) - a cache, remade when needed.
+    // Kept under a size budget: over it, the oldest go until it is down to three quarters. Also drops what older
+    // versions made and nothing uses any more (cum textures, full-size ring colours).
+    int g_genBudgetMB = 200;   // copy of the setting, for the code above Settings
+    std::uintmax_t GenFolderBytes() {
+        std::error_code ec;
+        std::uintmax_t n = 0;
+        const std::filesystem::path dir = std::filesystem::path("Data") / std::filesystem::path(std::string(kGenDir));
+        for (const auto& e : std::filesystem::directory_iterator(dir, ec)) if (e.is_regular_file(ec)) n += e.file_size(ec);
+        return n;
+    }
+    void CleanGenFolder(int budgetMB, bool force = false) {
         static bool done = false;
-        if (done) return;
+        if (done && !force) return;
         done = true;
         std::error_code ec;
         const std::filesystem::path dir = std::filesystem::path("Data") / std::filesystem::path(std::string(kGenDir));
-        std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>> files;
-        for (const auto& e : std::filesystem::directory_iterator(dir, ec))
-            if (e.is_regular_file(ec)) files.emplace_back(e.last_write_time(ec), e.path());
-        if (files.size() <= 400) return;
-        std::sort(files.begin(), files.end());
-        for (size_t i = 0; i + 300 < files.size(); ++i) std::filesystem::remove(files[i].second, ec);   // keep the newest 300
-        logger::info("Anatomica colour: tidied the gen folder ({} old textures removed)", files.size() - 300);
+        std::vector<std::tuple<std::filesystem::file_time_type, std::filesystem::path, std::uintmax_t>> files;
+        std::uintmax_t total = 0;
+        int legacy = 0;
+        for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
+            if (!e.is_regular_file(ec)) continue;
+            const std::string n = e.path().filename().string();
+            // anatomica_blend_tint_RRGGBB.dds = a full-size (2048) ring colour from 2.3j and older; cum_*.dds = cum effects (removed)
+            const bool oldRing = n.rfind("anatomica_blend_tint_", 0) == 0 && n.size() == std::string("anatomica_blend_tint_000000.dds").size();
+            if (oldRing || n.rfind("cum_", 0) == 0) { std::filesystem::remove(e.path(), ec); ++legacy; continue; }
+            const auto sz = e.file_size(ec);
+            total += sz;
+            files.emplace_back(e.last_write_time(ec), e.path(), sz);
+        }
+        const std::uintmax_t budget = static_cast<std::uintmax_t>(std::max(20, budgetMB)) * 1024 * 1024;
+        int removed = 0;
+        if (total > budget) {
+            std::sort(files.begin(), files.end());
+            for (auto& [t, path, sz] : files) {
+                if (total <= budget * 3 / 4) break;
+                if (std::filesystem::remove(path, ec)) { total -= sz; ++removed; }
+            }
+        }
+        if (legacy || removed) Maker::ForgetDone();   // what was made before may be gone now
+        if (legacy || removed)
+            logger::info("Anatomica colour: tidied the gen folder ({} old-version textures, {} oldest removed; now {:.0f} MB)", legacy, removed, total / 1048576.0);
     }
 
-    // look -> texture path, written on first use
+    // the rim texture for a look, made in the background (Maker.cpp) the first time it is needed:
+    // returns its path, kRimPending while it is being made (he keeps the rim he has), "" if it cannot be made
+    constexpr const char* kRimPending = "\x01pending";
+    bool BuildRim(const int k[16], int la, int ba, int fa, int fr, const std::string& rel, const std::filesystem::path& file);
     std::string GenRimTexture(const RimTex& t) {
         if (!LoadDetail()) return {};
-        CleanGenFolder();
+        CleanGenFolder(g_genBudgetMB);
         auto q = [](float v, int steps) { return std::clamp(static_cast<int>(std::lround(v * steps)), 0, steps); };
         int k[16] = {q(t.colour[0], 31), q(t.colour[1], 31), q(t.colour[2], 31), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
         const int la = q(t.lubeAmt, 10), ba = q(t.bruiseAmt, 10), fa = q(t.filmAmt, 10), fr = q(t.frothAmt, 6);
@@ -196,8 +230,21 @@ namespace {
         if (!la && !ba && !fa && !fr) key = std::format("rim_{:02d}{:02d}{:02d}", k[0], k[1], k[2]);
         const std::string rel = std::format("{}{}.dds", kGenDir, key);
         const std::filesystem::path file = std::filesystem::path("Data") / std::filesystem::path(std::string(rel));
+        switch (Maker::Of(rel)) {
+            case Maker::State::done: return rel;
+            case Maker::State::busy: return kRimPending;
+            case Maker::State::failed: return {};
+            default: break;
+        }
         std::error_code ec;
-        if (std::filesystem::exists(file, ec)) return rel;
+        if (std::filesystem::exists(file, ec)) { Maker::MarkDone(rel); return rel; }
+        std::array<int, 16> kk{};
+        std::copy(std::begin(k), std::end(k), kk.begin());
+        Maker::Queue(rel, [kk, la, ba, fa, fr, rel, file]() { return BuildRim(kk.data(), la, ba, fa, fr, rel, file); });
+        return kRimPending;
+    }
+    bool BuildRim(const int k[16], int la, int ba, int fa, int fr, const std::string& rel, const std::filesystem::path& file) {
+        std::error_code ec;
         // the quantised values, so the file always matches its name
         const float c[3] = {k[0] / 31.0f, k[1] / 31.0f, k[2] / 31.0f};
         const float L[3] = {k[3] / 15.0f, k[4] / 15.0f, k[5] / 15.0f}, Lamt = la / 10.0f;
@@ -271,15 +318,15 @@ namespace {
         const auto tmp = std::filesystem::path(file).concat(".tmp");
         {
             std::ofstream o(tmp, std::ios::binary | std::ios::trunc);
-            if (!o) return {};
+            if (!o) return false;
             o.write(reinterpret_cast<const char*>(hdr), sizeof(hdr));
             o.write(data.data(), static_cast<std::streamsize>(data.size()));
-            if (!o) return {};
+            if (!o) return false;
         }
         std::filesystem::rename(tmp, file, ec);
-        if (ec) return {};
+        if (ec) return false;
         logger::info("Anatomica colour: made {}", rel);
-        return rel;
+        return true;
     }
 
     const char* kDefaultItems[] = {"Installed colour (no change)", "Pink", "Light pink", "Rose / deep red",
@@ -308,6 +355,8 @@ namespace {
         float strengthMax = 1.0f;
         float custom[3] = {0.55f, 0.30f, 0.32f};
         bool blendMatch = true;
+        int ringRes = 1;             // the ring colour textures Anatomica makes: 0 = 2048, 1 = 1024, 2 = 512
+        int genBudget = 200;         // MB the folder of made textures may take before the oldest go
         bool autoRing = true;        // give NPCs the skin-blend ring if they don't have it
         bool playerRing = true;      // and you
         int def = kInstalled;
@@ -642,6 +691,9 @@ namespace {
             g.blendMatch = ini.GetBoolValue("Colour", "BlendMatch", g.blendMatch);
             g.autoRing = ini.GetBoolValue("Colour", "AutoRing", g.autoRing);
             g.playerRing = ini.GetBoolValue("Colour", "PlayerRing", g.playerRing);
+            g.ringRes = std::clamp(static_cast<int>(ini.GetLongValue("Colour", "RingTextureSize", g.ringRes)), 0, 2);
+            g.genBudget = std::clamp(static_cast<int>(ini.GetLongValue("Colour", "MadeTexturesMB", g.genBudget)), 20, 4000);
+            g_genBudgetMB = g.genBudget;
             g.def = static_cast<int>(ini.GetLongValue("Colour", "Default", kInstalled));
             g.player = static_cast<int>(ini.GetLongValue("Colour", "Player", kUseDefault));
             g.pool = static_cast<int>(ini.GetLongValue("Colour", "RandomPool", kDefaultPool));
@@ -775,6 +827,8 @@ namespace {
         ini.SetBoolValue("Colour", "BlendMatch", g.blendMatch);
         ini.SetBoolValue("Colour", "AutoRing", g.autoRing);
         ini.SetBoolValue("Colour", "PlayerRing", g.playerRing);
+        ini.SetLongValue("Colour", "RingTextureSize", g.ringRes);
+        ini.SetLongValue("Colour", "MadeTexturesMB", g.genBudget);
         ini.SetLongValue("Colour", "Default", g.def);
         ini.SetLongValue("Colour", "Player", g.player);
         ini.SetLongValue("Colour", "RandomPool", g.pool);
@@ -1210,6 +1264,7 @@ namespace {
             t.bruiseAmt = bruise;
             L.tex = GenRimTexture(t);
             if (L.tex.empty() && col >= 0 && col < kPresets) L.tex = std::string(kDir) + kColourFiles[col];
+            // (kRimPending: being made in the background - LookForImpl keeps the rim he has until it is ready)
         }
 
         // skin-blend ring
@@ -1328,12 +1383,14 @@ namespace {
             out[2] = -4;
             return out;
         }
-        const Look L = Want(a);
-        g_pendingTex[id] = L.tex;
+        Look L = Want(a);
         auto it = g_sent.find(id);
+        const bool making = L.tex == kRimPending;   // his new rim is still being made: keep the one he has for now
+        if (making) L.tex = it != g_sent.end() ? it->second.tex : std::string(kRimPending);
+        if (!making) g_pendingTex[id] = L.tex;
         if (it == g_sent.end()) {
             // first time this session: send the whole look
-            out[0] = L.tex.empty() ? -1 : 0;
+            out[0] = making ? -2 : (L.tex.empty() ? -1 : 0);
             out[1] = L.tint;
             out[2] = L.blend >= 0 ? L.blend : -3;
             out[3] = L.swap;
@@ -1373,7 +1430,8 @@ namespace {
         if (!g_loaded) LoadIni();
         auto it = g_pendingTex.find(a->GetFormID());
         if (it != g_pendingTex.end()) return RE::BSFixedString(it->second.c_str());
-        return RE::BSFixedString(Want(a).tex.c_str());
+        const std::string t = Want(a).tex;
+        return RE::BSFixedString(t == kRimPending ? "" : t.c_str());
     }
 
     // ---- loading screens: Anatomica's script waits a little after each one ---------------------
@@ -2072,6 +2130,8 @@ namespace Colour {
         if (changed) SaveIni();
     }
 
+    int RingTexLevel() { std::lock_guard lk(g_lock); if (!g_loaded) LoadIni(); return g.ringRes; }
+    void TidyMade() { std::lock_guard lk(g_lock); if (!g_loaded) LoadIni(); CleanGenFolder(g.genBudget); }
     void SaveNow() {
         std::lock_guard lk(g_lock);
         SaveIni();
@@ -2173,6 +2233,24 @@ namespace Colour {
         changed |= ImGuiMCP::Checkbox("Give you the skin-blend ring too", &g.playerRing);
         Help("The same for you, in a free RaceMenu body-paint slot - no need to add Anatomica Blend in RaceMenu yourself. "
              "Off: only the ring you painted on yourself in RaceMenu (if any) is coloured.");
+        {
+            static const char* res[] = {"2048 (5.5 MB each)", "1024 (1.4 MB each)", "512 (0.35 MB each)"};
+            changed |= ImGuiMCP::Combo("Ring colour texture size", &g.ringRes, res, 3);
+            Help("Each ring colour is saved as its own texture. The ring is a soft fade, so 1024 looks the same in game "
+                 "at a quarter of the size; 512 is smaller still, slightly softer. Applies to colours made from now on.");
+            changed |= ImGuiMCP::SliderInt("Made textures may take up (MB)", &g.genBudget, 20, 2000);
+            g_genBudgetMB = g.genBudget;
+            static std::string sz;
+            if (ImGuiMCP::Button("Check size")) sz = std::format("{:.0f} MB now", GenFolderBytes() / 1048576.0);
+            ImGuiMCP::SameLine();
+            if (ImGuiMCP::Button("Tidy now")) { CleanGenFolder(g.genBudget, true);   // (the page holds g_lock)
+                sz = std::format("{:.0f} MB now", GenFolderBytes() / 1048576.0); }
+            if (!sz.empty()) { ImGuiMCP::SameLine(); ImGuiMCP::TextUnformatted(sz.c_str()); }
+            Help("Anatomica makes textures for itself as it goes (rims, ring colours, glossy skin) and keeps them in "
+                 "textures\\actors\\character\\male\\Anatomica\\gen (MO2: in overwrite). They are a cache - anything "
+                 "deleted is made again when needed. Over this size the oldest are removed at the next game start "
+                 "(or now, with Tidy now), down to three quarters of it.");
+        }
 
         if (Section("Who gets which colour")) {
         changed |= ComboValue("Everyone (default)", &g.def, 1, kDefaultItems, 9);
@@ -2599,6 +2677,19 @@ namespace Colour {
         auto act = [&](const char* label, auto&& fn) {
             if (ImGuiMCP::Button(label)) last = std::string(label) + ": " + fn();
         };
+        // a test can only show what is switched on: say which of the features it needs are off (and where)
+        auto off = [](std::initializer_list<std::pair<bool, const char*>> need) {
+            std::string o;
+            for (auto& [on, what] : need) if (!on) o += (o.empty() ? "" : ", ") + std::string(what);
+            return o.empty() ? o : " - NOT shown, switched off: " + o;
+        };
+        auto gapeGlob = [](RE::FormID id) {   // AnatomicaGape.esp switches (Gape / Movement pages)
+            auto* dh = RE::TESDataHandler::GetSingleton();
+            auto* gl = dh ? dh->LookupForm<RE::TESGlobal>(id, "AnatomicaGape.esp") : nullptr;
+            return !gl || gl->value > 0.5f;
+        };
+        const bool gapeOn = gapeGlob(0x806), clenchOn = gapeGlob(0x80D);
+        const bool picker = g.enabled, inScope = InScope(a);
         ImGuiMCP::TextWrapped("Everything here happens to the man you click in the console (~), or to you if nobody is "
                               "selected. Close the menu to see it. Looks (colour, wetness, redness...) appear on the next "
                               "check (Colours page, \"Check every\").");
@@ -2616,32 +2707,33 @@ namespace Colour {
         if (!a) return;
 
         if (Section("Colour and ring")) {
-        act("Re-roll his colour", [&] { std::lock_guard lk(g_lock); ++g_reroll[RefKey(a)]; g_ringReset.insert(a->GetFormID()); SaveIni(); return std::string("new random / Skin-fit colour, ring redone"); });
+        act("Re-roll his colour", [&] { std::lock_guard lk(g_lock); ++g_reroll[RefKey(a)]; g_ringReset.insert(a->GetFormID()); SaveIni(); return std::string("new random / Skin-fit colour, ring redone") + off({{picker, "colour picker (Colours page)"}, {inScope, "he is outside \"Who\" (Colours page)"}}); });
         ImGuiMCP::SameLine();
-        act("Re-apply his look now", [&] { std::lock_guard lk(g_lock); g_sent.erase(a->GetFormID()); return std::string("sent again on the next check"); });
+        act("Re-apply his look now", [&] { std::lock_guard lk(g_lock); g_sent.erase(a->GetFormID()); return std::string("sent again on the next check") + off({{picker, "colour picker (Colours page)"}, {inScope, "he is outside \"Who\" (Colours page)"}}); });
         ImGuiMCP::SameLine();
-        act("Reset his ring", [&] { std::lock_guard lk(g_lock); g_ringReset.insert(a->GetFormID()); return std::string("ring taken off and redone"); });
+        act("Reset his ring", [&] { std::lock_guard lk(g_lock); g_ringReset.insert(a->GetFormID()); return std::string("ring taken off and redone") + off({{picker, "colour picker (Colours page)"}, {a->IsPlayerRef() ? g.playerRing : g.autoRing, a->IsPlayerRef() ? "\"Give you the skin-blend ring too\" (Colours page; your own painted ring is still used)" : "\"Give NPCs the skin-blend ring\" (Colours page; a painted ring is still used)"}}); });
 
         }
         if (Section("After sex")) {
-        act("Gentle round", [&] { FakeRound(a, 0.35f, 1, 45.0f); return std::string("1 partner, 45 s, gentle"); });
+        act("Gentle round", [&] { FakeRound(a, 0.35f, 1, 45.0f); return std::string("1 partner, 45 s, gentle") + off({{picker, "colour picker (Colours page)"}, {g.wet, "wetness"}, {g.tender, "tender reddening"}, {g.glossy, "glossy skin"}, {g.loose, "lasting looseness"}}); });
         ImGuiMCP::SameLine();
-        act("Rough round", [&] { FakeRound(a, 1.0f, std::max(3, g.bruisePartners), std::max(240.0f, g.bruiseLong + 10.0f)); return std::string("rough, several partners: wet, red, bruised, swollen"); });
+        act("Rough round", [&] { FakeRound(a, 1.0f, std::max(3, g.bruisePartners), std::max(240.0f, g.bruiseLong + 10.0f)); return std::string("rough, several partners: wet, red, bruised, swollen") + off({{picker, "colour picker (Colours page)"}, {g.wet, "wetness"}, {g.tender, "tender reddening"}, {g.bruise, "bruising"}, {g.swell, "swelling"}, {g.glossy, "glossy skin"}, {g.loose, "lasting looseness"}}); });
         ImGuiMCP::SameLine();
-        act("Wet only", [&] { FakeRound(a, 0.6f, 1, 20.0f); std::lock_guard lk(g_lock); g_work[a->GetFormID()].peak = 0.0f; return std::string("wet, not red"); });
-        act("First time in a while", [&] { std::lock_guard lk(g_lock); g_lastRound.erase(a->GetFormID()); return std::string("his next round counts as rested (redder)"); });
+        act("Wet only", [&] { FakeRound(a, 0.6f, 1, 20.0f); std::lock_guard lk(g_lock); g_work[a->GetFormID()].peak = 0.0f; return std::string("wet, not red") + off({{g.wet, "wetness (After sex page)"}}); });
+        act("First time in a while", [&] { std::lock_guard lk(g_lock); g_lastRound.erase(a->GetFormID()); return std::string("his next round counts as rested (redder)") + off({{g.tender, "tender reddening"}, {g.rested, "\"first time in a while\" (After sex page)"}}); });
         ImGuiMCP::SameLine();
         if (kCum) act("Schlong coated (as giver)", [&] { const float c[3] = {0.96f, 0.95f, 0.90f}; Fluid::Coat(a->GetFormID(), 1.0f, c, 90.0f); return std::string("his schlong is wet with cum (needs a schlong on him)"); });
-        else act("Schlong wet (as giver)", [&] { std::lock_guard lk(g_lock); auto& sw = g_schlong[a->GetFormID()]; sw.peak = 1.0f; sw.last = Now(); return std::string("his schlong is wet (needs a schlong on him; Wet schlong on the After sex page)"); });
+        else act("Schlong wet (as giver)", [&] { std::lock_guard lk(g_lock); auto& sw = g_schlong[a->GetFormID()]; sw.peak = 1.0f; sw.last = Now(); return std::string(g.schlongWet ? "his schlong is wet (needs a schlong on him)"
+                                                  : "NOT shown: \"The giver's schlong comes out wet\" is off (After sex page > Wet schlong)"); });
         ImGuiMCP::SameLine();
         act("Clear after-sex looks", [&] { std::lock_guard lk(g_lock); g_work.erase(a->GetFormID()); g_schlong.erase(a->GetFormID()); g_sent.erase(a->GetFormID()); return std::string("back to normal on the next check"); });
 
         }
         if (Section("Gape and movement")) {
-        act("Gape him open", [&] { if (!Engine::TestGape(a, 0.8f)) GapeTest(a, 0.8f); return std::string("opened; it holds, then closes on its own (Gape page timings)"); });
+        act("Gape him open", [&] { if (!Engine::TestGape(a, 0.8f)) GapeTest(a, 0.8f); return std::string("opened; it holds, then closes on its own (Gape page timings)") + off({{gapeOn, "the after-sex gape (Gape page)"}}); });
         ImGuiMCP::SameLine();
-        act("Clench now", [&] { return std::string(Wink::TestClench(a) ? "clenched" : "only works while he is gaping (the movement code follows him then)"); });
-        act("Loosen to the cap", [&] { const float v = LooseCapFor(a); if (!Engine::SetLooseNow(a, v)) SetMorph(a, "Anatomica Gape", "AnatomicaLoose", v); { std::lock_guard lk(g_lock); g_looseSeen[a->GetFormID()] = v; } return std::format("lasting looseness {:.0f}%", v * 100.0f); });
+        act("Clench now", [&] { return std::string(Wink::TestClench(a) ? "clenched" : "only works while he is gaping (the movement code follows him then)") + off({{clenchOn, "clenching (Movement page)"}}); });
+        act("Loosen to the cap", [&] { const float v = LooseCapFor(a); if (!Engine::SetLooseNow(a, v)) SetMorph(a, "Anatomica Gape", "AnatomicaLoose", v); { std::lock_guard lk(g_lock); g_looseSeen[a->GetFormID()] = v; } return std::format("lasting looseness {:.0f}%", v * 100.0f) + off({{g.loose, "lasting looseness (After sex page) - it will not stay"}}); });
         ImGuiMCP::SameLine();
         act("Remove looseness", [&] {
             if (!Engine::SetLooseNow(a, 0.0f)) SetMorph(a, "Anatomica Gape", "AnatomicaLoose", 0.0f);
@@ -2662,7 +2754,13 @@ namespace Colour {
 
         }
         if (Section("Status")) {
-        act("Open the status window on him", [&] { g_inspect = a->GetFormID(); g_winOpen = true; g_winMove = false; ApplyWindowState(); return std::string("open"); });
+        {
+            const bool onHim = g_winOpen && g_inspect == a->GetFormID();   // pressed again: close it
+            act(onHim ? "Close the status window" : "Open the status window on him", [&] {
+                if (onHim) { g_winOpen = false; ApplyWindowState(); return std::string("closed"); }
+                g_inspect = a->GetFormID(); g_winOpen = true; g_winMove = false; ApplyWindowState(); return std::string("open");
+            });
+        }
 
         }
         if (!last.empty()) { ImGuiMCP::Spacing(); ImGuiMCP::TextDisabled("Last: %s", last.c_str()); }

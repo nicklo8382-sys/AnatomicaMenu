@@ -1765,8 +1765,12 @@ namespace {
             for (const char* nd : {"AnatomicaPool", "AnatomicaFilm", "AnatomicaLip"})
                 if (auto* o = root->GetObjectByName(RE::BSFixedString(nd)); o && !o->GetFlags().any(RE::NiAVObject::Flag::kHidden))
                     o->GetFlags().set(RE::NiAVObject::Flag::kHidden);
+        // the rim armor's wet layer: a separate shell over the rim. It does not follow the gape morph and its edge shows
+        // as a ring, so it is only used to carry an "Anus wear colour (outer rim)" while he is closed; plain wetness is
+        // the rim's own glassy shine and the glossy skin layer.
+        const bool wetLayer = q > 0.0f && A.lube > 0.01f && Wink::GapeOf(A.id) < 0.05f;
         if (auto* o = root->GetObjectByName(RE::BSFixedString("AnatomicaWet")); o && o->AsGeometry()) {
-            if (q > 0.0f) {
+            if (wetLayer) {
                 o->GetFlags().reset(RE::NiAVObject::Flag::kHidden);
                 // lube colour: the layer's own texture, tinted (clear when off)
                 std::string want;
@@ -1786,10 +1790,10 @@ namespace {
                     if (!ok) { SetDiffuse(o->AsGeometry(), want.empty() ? std::string(kWetTex) : want); A.glossSent = -1.0f; }
                     A.wetTex = want;
                 }
-                if (std::abs(q - A.glossSent) > 0.01f || A.glossSent < 0.0f) SetAlpha(o->AsGeometry(), std::min(1.0f, 0.3f + 0.7f * q * std::min(1.0f, 0.6f + 0.2f * g.rimShine)));
-            } else o->GetFlags().set(RE::NiAVObject::Flag::kHidden);
+                if (std::abs(q - A.glossSent) > 0.01f || A.glossSent < 0.0f) SetAlpha(o->AsGeometry(), std::min(0.65f, 0.2f + 0.45f * q));
+            } else if (!o->GetFlags().any(RE::NiAVObject::Flag::kHidden)) o->GetFlags().set(RE::NiAVObject::Flag::kHidden);
         }
-        A.glossSent = q;
+        A.glossSent = wetLayer ? q : -1.0f;
         // the skin round his hole and up the crevice: a clear glossy layer while he is wet
         UpdateCleft(A, a, A.gloss);
         // his schlong while coated: glossier skin and a clear wet layer, fading as it dries

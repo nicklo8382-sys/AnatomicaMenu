@@ -597,13 +597,13 @@ namespace Virgin {
              "show in how tight he is, how his rim looks, how he reacts and how much he clenches (each can be switched off below).");
         if (!s.on) { if (ch) Colour::SaveNow(); return; }
 
-        if (Section("OVirginity")) {
+        if (Section(OVQuest() ? "OVirginity###ov" : "OVirginity  (not installed)###ov")) {
         if (OVQuest()) {
             ch |= ImGuiMCP::Checkbox("Use OVirginity", &s.useOV);
             Help("OVirginity is installed: its chances and its always / never virgin lists decide who starts a virgin, and "
                  "it is told when a man loses his virginity or gets it back (so ORomance, OProstitution and other mods see "
                  "it). When you are the one taking it, he goes on its \"virginities taken\" list.");
-        } else ImGuiMCP::TextDisabled("OVirginity is not installed: the chances below decide who starts a virgin.");
+        } else ImGuiMCP::TextColored(ImGuiMCP::ImVec4{1.0f, 0.45f, 0.4f, 1.0f}, "OVirginity is not installed - Anatomica's own virginity is used: the chances below decide who starts a virgin.");
         }
         {
 
@@ -709,7 +709,12 @@ namespace Virgin {
     void RenderTests(RE::Actor* a) {
         static std::string last;
         if (!a) return;
-        auto act = [&](const char* label, auto fn) { if (ImGuiMCP::Button(label)) last = fn(); };
+        auto act = [&](const char* label, auto fn) {
+            if (!ImGuiMCP::Button(label)) return;
+            last = fn();
+            if (!g.on) last += " - NOT used: virginity is off (Virginity page)";
+            else if (!g.grp[GroupOf(a)].on) last += std::format(" - NOT used: virginity is off for {} (Virginity page)", kGroupName[GroupOf(a)]);
+        };
         act("Make him a virgin", [&] {
             After out;
             { std::lock_guard lk(g_mx); auto& m = g_men[a->GetFormID()]; m.virgin = 1; m.exp = 0.0f; m.firstDay = -1.0f; m.asked = true; out.calls.push_back({a->GetFormID(), "virgin"}); }

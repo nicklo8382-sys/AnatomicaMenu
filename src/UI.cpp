@@ -275,6 +275,9 @@ void __stdcall UI::Motion::Render() {
 
 void __stdcall UI::Jiggle::Render() {
     ImGuiMCP::TextWrapped("Male jiggle strength for the Anatomica CBPC option (1.0 = Anatomica default, 0 = off).");
+    ImGuiMCP::TextColored(ImGuiMCP::ImVec4{1.0f, 0.8f, 0.35f, 1.0f},
+                          "Changes take effect after you restart the game: CBPC only reads its config files when the game starts. "
+                          "Press Apply, then quit and start Skyrim again.");
     ImGuiMCP::Separator();
     bool changed = false;
     for (auto& p : kJiggle) changed |= ImGuiMCP::SliderFloat(p.label, &p.mult, 0.0f, 3.0f, "x%.2f");
