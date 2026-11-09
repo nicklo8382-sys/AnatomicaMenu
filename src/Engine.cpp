@@ -387,7 +387,7 @@ namespace {
     // coloured (1024 = the base's 2nd level onward). Returns the path, kRingPending while it is being made, "" if it
     // cannot be made (the ring keeps the tint).
     constexpr const char* kRingPending = "\x01pending";
-    bool MakeRing(int r, int gg, int b, int drop, const std::filesystem::path& out, const std::string& tex) {
+    bool MakeRing(int r, int gg, int b, int drop, bool strong, const std::filesystem::path& out, const std::string& tex) {
         std::ifstream in("Data/textures/actors/character/male/Anatomica/colours/anatomica_blend_base.dds", std::ios::binary);
         std::uint8_t hdr[128]{};
         if (!in.read(reinterpret_cast<char*>(hdr), 128) || std::memcmp(hdr, "DDS ", 4) != 0 || std::memcmp(hdr + 84, "DXT5", 4) != 0) {
@@ -415,6 +415,13 @@ namespace {
             std::memcpy(p, &c, 2);
         };
         for (size_t o = 0; o + 16 <= d.size(); o += 16) { tint(&d[o + 8]); tint(&d[o + 10]); }   // colour half of each block
+        if (strong)   // "Stronger skin-blend ring": the two alpha end values of each block doubled (the block keeps its mode)
+            for (size_t o = 0; o + 16 <= d.size(); o += 16) {
+                const int a0 = d[o], a1 = d[o + 1];
+                int n0 = std::min(255, a0 * 2), n1 = std::min(255, a1 * 2);
+                if (a0 > a1 && n0 <= n1) n1 = n0 - 1;   // 8-value blocks must stay a0 > a1
+                d[o] = static_cast<std::uint8_t>(n0); d[o + 1] = static_cast<std::uint8_t>(std::max(0, n1));
+            }
         const std::uint32_t lin = std::max(1u, (w + 3) / 4) * std::max(1u, (h + 3) / 4) * 16;
         std::memcpy(hdr + 12, &h, 4); std::memcpy(hdr + 16, &w, 4); std::memcpy(hdr + 20, &lin, 4); std::memcpy(hdr + 28, &mips, 4);
         std::error_code ec;
@@ -434,7 +441,8 @@ namespace {
         const int r = q((rgb >> 16) & 255), gg = q((rgb >> 8) & 255), b = q(rgb & 255);
         const int key = (r << 16) | (gg << 8) | b;
         const int drop = std::clamp(Colour::RingTexLevel(), 0, 2);   // smaller copies: the ring is a soft fade
-        const std::string name = std::format("anatomica_blend_tint_{:06X}_{}.dds", key, 2048 >> drop);
+        const bool strong = Colour::RingStrong();
+        const std::string name = std::format("anatomica_blend_tint_{:06X}_{}{}.dds", key, 2048 >> drop, strong ? "_x2" : "");
         const std::filesystem::path out = std::filesystem::path("Data/textures/actors/character/male/Anatomica/gen") / name;
         const std::string tex = std::string("textures\\actors\\character\\male\\Anatomica\\gen\\") + name;
         switch (Maker::Of(tex)) {
@@ -445,7 +453,7 @@ namespace {
         }
         std::error_code ec;
         if (std::filesystem::exists(out, ec)) { Maker::MarkDone(tex); return tex; }
-        Maker::Queue(tex, [r, gg, b, drop, out, tex]() { return MakeRing(r, gg, b, drop, out, tex); });
+        Maker::Queue(tex, [r, gg, b, drop, strong, out, tex]() { return MakeRing(r, gg, b, drop, strong, out, tex); });
         return kRingPending;
     }
     bool IsTintedRing(const std::string& diffuse) { return diffuse.find("blend_tint_") != std::string::npos; }
@@ -507,7 +515,7 @@ namespace {
     // what we last put on each man's ring: nothing is touched again until the colour he should have changes, or the
     // game rebuilds his body / RaceMenu re-applies its paint (the ring's material is then a different one)
     struct RingDone { RE::NiAVObject* root = nullptr; RE::NiPointer<RE::BSGeometry> geo;   // held: a redress can rebuild the overlays
-                      RE::BSShaderMaterial* mat = nullptr; int col = -9, swap = -9, add = -9; };
+                      RE::BSShaderMaterial* mat = nullptr; int col = -9, swap = -9, add = -9; int tex = -1; };   // tex: size / strength settings
     std::unordered_map<RE::FormID, RingDone> g_ringDone;
     std::unordered_map<RE::FormID, std::string> g_ringLog;
     // one line in the log whenever what we find / do on a man's ring changes (to see why a ring stays white)
@@ -532,14 +540,15 @@ namespace {
         auto* root = a->Get3D(false);
         if (!root) return;
         const Colour::RingWant w = Colour::RingNow(a);
+        const int texSet = Colour::RingTexLevel() * 2 + (Colour::RingStrong() ? 1 : 0);   // changed in the menu: redo the ring
         if (auto it = g_ringDone.find(a->GetFormID()); it != g_ringDone.end()) {
             const RingDone& d = it->second;
             // still the ring he wears? (a rebuilt body puts a new overlay shape there)
             const bool same = !d.geo || Node(root, d.geo->name.c_str()) == d.geo.get();
             auto* lsp = d.geo ? d.geo->lightingShaderProp_cast() : nullptr;
-            if (same && d.root == root && d.col == w.col && d.swap == w.swap && d.add == w.add && (!d.geo || (lsp && lsp->material == d.mat))) return;
+            if (same && d.root == root && d.col == w.col && d.swap == w.swap && d.add == w.add && d.tex == texSet && (!d.geo || (lsp && lsp->material == d.mat))) return;
         }
-        RingDone done{root, nullptr, nullptr, w.col, w.swap, w.add};
+        RingDone done{root, nullptr, nullptr, w.col, w.swap, w.add, texSet};
         struct Mark { RingDone& d; RE::FormID id; ~Mark() { if (d.geo) if (auto* l = d.geo->lightingShaderProp_cast()) d.mat = l->material; g_ringDone[id] = d; } } mark{done, a->GetFormID()};
         if (!Node(root, "3BA_AnusRim")) return;
         const auto* npc = a->GetActorBase();
