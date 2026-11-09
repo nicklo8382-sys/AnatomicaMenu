@@ -178,9 +178,10 @@ namespace {
         for (const auto& e : std::filesystem::directory_iterator(dir, ec)) if (e.is_regular_file(ec)) n += e.file_size(ec);
         return n;
     }
-    void CleanGenFolder(int budgetMB, bool force = false) {
+    // returns what it did, for the menu; everything = delete all of them (they are remade as needed)
+    std::string CleanGenFolder(int budgetMB, bool force = false, bool everything = false) {
         static bool done = false;
-        if (done && !force) return;
+        if (done && !force) return {};
         done = true;
         std::error_code ec;
         const std::filesystem::path dir = std::filesystem::path("Data") / std::filesystem::path(std::string(kGenDir));
@@ -193,7 +194,7 @@ namespace {
             // anatomica_blend_tint_RRGGBB.dds = a full-size (2048) ring colour from 2.3j and older (cum_*.dds are the cum
             // colours of the streaks on a wet schlong: still used, kept)
             const bool oldRing = n.rfind("anatomica_blend_tint_", 0) == 0 && n.size() == std::string("anatomica_blend_tint_000000.dds").size();
-            if (oldRing) { std::filesystem::remove(e.path(), ec); ++legacy; continue; }
+            if (oldRing || everything) { if (std::filesystem::remove(e.path(), ec)) ++legacy; continue; }
             const auto sz = e.file_size(ec);
             total += sz;
             files.emplace_back(e.last_write_time(ec), e.path(), sz);
@@ -207,9 +208,13 @@ namespace {
                 if (std::filesystem::remove(path, ec)) { total -= sz; ++removed; }
             }
         }
-        if (legacy || removed) Maker::ForgetDone();   // what was made before may be gone now
+        if (legacy || removed) { Maker::ForgetDone(); Fluid::ForgetMade(); }   // what was made before may be gone now
         if (legacy || removed)
-            logger::info("Anatomica colour: tidied the gen folder ({} old-version textures, {} oldest removed; now {:.0f} MB)", legacy, removed, total / 1048576.0);
+            logger::info("Anatomica colour: tidied the gen folder ({} {} textures, {} oldest removed; now {:.0f} MB)", legacy, everything ? "made" : "old-version", removed, total / 1048576.0);
+        if (everything) return std::format("deleted {} textures - each is made again when a man needs it", legacy);
+        if (!legacy && !removed)
+            return std::format("nothing to tidy: {:.0f} MB is under the {} MB limit", total / 1048576.0, std::max(20, budgetMB));
+        return std::format("removed {} textures, now {:.0f} MB", legacy + removed, total / 1048576.0);
     }
 
     // the rim texture for a look, made in the background (Maker.cpp) the first time it is needed:
@@ -367,6 +372,7 @@ namespace {
                                           {0.50f, 0.28f, 0.45f}, {0.30f, 0.32f, 0.40f}, {0.55f, 0.40f, 0.30f}};
         int seed = 0;               // "re-roll everyone" bumps this
         int harmony = 1;            // smart random: 0 same family, 1 neighbouring, 2 contrasting
+        int ruleMode = 0;           // skin rules: 0 = any matching rule at random, 1 = rules for his race win over "All races"
         // after sex
         bool wet = true;
         float wetStrength = 0.8f;
@@ -493,6 +499,8 @@ namespace {
         float skin[3] = {0.60f, 0.25f, 0.20f};
         float tol = 35.0f;           // degrees on the colour wheel
         float anus[3] = {0.25f, 0.30f, 0.55f};
+        bool blendOwn = false;       // its own anus blend (skin-blend ring) colour; off = the ring follows the anus colour
+        float blend[3] = {0.55f, 0.60f, 0.85f};
     };
     constexpr int kMaxRules = 48;
     std::vector<Rule> g_rules;
@@ -646,13 +654,15 @@ namespace {
             size_t pos = 0;
             for (size_t q; (q = str.find(';', pos)) != std::string::npos; pos = q + 1) parts.push_back(str.substr(pos, q - pos));
             parts.push_back(str.substr(pos));
-            if (parts.size() != 5) continue;
+            if (parts.size() < 5 || parts.size() > 6) continue;
             Rule r;
             r.on = parts[0] == "1";
             r.race = parts[1];
             std::sscanf(parts[2].c_str(), "%f,%f,%f", &r.skin[0], &r.skin[1], &r.skin[2]);
             r.tol = std::clamp(static_cast<float>(std::atof(parts[3].c_str())), 5.0f, 90.0f);
             std::sscanf(parts[4].c_str(), "%f,%f,%f", &r.anus[0], &r.anus[1], &r.anus[2]);
+            if (parts.size() == 6 && parts[5] != "-")   // the anus blend colour (6th part; "-" or missing = follows the anus)
+                r.blendOwn = std::sscanf(parts[5].c_str(), "%f,%f,%f", &r.blend[0], &r.blend[1], &r.blend[2]) == 3;
             out.push_back(r);
         }
         return out;
@@ -705,6 +715,7 @@ namespace {
             }
             g.seed = static_cast<int>(ini.GetLongValue("Colour", "Seed", 0));
             g.harmony = static_cast<int>(ini.GetLongValue("Colour", "Harmony", g.harmony));
+            g.ruleMode = std::clamp(static_cast<int>(ini.GetLongValue("Colour", "RuleMode", g.ruleMode)), 0, 1);
             CSimpleIniA::TNamesDepend keys;
             ini.GetAllKeys("ColourRaces", keys);
             for (const auto& k : keys) g_races[k.pItem].choice = static_cast<int>(ini.GetLongValue("ColourRaces", k.pItem, kUseDefault));
@@ -838,6 +849,7 @@ namespace {
                          std::format("{:.3f},{:.3f},{:.3f}", g.palette[i][0], g.palette[i][1], g.palette[i][2]).c_str());
         ini.SetLongValue("Colour", "Seed", g.seed);
         ini.SetLongValue("Colour", "Harmony", g.harmony);
+        ini.SetLongValue("Colour", "RuleMode", g.ruleMode);
         ini.Delete("ColourReroll", nullptr);
         for (const auto& [k, v] : g_reroll)
             if (v) ini.SetLongValue("ColourReroll", k.c_str(), v);
@@ -853,8 +865,9 @@ namespace {
         for (size_t i = 0; i < g_rules.size(); ++i) {
             const auto& r = g_rules[i];
             ini.SetValue("ColourRules", std::format("Rule{}", i).c_str(),
-                         std::format("{};{};{:.3f},{:.3f},{:.3f};{:.0f};{:.3f},{:.3f},{:.3f}", r.on ? 1 : 0, r.race, r.skin[0], r.skin[1],
-                                     r.skin[2], r.tol, r.anus[0], r.anus[1], r.anus[2]).c_str());
+                         std::format("{};{};{:.3f},{:.3f},{:.3f};{:.0f};{:.3f},{:.3f},{:.3f};{}", r.on ? 1 : 0, r.race, r.skin[0], r.skin[1],
+                                     r.skin[2], r.tol, r.anus[0], r.anus[1], r.anus[2],
+                                     r.blendOwn ? std::format("{:.3f},{:.3f},{:.3f}", r.blend[0], r.blend[1], r.blend[2]) : std::string("-")).c_str());
         }
         for (const auto& [k, v] : g_races) {
             if (v.choice != RaceDefault(k)) ini.SetLongValue("ColourRaces", k.c_str(), v.choice);   // only what differs from the installer
@@ -963,31 +976,43 @@ namespace {
     }
 
     // skin rules: every enabled rule for his race (or all races) whose skin colour matches his
-    bool RuleFor(RE::Actor* a, const float skin[3], float out[3]) {
-        if (g_rules.empty()) return false;
+    // the rules that can apply to him (indices into g_rules), after the rule mode: "race wins" drops the All-races
+    // rules when one for his own race matches
+    std::vector<int> RuleHits(RE::Actor* a, const float skin[3]) {
+        std::vector<int> hits;
+        if (g_rules.empty() || !a) return hits;
         const std::string rk = RaceKey(a->GetRace());
         float h, s, v;
         RGBtoHSV(skin, h, s, v);
-        std::vector<const Rule*> hits;
-        for (const auto& r : g_rules) {
+        bool raceHit = false;
+        for (size_t i = 0; i < g_rules.size(); ++i) {
+            const Rule& r = g_rules[i];
             if (!r.on || (!r.race.empty() && r.race != rk)) continue;
             float rh, rs, rv;
             RGBtoHSV(r.skin, rh, rs, rv);
             bool match;
             if (rs < 0.12f) match = s < 0.18f && std::fabs(v - rv) < 0.3f;    // greyish / plain skin rule
             else match = s >= 0.08f && HueDist(h, rh) <= r.tol;
-            if (match) hits.push_back(&r);
+            if (match) { hits.push_back(static_cast<int>(i)); raceHit |= !r.race.empty(); }
         }
+        if (g.ruleMode == 1 && raceHit) std::erase_if(hits, [](int i) { return g_rules[i].race.empty(); });
+        return hits;
+    }
+    int RuleChosen(RE::Actor* a, const std::vector<int>& hits) { return hits.empty() ? -1 : hits[Hash(a, 31) % hits.size()]; }
+    bool RuleFor(RE::Actor* a, const float skin[3], float out[3], float* blendOut = nullptr, bool* blendOwn = nullptr) {
+        const auto hits = RuleHits(a, skin);
         if (hits.empty()) return false;
-        const Rule* r = hits[Hash(a, 31) % hits.size()];
+        const Rule* r = &g_rules[RuleChosen(a, hits)];
         std::copy(std::begin(r->anus), std::end(r->anus), out);
+        if (blendOwn) *blendOwn = r->blendOwn;
+        if (blendOut && r->blendOwn) std::copy(std::begin(r->blend), std::end(r->blend), blendOut);
         return true;
     }
 
-    void SmartFor(RE::Actor* a, float out[3]) {
+    void SmartFor(RE::Actor* a, float out[3], float* blendOut = nullptr, bool* blendOwn = nullptr) {
         float skin[3], h, sat, v;
         SkinTone(a, skin);
-        if (RuleFor(a, skin, out)) return;
+        if (RuleFor(a, skin, out, blendOut, blendOwn)) return;
         RGBtoHSV(skin, h, sat, v);
         if (sat < 0.08f) h = 350.0f;   // no real skin colour (plain tint): start from pink
         const float r1 = Rand01(a, 11), r2 = Rand01(a, 12), r3 = Rand01(a, 13), sign = Rand01(a, 14) < 0.5f ? -1.0f : 1.0f;
@@ -1036,6 +1061,9 @@ namespace {
         float rgb[3] = {0, 0, 0};
         float strength = 1.0f;
         bool active = false;       // picker on and this man in scope
+        bool blendOwn = false;     // a skin rule gave the ring (anus blend) its own colour
+        float blend[3] = {0, 0, 0};
+        int ruleIdx = -1;          // the skin rule his colour came from (-1 = none)
     };
 
     Pick PickFor(RE::Actor* a) {
@@ -1090,7 +1118,10 @@ namespace {
             }
         }
         if (choice == kSmart) {
-            SmartFor(a, p.rgb);
+            SmartFor(a, p.rgb, p.blend, &p.blendOwn);
+            float sk[3];
+            SkinTone(a, sk);
+            p.ruleIdx = RuleChosen(a, RuleHits(a, sk));
             choice = kCustom;
         }
         p.choice = std::clamp(choice, kInstalled, kCustom);
@@ -1232,7 +1263,7 @@ namespace {
         // cum in the wetness (its own colour and opacity, apart from the lube colour): a cum film on the rim
         const float film = g.wetCumOn && worn > 0.0f ? Quant(std::clamp(worn, 0.0f, 1.0f) * g.wetCumAmt) : 0.0f;
         float filmCol[3] = {g.wetCum[0], g.wetCum[1], g.wetCum[2]};
-        if (film > 0.0f && g.cumByRace)
+        if (film > 0.0f && kCum && g.cumByRace)
             if (auto wi = g_work.find(a->GetFormID()); wi != g_work.end() && !wi->second.giverRace.empty())
                 if (auto ri = g_races.find(wi->second.giverRace); ri != g_races.end() && ri->second.cumOwn)
                     for (int i = 0; i < 3; ++i) filmCol[i] = ri->second.cum[i];
@@ -1252,7 +1283,7 @@ namespace {
                 if (rimExp < 0.0f) t.colour[i] += (std::min(1.0f, (i == 0 ? 0.98f : i == 1 ? 0.80f : 0.84f)) - t.colour[i]) * 0.14f * -rimExp;
                 else if (rimExp > 0.0f) t.colour[i] *= 1.0f - (i == 0 ? 0.10f : 0.20f) * rimExp;
                 t.lube[i] = g.wetColour[i];
-                if (g.cumByRace) {
+                if (kCum && g.cumByRace) {
                     if (auto wi = g_work.find(a->GetFormID()); wi != g_work.end() && !wi->second.giverRace.empty())
                         if (auto ri = g_races.find(wi->second.giverRace); ri != g_races.end() && ri->second.cumOwn) t.lube[i] = ri->second.cum[i];
                 }
@@ -1275,6 +1306,7 @@ namespace {
             const float s = (g.method == 0 && choice >= 0) ? pk.strength : 1.0f;   // same strength as the rim
             float pick[3], base[3], c[3];
             BlendTarget(col, pk.rgb, pick);
+            if (pk.blendOwn && g.blendMatch && choice >= 0) for (int i = 0; i < 3; ++i) pick[i] = pk.blend[i] * 255.0f;   // the skin rule's anus blend colour
             BlendTarget(kSkinPreset, pk.rgb, base);
             for (int i = 0; i < 3; ++i) {
                 c[i] = (base[i] + (pick[i] - base[i]) * s) / 255.0f * skin[i];
@@ -1316,7 +1348,7 @@ namespace {
             }
             if (g.wetCumOn && lv.worn > 0.0f) {   // the beads are cum then
                 for (int i = 0; i < 3; ++i) wi.rgb[i] = g.wetCum[i];
-                if (g.cumByRace)
+                if (kCum && g.cumByRace)
                     if (auto wk = g_work.find(id); wk != g_work.end() && !wk->second.giverRace.empty())
                         if (auto ri = g_races.find(wk->second.giverRace); ri != g_races.end() && ri->second.cumOwn)
                             for (int i = 0; i < 3; ++i) wi.rgb[i] = ri->second.cum[i];
@@ -1613,7 +1645,8 @@ namespace {
     struct Status {
         bool ok = false;
         std::string name, race, colour;
-        float rim[3]{}, skin[3]{};
+        float rim[3]{}, skin[3]{}, ring[3]{};
+        bool ringOurs = false;   // the skin-blend ring is coloured by Anatomica (else: his own paint / none, untouched)
         float wet = 0, tender = 0, bruise = 0, swell = 0, schlong = 0, gape = 0, loose = 0;
         int partners = 0;
         float secs = 0;
@@ -1638,6 +1671,22 @@ namespace {
             const float sk = 1.0f + (st.skin[i] - 1.0f) * g.skinOnRim;
             st.rim[i] = std::clamp((base[i] + (pick[i] - base[i]) * sMix) / 255.0f * sk, 0.0f, 1.0f);
         }
+        {   // the skin-blend ring, as the colour pass works it out (Want)
+            const bool addRing = a->IsPlayerRef() ? g.playerRing : g.autoRing;
+            if (pk.active && ((g.blendMatch && pk.choice >= 0) || addRing)) {
+                const int rc = (g.blendMatch && pk.choice >= 0) ? pk.choice : InstalledPreset();
+                const float rs = (g.method == 0 && pk.choice >= 0) ? pk.strength : 1.0f;
+                float rp[3], rb[3];
+                BlendTarget(rc, pk.rgb, rp);
+                if (pk.blendOwn && g.blendMatch && pk.choice >= 0) for (int i = 0; i < 3; ++i) rp[i] = pk.blend[i] * 255.0f;
+                BlendTarget(kSkinPreset, pk.rgb, rb);
+                for (int i = 0; i < 3; ++i) {
+                    const float sk = 1.0f + (st.skin[i] - 1.0f) * g.skinOnRim;
+                    st.ring[i] = std::clamp((rb[i] + (rp[i] - rb[i]) * rs) / 255.0f * sk, 0.0f, 1.0f);
+                }
+                st.ringOurs = true;
+            }
+        }
         const auto id = a->GetFormID();
         const Levels lv = LevelsFor(id, nullptr);
         st.wet = lv.wet, st.tender = lv.tender, st.bruise = lv.bruise;
@@ -1649,6 +1698,25 @@ namespace {
         st.gape = Wink::GapeOf(id);
         if (const float eg = Engine::GapeOf(id); eg >= 0.0f) st.gape = std::max(st.gape, eg);
         return st;
+    }
+    void ColourRow(const char* label, const float c[3], const char* note = nullptr) {
+        ImGuiMCP::PushID(label);
+        ImGuiMCP::ColorButton("##sw", ImGuiMCP::ImVec4{c[0], c[1], c[2], 1.0f}, ImGuiMCP::ImGuiColorEditFlags_NoTooltip,
+                              ImGuiMCP::ImVec2{ImGuiMCP::GetFontSize() * 2.2f, ImGuiMCP::GetFontSize() * 1.1f});
+        ImGuiMCP::SameLine();
+        const auto b = [](float v) { return static_cast<int>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f)); };
+        if (note) ImGuiMCP::Text("%s: %s", label, note);
+        else ImGuiMCP::Text("%s: #%02X%02X%02X", label, b(c[0]), b(c[1]), b(c[2]));
+        ImGuiMCP::PopID();
+    }
+    void ColourRows(const Status& st) {
+        ColourRow("Skin colour", st.skin);
+        ColourRow("Anus colour (rim)", st.rim);
+        if (st.ringOurs) ColourRow("Ring colour (skin-blend)", st.ring);
+        else {
+            const float grey[3] = {0.5f, 0.5f, 0.5f};
+            ColourRow("Ring colour (skin-blend)", grey, "not coloured by Anatomica (his own RaceMenu paint, or no ring)");
+        }
     }
     std::string StatusLine(const Status& st) {
         return std::format("{}: {} | wet {:.0f}% | red {:.0f}% | bruise {:.0f}% | swell {:.0f}% | gape {:.0f}% | loose {:.0f}%",
@@ -1836,9 +1904,8 @@ namespace {
                     st = StatusOf(a);
                 }
                 ImGuiMCP::Text("%s  (%s)", st.name.c_str(), st.race.c_str());
-                ImGuiMCP::ColorButton("##rim", ImGuiMCP::ImVec4{st.rim[0], st.rim[1], st.rim[2], 1.0f});
-                ImGuiMCP::SameLine();
-                ImGuiMCP::Text("%s%s", st.colour.c_str(), st.own ? " (his own)" : "");
+                ImGuiMCP::Text("Colour pick: %s%s", st.colour.c_str(), st.own ? " (his own)" : "");
+                ColourRows(st);
                 Bar("Gape", st.gape);
                 Bar("Looseness", st.loose / 0.6f);
                 Bar("Wet", st.wet);
@@ -2093,7 +2160,7 @@ namespace Colour {
         std::lock_guard lk(g_lock);
         if (!g_loaded) LoadIni();
         auto it = g_races.find(RaceKey(giver->GetRace()));
-        if (it == g_races.end() || !it->second.cumOwn) return false;
+        if (!kCum || it == g_races.end() || !it->second.cumOwn) return false;   // per-race cum colours: cum system only
         for (int i = 0; i < 3; ++i) out[i] = it->second.cum[i];
         return true;
     }
@@ -2244,8 +2311,12 @@ namespace Colour {
             static std::string sz;
             if (ImGuiMCP::Button("Check size")) sz = std::format("{:.0f} MB now", GenFolderBytes() / 1048576.0);
             ImGuiMCP::SameLine();
-            if (ImGuiMCP::Button("Tidy now")) { CleanGenFolder(g.genBudget, true);   // (the page holds g_lock)
-                sz = std::format("{:.0f} MB now", GenFolderBytes() / 1048576.0); }
+            if (ImGuiMCP::Button("Tidy now")) sz = CleanGenFolder(g.genBudget, true);   // (the page holds g_lock)
+            ImGuiMCP::SameLine();
+            if (ConfirmButton("Delete them all")) {   // a fresh start: everything is made again as it is needed
+                sz = CleanGenFolder(g.genBudget, true, true);
+                g_sent.clear();   // every man's look is sent again, so the textures he needs are remade
+            }
             if (!sz.empty()) { ImGuiMCP::SameLine(); ImGuiMCP::TextUnformatted(sz.c_str()); }
             Help("Anatomica makes textures for itself as it goes (rims, ring colours, glossy skin) and keeps them in "
                  "textures\\actors\\character\\male\\Anatomica\\gen (MO2: in overwrite). They are a cache - anything "
@@ -2374,7 +2445,7 @@ namespace Colour {
     void RenderRacesBody();
     void __stdcall RenderRaces() {
         RenderRacesBody();
-        if (!kCum && Section("Cum colour per race")) RenderCumColours();   // the Cum & drips page is off (Features.h): they live here
+        // cum colour per race: off together with the rest of Anatomica's cum (Features.h) - they live on the Cum & drips page
     }
     void RenderRacesBody() {
         std::lock_guard lk(g_lock);
@@ -2447,16 +2518,47 @@ namespace Colour {
         if (!g_loaded) LoadIni();
         BuildRaces();
         bool changed = false;
+        ImGuiMCP::TextColored(ImGuiMCP::ImVec4{0.55f, 0.85f, 1.0f, 1.0f},
+                              "Tip: colours can be dragged and dropped - drag any colour swatch onto another to copy it across.");
+        ImGuiMCP::Separator();
+        {
+            static const char* modes[] = {"Any matching rule, at random", "His race's rules win over \"All races\""};
+            changed |= ImGuiMCP::Combo("When several rules match", &g.ruleMode, modes, 2);
+            Help("At random: every rule that matches him counts - an All-races rule as much as one for his race - and he gets "
+                 "one of them (fixed per man). That gives the most variety, e.g. a blue argonian can get purple from his race's "
+                 "rule or another colour from an All-races rule.\nRace wins: if a rule for his own race matches, the All-races "
+                 "rules are left out for him; they only apply to races with no matching rule of their own.");
+        }
         ImGuiMCP::TextWrapped("Skin rules decide the anus colour from the man's skin colour. They are used by Smart random "
                               "(pick it for Everyone, a race, or tick Smart in a Random list). Example: race Argonian, "
                               "skin red within 35 degrees -> blue anus; skin blue -> purple anus. If several rules match "
-                              "one man he gets one of them at random (fixed per man). No match = the normal Smart colour.");
+                              "one man he gets one of them (fixed per man; which ones count is set above). No match = the "
+                              "normal Smart colour.");
         ImGuiMCP::TextDisabled("Skin colour is read from the character's skin tone (RaceMenu / CK tint). Skins coloured only "
                                "by a texture, not a tint, read as plain.");
         ImGuiMCP::Separator();
         std::vector<const char*> items{"All races"};
         for (const auto& r : g_raceRows) items.push_back(r.plain.c_str());
         int del = -1;
+        // the man selected in the console (or you): which rules match him, and the one he gets
+        RE::Actor* who = TestWho();
+        std::vector<int> hits;
+        int chosen = -1;
+        bool smart = false;
+        if (who) {
+            float sk[3];
+            SkinTone(who, sk);
+            hits = RuleHits(who, sk);
+            chosen = RuleChosen(who, hits);
+            const Pick pk = PickFor(who);
+            smart = pk.active && pk.ruleIdx >= 0;
+            const char* nm = who->GetDisplayFullName();
+            if (hits.empty()) ImGuiMCP::TextDisabled("%s: no rule matches his skin - he gets the normal Smart colour.", nm ? nm : "?");
+            else if (smart) ImGuiMCP::TextColored(ImGuiMCP::ImVec4{0.5f, 0.95f, 0.5f, 1.0f}, "%s: the rule marked APPLIED is his colour now (%d match).", nm ? nm : "?", static_cast<int>(hits.size()));
+            else ImGuiMCP::TextColored(ImGuiMCP::ImVec4{1.0f, 0.8f, 0.35f, 1.0f}, "%s: %d rule(s) match, but his colour is not Smart random - skin rules are not used for him.", nm ? nm : "?", static_cast<int>(hits.size()));
+        }
+        if (!g_rules.empty())
+            ImGuiMCP::TextDisabled("On | Race | Skin colour | matches within | Anus colour | Anus blend (ring) colour - tick to give it its own");
         for (size_t i = 0; i < g_rules.size(); ++i) {
             auto& r = g_rules[i];
             ImGuiMCP::PushID(static_cast<int>(i));
@@ -2478,7 +2580,20 @@ namespace Colour {
             ImGuiMCP::SameLine();
             changed |= ImGuiMCP::ColorEdit3("anus##a", r.anus, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
             ImGuiMCP::SameLine();
+            changed |= ImGuiMCP::Checkbox("##bo", &r.blendOwn);
+            ImGuiMCP::SameLine();
+            if (r.blendOwn) changed |= ImGuiMCP::ColorEdit3("anus blend##b", r.blend, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
+            else ImGuiMCP::TextDisabled("anus blend: follows the anus");
+            ImGuiMCP::SameLine();
             if (ImGuiMCP::Button("Remove")) del = static_cast<int>(i);
+            if (static_cast<int>(i) == chosen) {
+                ImGuiMCP::SameLine();
+                if (smart) ImGuiMCP::TextColored(ImGuiMCP::ImVec4{0.5f, 0.95f, 0.5f, 1.0f}, "<< APPLIED");
+                else ImGuiMCP::TextColored(ImGuiMCP::ImVec4{1.0f, 0.8f, 0.35f, 1.0f}, "<< his pick (if he were Smart random)");
+            } else if (std::find(hits.begin(), hits.end(), static_cast<int>(i)) != hits.end()) {
+                ImGuiMCP::SameLine();
+                ImGuiMCP::TextDisabled("< matches him too");
+            }
             ImGuiMCP::PopID();
         }
         if (del >= 0) {
@@ -2499,7 +2614,10 @@ namespace Colour {
                 SkinTone(who, r.skin);
                 r.tol = 25.0f;
                 const Status st = StatusOf(who);   // start from the anus colour he has now
-                for (int i = 0; i < 3; ++i) r.anus[i] = st.rim[i];
+                // the colours he has now, without his skin tone (the colour pass multiplies that in again)
+                auto unskin = [&](float v, int i) { const float sk = 1.0f + (st.skin[i] - 1.0f) * g.skinOnRim; return std::clamp(sk > 0.05f ? v / sk : v, 0.0f, 1.0f); };
+                for (int i = 0; i < 3; ++i) r.anus[i] = unskin(st.rim[i], i);
+                if (st.ringOurs) { r.blendOwn = true; for (int i = 0; i < 3; ++i) r.blend[i] = unskin(st.ring[i], i); }   // and the ring he has now
                 g_rules.push_back(r);
                 g_ruleNote = std::format("added: {} ({}), skin {:02X}{:02X}{:02X}", who->GetName(), st.race,
                                          static_cast<int>(r.skin[0] * 255), static_cast<int>(r.skin[1] * 255), static_cast<int>(r.skin[2] * 255));
@@ -2507,7 +2625,7 @@ namespace Colour {
             }
         }
         Help("The man you click in the console (~), or you: a new rule for his race and his exact skin tone, starting with "
-             "the anus colour he has now - pick the anus colour you want for skins like his.");
+             "the anus and anus blend (ring) colours he has now - pick the colours you want for skins like his.");
         if (!g_ruleNote.empty()) ImGuiMCP::TextDisabled("%s", g_ruleNote.c_str());
         ImGuiMCP::SameLine();
         if (ConfirmButton("Load the default rules")) {
@@ -2581,14 +2699,10 @@ namespace Colour {
         const Status st = StatusOf(a);
         ImGuiMCP::SeparatorText(st.name.c_str());
         ImGuiMCP::Text("Race: %s", st.race.c_str());
-        ImGuiMCP::Text("Colour: %s%s", st.colour.c_str(), st.own ? " (his own)" : "");
-        ImGuiMCP::ColorButton("Rim colour", ImGuiMCP::ImVec4{st.rim[0], st.rim[1], st.rim[2], 1.0f});
-        ImGuiMCP::SameLine();
-        ImGuiMCP::Text("rim");
-        ImGuiMCP::SameLine();
-        ImGuiMCP::ColorButton("Skin tone", ImGuiMCP::ImVec4{st.skin[0], st.skin[1], st.skin[2], 1.0f});
-        ImGuiMCP::SameLine();
-        ImGuiMCP::Text("skin tone");
+        ImGuiMCP::Text("Colour pick: %s%s", st.colour.c_str(), st.own ? " (his own)" : "");
+        ColourRows(st);
+        Help("Skin colour: his skin tone as the game tints it. Anus colour: the rim as Anatomica colours it (before "
+             "reddening, bruising and wetness). Ring colour: the soft skin-blend ring around it (RaceMenu paint).");
         ImGuiMCP::Text("Wet %.0f%%   Red %.0f%%   Bruise %.0f%%   Swelling %.0f%%", st.wet * 100, st.tender * 100, st.bruise * 100, st.swell * 100);
         ImGuiMCP::Text("Gape %.0f%%   Looseness %.0f%%   Schlong shine %.0f%%", st.gape * 100, st.loose * 100, st.schlong * 100);
         ImGuiMCP::Text("This round: %d partner(s), %.0f s of penetration", st.partners, st.secs);
@@ -2839,8 +2953,10 @@ namespace Colour {
             Indented(g.wetCumOn, [&] {
                 changed |= ImGuiMCP::ColorEdit3("Wear colour##wc", g.wetCum, kWheel);
                 changed |= Pct("Wear opacity##wc", &g.wetCumAmt);
-                changed |= ImGuiMCP::Checkbox("The giver's race colour when it has one##wc", &g.cumByRace);
-                Help("Per race page: races with a cum colour of their own use it here (also for the lube colour above).");
+                if (kCum) {   // per-race cum colours: only with the cum system (Features.h)
+                    changed |= ImGuiMCP::Checkbox("The giver's race colour when it has one##wc", &g.cumByRace);
+                    Help("Per race page: races with a cum colour of their own use it here (also for the lube colour above).");
+                }
             });
             Fluid::RenderWetSettings();
             changed |= ImGuiMCP::Checkbox("Water dries it faster", &g.waterDry);

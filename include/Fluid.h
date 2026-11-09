@@ -11,6 +11,7 @@ namespace Fluid {
 
     void Install();                                  // start the frame loop (SKSE load)
     void Reset();                                    // a save was loaded: forget everything
+    void ForgetMade();                               // its made textures were deleted (tidy): make them again when needed
     void Ini(CSimpleIniA& ini, bool save);           // [Fluid] in AnatomicaMenu.ini
     void RenderSettings();                           // "Look and physics" (Cum & drips page)
     void RenderWetSettings();                        // the wet rim's shine (After sex page, Wetness)

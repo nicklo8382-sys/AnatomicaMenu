@@ -385,6 +385,7 @@ namespace {
     float Radius(float vol) { return std::clamp(0.075f + 0.06f * std::sqrt(std::max(vol, 0.0f)), 0.05f, 0.32f) * g.thick; }
 
     std::unordered_map<std::uint32_t, std::string> g_texCache;
+    std::atomic<bool> g_forgetMade{false};   // set from the menu (any thread), acted on in the frame under g_mx
     const std::string& TexFor(const float rgb[3]) {
         auto q = [](float x) { return static_cast<std::uint32_t>(std::clamp(static_cast<int>(std::lround(x * 31.0f)), 0, 31)); };
         const std::uint32_t key = q(rgb[0]) | (q(rgb[1]) << 5) | (q(rgb[2]) << 10) | (static_cast<std::uint32_t>(std::lround(g.opacity * 20.0f)) << 15);
@@ -1983,6 +1984,10 @@ namespace {
         bool polled = false;
         if (now - g_lastWetPoll > 0.5) { g_lastWetPoll = now; wet = Colour::WetNow(); polled = true; }
         std::lock_guard lk(g_mx);
+        if (g_forgetMade.exchange(false)) {   // files deleted: check / make them again
+            g_texCache.clear(); g_cleftTex.clear(); g_wetTex.clear();
+            for (auto& [id, A] : g_act) { A.cleftTex.clear(); A.cleftC0ok = false; }
+        }
         if (polled) {
             for (auto& [id, A] : g_act) A.wet = 0.0f, A.swet = 0.0f, A.gloss = 0.0f, A.lube = 0.0f;
             for (auto& w : wet) {
@@ -2152,6 +2157,7 @@ namespace {
 }
 
 namespace Fluid {
+    void ForgetMade() { g_forgetMade = true; }
     void Install() { std::thread(Loop).detach(); }
 
     void Reset() {
