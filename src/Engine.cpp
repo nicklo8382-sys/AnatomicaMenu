@@ -98,22 +98,27 @@ namespace {
         c.ok = true;
         return c;
     }
-    // any of o's schlong bones in the first 8 units of the canal, within rad of its axis
-    bool Inside(const Canal& c, RE::Actor* o, float rad) {
+    // where o's schlong is: 2 = a bone in the first 8 units of the canal, within rad of its axis;
+    // 1 = the tip still at the entrance (just outside it, PPA still spreading the ring round it); 0 = out
+    int Inside(const Canal& c, RE::Actor* o, float rad) {
         auto* root = o->Get3D(false);
-        if (!root) return false;
+        if (!root) return 0;
         static const char* kGen[] = {"NPC Genitals06 [Gen06]", "NPC Genitals05 [Gen05]", "NPC Genitals04 [Gen04]",
                                      "NPC Genitals03 [Gen03]", "NPC Genitals02 [Gen02]", "NPC Genitals01 [Gen01]"};
         const float r = rad * c.sc, tol = -0.5f * r, r2 = r * r, tmax = 8.0f * c.sc;
+        const float nearT = -3.0f * c.sc, nr2 = r2 * 2.6f;   // ~1.6x the radius, up to 3 units in front of the hole
+        int best = 0;
         for (auto* nm : kGen) {
             auto* n = Node(root, nm);
             if (!n) continue;
             const V v = V(n->world.translate) - c.h;
             const float t = Dot(v, c.a);
-            if (t < tol || t > tmax) continue;
-            if (Dot(v, v) - t * t < r2) return true;
+            if (t > tmax) continue;
+            const float d2 = Dot(v, v) - t * t;
+            if (t >= tol && d2 < r2) return 2;
+            if (t >= nearT && d2 < nr2) best = 1;
         }
-        return false;
+        return best;
     }
 
     struct St {
@@ -162,6 +167,7 @@ namespace {
         const Virgin::Mods vm = Virgin::For(act->GetFormID());   // his virginity / experience (Virginity page)
         const Canal c = CanalOf(act);
         RE::Actor* partner = nullptr;
+        bool atEntrance = false;   // his tip is right at the hole (an almost-full pull-out): no left-over gape yet
         float nearest = 1e9f;
         if (c.ok)
             for (auto* o : others) {
@@ -173,7 +179,9 @@ namespace {
                     auto* oroot = o->Get3D(false);
                     if (auto* op = Node(oroot, "NPC Pelvis [Pelv]")) nearest = std::min(nearest, Len(V(op->world.translate) - c.pelvis));
                 }
-                if (Inside(c, o, rad)) { partner = o; break; }
+                const int in = Inside(c, o, rad);
+                if (in == 2) { partner = o; break; }
+                if (in == 1 && s.was) atEntrance = true;   // only the man already in him (not someone walking past)
             }
         float g = 0.0f, gd = 0.0f;
         if (partner) {
@@ -193,6 +201,13 @@ namespace {
             s.inScene = true;
             Colour::WorkedNow(act, s.dil, s.ep, partner);
             g = 0.0f;
+        } else if (atEntrance) {
+            // pulled almost all the way out: PPA still holds the ring round his tip - adding the left-over gape on
+            // top of that is what made it go wide. Count it as still in (no building), the gape starts once he is out.
+            s.worked = now;
+            s.partnerNear = now;
+            s.inScene = true;
+            g = 0.0f;
         } else {
             s.was = false;
             // still in the scene: the partner's hips are right at his (a pause, a slow pull-out between strokes)
@@ -205,7 +220,8 @@ namespace {
                 if (s.inScene) {
                     // during the scene: what is left when he slides out, held a moment, then easing shut
                     const float e = during * vm.open * s.sz * Smooth(s.dil);
-                    g = t < hold ? e : e * (1.0f - Smooth((t - hold) / decay));
+                    const float in = Smooth(t / 0.4f);   // eased in over 0.4 s, not snapped open (a quick stroke back in never shows it)
+                    g = e * in * (t < hold ? 1.0f : 1.0f - Smooth((t - hold) / decay));
                 } else {
                     if (s.worked <= 0.0 || t >= hold) {
                         const float q = std::max(1.0f, Colour::CloseSlowFor(act));
