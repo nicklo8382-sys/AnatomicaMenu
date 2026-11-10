@@ -148,8 +148,8 @@ namespace During {
         };
         B("OpenInside", g_canalOn); F("OpenInsideAmount", g_w.canal, 0.0f, 1.5f);
         B("HoleFollows", g_w.holeFollow); F("HoleSize", g_w.holeSize, 0.5f, 1.6f);
-        B("RingFollows", g_w.ring); F("RingGrip", g_w.grip, 0.0f, 1.0f); F("RingMaxOut", g_w.maxOut, 0.0f, 2.0f);
-        F("RingMaxIn", g_w.maxIn, 0.0f, 1.5f); F("RingGrow", g_w.grow, 1.0f, 2.0f);
+        B("RingFollows", g_w.ring); F("RingGrip", g_w.grip, 0.0f, 1.5f); F("RingMaxOut", g_w.maxOut, 0.0f, 3.0f);
+        F("RingMaxIn", g_w.maxIn, 0.0f, 3.0f); F("RingGrowExtra", g_w.grow, 0.0f, 2.0f);
         B("Bulge", g_bulgeOn); F("BulgeAmount", g_w.bulge, 0.0f, 3.0f); F("BulgeStart", g_w.bulgeStart, 2.0f, 30.0f);
         F("BulgeRandom", g_w.bulgeRandom, 0.0f, 1.0f);
         if (save) ini.SetLongValue(S, "BulgeShape", g_w.bulgeShape);
@@ -277,35 +277,40 @@ namespace During {
                      "higher = he is opened a little wider than the shaft.");
             }
             ch |= ImGuiMCP::Checkbox("The rim follows the shaft", &g_w.ring);
-            Help("The rim and the first part of the inside move with the shaft: drawn into him on each push, pulled out with it "
-                 "on each withdraw, and back to rest between strokes. Each way has its own limit.");
+            Help("The whole anus - the rim, the skin round it and the first part of the inside - moves with the shaft: drawn into "
+                 "him on each push, pulled out with it on each withdraw, settling back as the strokes stop. Each way has its own "
+                 "limit.");
             if (g_w.ring) {
                 float gp = g_w.grip * 100.0f;
-                if (ImGuiMCP::SliderFloat("Grip on the shaft", &gp, 0.0f, 100.0f, "%.0f%%")) { g_w.grip = gp / 100.0f; ch = true; }
-                Help("How strongly the rim is carried along by the shaft (and how far a fast stroke takes it).");
-                ch |= ImGuiMCP::SliderFloat("Most it is pulled out", &g_w.maxOut, 0.0f, 2.0f, "%.2f units");
-                Help("The farthest the rim may stick out of him on a withdraw (game units, about 1.4 cm each). 1.00 is a big "
-                     "pout; 0.5 a natural one.");
-                ch |= ImGuiMCP::SliderFloat("Most it is drawn in", &g_w.maxIn, 0.0f, 1.5f, "%.2f units");
-                Help("The farthest the rim may be drawn into him on a push.");
+                if (ImGuiMCP::SliderFloat("Grip on the shaft", &gp, 0.0f, 150.0f, "%.0f%%")) { g_w.grip = gp / 100.0f; ch = true; }
+                Help("How much of each stroke the anus follows: 100% = it moves almost as far as the shaft does (up to the limits "
+                     "below), 30% = a light tug.");
+                ch |= ImGuiMCP::SliderFloat("Most it is pulled out", &g_w.maxOut, 0.0f, 3.0f, "%.2f units");
+                Help("The farthest it may stick out of him on a withdraw (game units, about 1.4 cm each). 0.5 is natural, 1.0 a big "
+                     "pout, 2-3 extreme.");
+                ch |= ImGuiMCP::SliderFloat("Most it is drawn in", &g_w.maxIn, 0.0f, 3.0f, "%.2f units");
+                Help("The farthest it may be drawn into him on a push.");
                 float gr = g_w.grow * 100.0f;
-                if (ImGuiMCP::SliderFloat("Pull-out grows as he is worked", &gr, 100.0f, 200.0f, "up to %.0f%%")) { g_w.grow = gr / 100.0f; ch = true; }
-                Help("The pull-out limit grows over the scene as he is worked open, up to this much of \"Most it is pulled out\" "
-                     "(100% = it never grows). It goes back with the gape after the scene.");
+                if (ImGuiMCP::SliderFloat("Pull-out grows as he is worked", &gr, 0.0f, 200.0f, "+%.0f%%")) { g_w.grow = gr / 100.0f; ch = true; }
+                Help("The pull-out limit grows over the scene as he is worked open, by up to this much (+100% = twice as far by the "
+                     "end, +200% = three times). 0% = it never grows. It goes back with the gape after the scene.");
             }
             ch |= ImGuiMCP::Checkbox("Belly bulge", &g_bulgeOn);
             Help("When the tip is deep in him his lower belly bulges where it is, and the bump moves up and down with each "
                  "stroke. Off by default.");
             if (g_bulgeOn) {
                 float pct = g_w.bulge * 100.0f;
-                if (ImGuiMCP::SliderFloat("Bulge strength", &pct, 0.0f, 300.0f, "%.0f%%")) { g_w.bulge = pct / 100.0f; ch = true; }
-                Help("100% = a clear bump; 200-300% = very obvious.");
+                if (ImGuiMCP::SliderFloat("Bulge strength", &pct, 0.0f, 200.0f, "%.0f%%")) { g_w.bulge = pct / 100.0f; ch = true; }
+                Help("The bulge shapes are built extreme, so 100% is the full, very obvious shape: 20-40% is a natural bump, "
+                     "100% extreme, more than that exaggerated.");
                 static const char* shapes[] = {"From his schlong's shape (TNG)", "A bump at the tip", "The whole shaft (long)",
                                                "Big head (horse / flared)", "Knot (big round lump low down)", "Tentacle (wandering)"};
                 ch |= ImGuiMCP::Combo("Bulge shape", &g_w.bulgeShape, shapes, 6);
                 Help("From his schlong's shape: knotted -> knot, flared -> big head, tentacle -> tentacle, L / XL and creatures -> the "
                      "whole shaft, anything else -> a bump at the tip.\n"
-                     "The others pick one shape for everyone. All of them grow and rise the deeper the tip goes.");
+                     "The others pick one shape for everyone. The shaft, big head, knot and tentacle are the outline of a schlong up "
+                     "his belly (Anatomica Bulge <shape> 1-3 sliders), longer the deeper the tip goes; the bump is a round lump "
+                     "that rises with the tip.");
                 float rnd = g_w.bulgeRandom * 100.0f;
                 if (ImGuiMCP::SliderFloat("Randomness", &rnd, 0.0f, 100.0f, "%.0f%%")) { g_w.bulgeRandom = rnd / 100.0f; ch = true; }
                 Help("Each stroke is a little different - how high it rises and how big it gets. 0% = the same every stroke.");
@@ -316,8 +321,10 @@ namespace During {
                 Help("Needs The New Gentleman for the size (creatures always count).");
                 {
                     float o = g_w.outline * 100.0f;
-                    if (ImGuiMCP::SliderFloat("Shaft outline", &o, 0.0f, 100.0f, "%.0f%%")) { g_w.outline = o / 100.0f; ch = true; }
-                    Help("The length of the shaft shows up his belly behind the tip, not just a bump at the tip. 0% = only the tip.");
+                    if (g_w.bulgeShape == 1) {
+                        if (ImGuiMCP::SliderFloat("Trail under the bump", &o, 0.0f, 100.0f, "%.0f%%")) { g_w.outline = o / 100.0f; ch = true; }
+                        Help("With \"A bump at the tip\": a fainter trail below it, where the shaft is. 0% = only the bump.");
+                    }
                     float pu = g_w.pulse * 100.0f;
                     if (ImGuiMCP::SliderFloat("Thrust pulse", &pu, 0.0f, 100.0f, "%.0f%%")) { g_w.pulse = pu / 100.0f; ch = true; }
                     Help("Each fast push gives a quick extra bump that dies away at once - it reacts to the thrusts. 0% = smooth.");

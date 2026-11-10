@@ -170,6 +170,9 @@ namespace {
         float pulse = 0.0f, bulgeDil = 0.0f;     // thrust pulse; how worked he was while it bulged (lingering)
         float hole = 0.0f, holeSent = -100.0f;     // the hole opened to the schlong's thickness (Anatomica Gape, AnatomicaDuring)
         float ringPos = 0.0f;                    // the rim carried along by the shaft (units, + = out of him)
+        float depthAvg = -100.0f;                // where the strokes are centred (slow average of the depth)
+        float bshape[12]{};                      // the schlong-shaped bulges (Shaft / Horse / Knot / Tentacle 1-3)
+        float bshapeSent[12]{-100.0f, -100.0f, -100.0f, -100.0f, -100.0f, -100.0f, -100.0f, -100.0f, -100.0f, -100.0f, -100.0f, -100.0f};
         float rndH = 0.0f, rndA = 0.0f;          // this stroke's bulge randomness
         float lastVel = 0.0f;
         bool ringSwellCleared = false;
@@ -308,8 +311,8 @@ namespace {
             const float want = (amt > 0.0f && (partner || atEntrance || s.inScene)) ? amt * Smooth(s.dil) : 0.0f;
             if (want > s.donut) s.donut = std::min(want, s.donut + dt / 1.5f);
             else s.donut = std::max(want, s.donut - dt / 4.0f);
-            if (std::abs(s.donut - s.donutSent) > 0.01f || (s.donut == 0.0f && s.donutSent > 0.0f)) {
-                if (s.donutSent >= 0.0f || s.donut > 0.0f) {
+            if (s.donutSent < 0.0f || std::abs(s.donut - s.donutSent) > 0.01f || (s.donut == 0.0f && s.donutSent > 0.0f)) {
+                {
                     if (!s.ringSwellCleared) { SetMorph(act, "Anatomica Swell", "AnatomicaDuring", 0.0f); s.ringSwellCleared = true; }   // 2.4 test builds used Swell
                     SetMorph(act, "Anatomica Ring", "AnatomicaDuring", s.donut);
                     update = true;
@@ -349,16 +352,20 @@ namespace {
             else ease(s.canal, (partner && dw.canal > 0.0f) ? dw.canal * std::clamp(Size::For(partner).open, 0.7f, 1.4f) : 0.0f, 0.25f, 0.8f);
             // the rim carried along by the shaft: in on the push, out on the withdraw, springing back to rest
             if (tip.ok && dw.ring) {
-                const float maxOut = dw.maxOut * (1.0f + (dw.grow - 1.0f) * Smooth(s.dil));
-                s.ringPos += -vel * dt * dw.grip * 0.6f;
-                s.ringPos *= std::exp(-dt * 3.0f);
-                s.ringPos = std::clamp(s.ringPos, -dw.maxIn, maxOut);
+                // follows the stroke itself: deeper than where the strokes are centred = drawn in, shallower = pulled out
+                if (s.depthAvg < -50.0f) s.depthAvg = tip.depth;
+                s.depthAvg += (tip.depth - s.depthAvg) * std::min(1.0f, dt / 0.9f);
+                const float maxOut = dw.maxOut * (1.0f + dw.grow * Smooth(s.dil));
+                const float want = std::clamp(-(tip.depth - s.depthAvg) * dw.grip * 0.8f, -dw.maxIn, maxOut);
+                s.ringPos += (want - s.ringPos) * std::min(1.0f, dt / 0.06f);
             } else {
-                ease(s.ringPos, 0.0f, 0.3f, 0.3f);
-                if (s.ringPos < 0.0f) s.ringPos = std::min(0.0f, s.ringPos + dt / 0.3f);
+                s.depthAvg = -100.0f;
+                s.ringPos += (0.0f - s.ringPos) * std::min(1.0f, dt / 0.35f);
+                if (std::abs(s.ringPos) < 0.01f) s.ringPos = 0.0f;
             }
             // belly bulge
             float bw[5]{};
+            float s_bw[12]{};
             s.pulse = std::max(0.0f, s.pulse - dt / 0.22f);   // a fast push adds a quick extra bump that dies away at once
             if (vel > 4.0f) s.pulse = std::max(s.pulse, dw.pulse * std::clamp((vel - 4.0f) / 12.0f, 0.0f, 1.0f));
             if (vel > 2.0f && s.lastVel <= 2.0f) {   // a new push: this stroke's randomness
@@ -381,7 +388,7 @@ namespace {
                     // how far in, past "shows from" (0-1+), and where the bump is (0 = low on his belly .. 4 = high)
                     const float p = test ? 0.5f + 0.5f * std::sin(static_cast<float>(now) * 2.0f)
                                          : std::clamp((tip.depth - dw.bulgeStart) / 7.0f, 0.0f, 1.3f);
-                    const float A = (test ? 1.6f : dw.bulge * std::clamp(Size::For(partner).open, 0.7f, 1.5f)) *
+                    const float A = (test ? 0.6f : dw.bulge * std::clamp(Size::For(partner).open, 0.7f, 1.5f)) *
                                     std::clamp(p * 2.0f, 0.0f, 1.0f) * (1.0f + s.pulse) * (1.0f + 0.4f * s.rndA);
                     float hp = std::clamp(p * 4.0f + s.rndH * 0.8f, 0.0f, 4.0f);
                     if (shape == 5) hp = std::clamp(hp + 1.1f * std::sin(static_cast<float>(now) * 2.3f + static_cast<float>(act->GetFormID() % 7)), 0.0f, 4.0f);
@@ -392,7 +399,19 @@ namespace {
                         bw[i0] = std::max(bw[i0], a * (1.0f - fr));
                         bw[i0 + 1] = std::max(bw[i0 + 1], a * fr);
                     };
-                    if (A > 0.0f) {
+                    if (A > 0.0f && shape >= 2 && shape <= 5) {   // the outline of a schlong up his belly, longer the deeper
+                        const int base = (shape - 2) * 3;
+                        float sp = std::clamp(p * 3.0f + s.rndH * 0.4f, 0.0f, 3.0f);
+                        if (shape == 5) sp = std::clamp(sp + 0.3f * std::sin(static_cast<float>(now) * 2.3f), 0.0f, 3.0f);
+                        const float big = (shape == 3 || shape == 4) ? 1.15f : 1.0f;
+                        if (sp < 1.0f) s_bw[base] = A * big * sp;
+                        else {
+                            const int i0 = std::min(1, static_cast<int>(sp) - 1);
+                            const float fr = std::clamp(sp - 1.0f - static_cast<float>(i0), 0.0f, 1.0f);
+                            s_bw[base + i0] = A * big * (1.0f - fr);
+                            s_bw[base + i0 + 1] = A * big * fr;
+                        }
+                    } else if (A > 0.0f) {
                         switch (shape) {
                             case 2:   // the whole shaft: a column up to the tip
                                 for (int i = 0; i <= static_cast<int>(hp); ++i) bw[i] = std::max(bw[i], A * (0.55f + 0.45f * (hp > 0.0f ? i / hp : 1.0f)));
@@ -423,9 +442,12 @@ namespace {
             const float linger = (now - s.bulgeLast < 30.0) ? std::max(0.8f, dw.linger * (0.5f + Smooth(s.bulgeDil))) : 0.8f;
             if (!bulging && now - s.bulgeLast > 30.0) s.bulgeDil = 0.0f;
             for (int i = 0; i < 5; ++i) ease(s.bulge[i], bw[i], 0.10f, bulging ? 0.25f : linger);
+            for (int i = 0; i < 12; ++i) ease(s.bshape[i], s_bw[i], 0.10f, bulging ? 0.25f : linger);
+            // (the first time each session it is always sent: a save made mid-scene keeps the morphs it had)
             auto send = [&](const char* morph, float v, float& sent) {
-                if (std::abs(v - sent) > 0.02f || (std::abs(v) < 1e-4f && std::abs(sent) > 1e-4f)) {
-                    if (sent >= -50.0f || std::abs(v) > 1e-4f) { SetMorph(act, morph, "AnatomicaDuring", v); update = true; }
+                if (sent < -50.0f || std::abs(v - sent) > 0.02f || (std::abs(v) < 1e-4f && std::abs(sent) > 1e-4f)) {
+                    SetMorph(act, morph, "AnatomicaDuring", v);
+                    update = true;
                     sent = v;
                 }
             };
@@ -434,6 +456,11 @@ namespace {
             send("Anatomica Pout", s.ringPos, s.poutSent);
             static const char* kBulge[5] = {"Anatomica Bulge 1", "Anatomica Bulge 2", "Anatomica Bulge 3", "Anatomica Bulge 4", "Anatomica Bulge 5"};
             for (int i = 0; i < 5; ++i) send(kBulge[i], s.bulge[i], s.bulgeSent[i]);
+            static const char* kBShape[12] = {"Anatomica Bulge Shaft 1", "Anatomica Bulge Shaft 2", "Anatomica Bulge Shaft 3",
+                                              "Anatomica Bulge Horse 1", "Anatomica Bulge Horse 2", "Anatomica Bulge Horse 3",
+                                              "Anatomica Bulge Knot 1", "Anatomica Bulge Knot 2", "Anatomica Bulge Knot 3",
+                                              "Anatomica Bulge Tentacle 1", "Anatomica Bulge Tentacle 2", "Anatomica Bulge Tentacle 3"};
+            for (int i = 0; i < 12; ++i) send(kBShape[i], s.bshape[i], s.bshapeSent[i]);
             { std::lock_guard gl(g_gapeMx); g_during[act->GetFormID()] = {tip.ok ? tip.depth : -100.0f, s.hole, s.ringPos}; }
         }
         if (update && g_morph) g_morph->UpdateModelWeight(act, false);

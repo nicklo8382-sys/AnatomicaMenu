@@ -2292,7 +2292,7 @@ namespace Colour {
         if (!g_loaded) LoadIni();
         if (!g.swell || !g.swellRing) return 0.0f;
         const Levels lv = LevelsFor(a->GetFormID(), a);
-        return Quant(std::min(1.0f, lv.tender * g.swellStrength + Virgin::For(a->GetFormID()).swell));
+        return Quant(std::min(1.0f, lv.tender * g.swellStrength));   // from sex only: flat at rest, however experienced he is
     }
     float InnerMoist() { std::lock_guard lk(g_lock); if (!g_loaded) LoadIni(); return g.innerMoist; }
     float CloseSlowFor(RE::Actor* a) { return CloseSlow(nullptr, a); }

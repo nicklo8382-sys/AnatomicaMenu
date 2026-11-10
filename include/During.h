@@ -19,11 +19,11 @@ namespace During {
         bool holeFollow = true;   // the hole opens to the schlong's own thickness where it passes (Anatomica Gape)
         float holeSize = 1.0f;    // how snug: 1 = exactly his thickness, more = a little wider
         bool ring = true;         // the rim follows the shaft: drawn in on the push, pulled out on the withdraw (Anatomica Pout)
-        float grip = 0.5f;        // how strongly it follows the shaft
+        float grip = 0.6f;        // how strongly it follows the shaft
         float maxOut = 0.5f;      // the most it is pulled out (units)
-        float maxIn = 0.4f;       // the most it is drawn in (units)
-        float grow = 1.0f;        // the pull-out limit grows to this (x) the more he is worked (1 = no growth, up to 2)
-        float bulge = 0.0f;       // belly bulge strength (Anatomica Bulge 1-5)
+        float maxIn = 0.5f;       // the most it is drawn in (units)
+        float grow = 0.0f;        // the pull-out limit grows by this much (0-2 = 0-200%) the more he is worked
+        float bulge = 0.4f;       // belly bulge strength (the sliders are built extreme: 100% = the full shape)
         float bulgeStart = 6.0f;  // how deep the tip has to be before it shows (units along his canal)
         bool bulgeBig = false;    // only from big partners (TNG L / XL, creatures)
         int bulgeShape = 0;       // 0 from his schlong's shape, 1 bump at the tip, 2 long shaft, 3 big head, 4 knot, 5 tentacle
