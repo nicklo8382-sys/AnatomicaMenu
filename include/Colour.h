@@ -29,7 +29,8 @@ namespace Colour {
     std::vector<std::int32_t> LookNow(RE::Actor* a);
     std::string ColourPath(RE::Actor* a);
     std::string InnerPath(RE::Actor* a);   // the inside (canal) texture: "" = the installed one, "\x01" = being made (keep his)
-    float InnerMoist();                    // "always moist inside": extra shine on the canal even when dry (0-1)
+    float InnerMoist();
+    float SwellRingNow(RE::Actor* a);      // after-sex swelling as a raised ring (Anatomica Ring), 0 = off / not ring-shaped                    // "always moist inside": extra shine on the canal even when dry (0-1)
     float CloseSlowFor(RE::Actor* a);
     float LooseNow(RE::Actor* a, float cur, float days);
     void RestHours(RE::FormID id, float hours);   // healing: this many extra hours of rest for his lasting looseness

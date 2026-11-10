@@ -2411,4 +2411,42 @@ namespace Fluid {
         ch |= ImGuiMCP::SliderInt("Simulation quality", &g.quality, 1, 3);
         if (ch) Colour::SaveNow();
     }
+
+    // ---- the hole follows the schlong (During sex page): its thickness where it passes through his hole
+    namespace {
+        struct Girth { Surface s; double readAt = 0.0; };
+        std::unordered_map<RE::FormID, Girth> g_girth;
+        std::mutex g_girthMx;
+    }
+    float GirthAt(RE::Actor* giver, const RE::NiPoint3& point, const RE::NiPoint3& normal) {
+        if (!giver) return -1.0f;
+        std::lock_guard lk(g_girthMx);
+        std::uint32_t most = 0;
+        RE::BSGeometry* geo = SchlongGeo(giver, &most);
+        if (!geo) return -1.0f;
+        Girth& G = g_girth[giver->GetFormID()];
+        const double now = Now();
+        if (G.s.geo.get() != geo || now - G.readAt > 8.0) {
+            G.s.Read(geo, [](const V3&) { return true; }, std::max(1, static_cast<int>(most / 1500)));
+            G.readAt = now;
+        }
+        if (!G.s.ok || !G.s.Pose()) return -1.0f;
+        const V3 c(point), n = Norm(V3(normal));
+        // the vertices in a thin slice through the plane: their spread round the slice's centre is his thickness there
+        std::vector<V3> sl;
+        for (float band : {0.35f, 0.7f}) {
+            sl.clear();
+            for (const auto& w : G.s.wp) if (std::abs(Dot(w - c, n)) < band) sl.push_back(w);
+            if (sl.size() >= 8) break;
+        }
+        if (sl.size() < 8) return -1.0f;
+        V3 m;
+        for (const auto& w : sl) m += w;
+        m = m / static_cast<float>(sl.size());
+        std::vector<float> r;
+        r.reserve(sl.size());
+        for (const auto& w : sl) { V3 d = w - m; d = d - n * Dot(d, n); r.push_back(Len(d)); }
+        std::sort(r.begin(), r.end());
+        return r[r.size() * 3 / 4];   // the outer part of the slice (a few stray inner vertices do not shrink it)
+    }
 }

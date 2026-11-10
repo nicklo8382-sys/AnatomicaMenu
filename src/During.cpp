@@ -29,7 +29,7 @@ namespace {
     std::atomic<bool> g_donutOn{false};
     std::atomic<float> g_donutAmt{0.5f};
     std::mutex g_wmx;
-    bool g_canalOn = true, g_suckOn = true, g_bulgeOn = false;
+    bool g_canalOn = true, g_bulgeOn = false;
     During::Want g_w;          // the amounts (used when the tick box is on)
     int g_bulgeWho = 0;        // 0 everyone, 1 you and your followers, 2 only you
 
@@ -138,7 +138,7 @@ namespace During {
             ini.SetDoubleValue(S, "DonutAmount", amt);
         } else {
             g_donutOn = ini.GetBoolValue(S, "Donut", on);
-            g_donutAmt = std::clamp(static_cast<float>(ini.GetDoubleValue(S, "DonutAmount", amt)), 0.0f, 1.0f);
+            g_donutAmt = std::clamp(static_cast<float>(ini.GetDoubleValue(S, "DonutAmount", amt)), 0.0f, 2.0f);
         }
         std::lock_guard lk(g_wmx);
         auto B = [&](const char* k, bool& v) { if (save) ini.SetBoolValue(S, k, v); else v = ini.GetBoolValue(S, k, v); };
@@ -147,8 +147,13 @@ namespace During {
             else v = std::clamp(static_cast<float>(ini.GetDoubleValue(S, k, v)), lo, hi);
         };
         B("OpenInside", g_canalOn); F("OpenInsideAmount", g_w.canal, 0.0f, 1.5f);
-        B("Suck", g_suckOn); F("SuckAmount", g_w.suck, 0.0f, 1.5f);
-        B("Bulge", g_bulgeOn); F("BulgeAmount", g_w.bulge, 0.0f, 2.5f); F("BulgeStart", g_w.bulgeStart, 4.0f, 30.0f);
+        B("HoleFollows", g_w.holeFollow); F("HoleSize", g_w.holeSize, 0.5f, 1.6f);
+        B("RingFollows", g_w.ring); F("RingGrip", g_w.grip, 0.0f, 1.0f); F("RingMaxOut", g_w.maxOut, 0.0f, 2.0f);
+        F("RingMaxIn", g_w.maxIn, 0.0f, 1.5f); F("RingGrow", g_w.grow, 1.0f, 2.0f);
+        B("Bulge", g_bulgeOn); F("BulgeAmount", g_w.bulge, 0.0f, 3.0f); F("BulgeStart", g_w.bulgeStart, 2.0f, 30.0f);
+        F("BulgeRandom", g_w.bulgeRandom, 0.0f, 1.0f);
+        if (save) ini.SetLongValue(S, "BulgeShape", g_w.bulgeShape);
+        else g_w.bulgeShape = std::clamp(static_cast<int>(ini.GetLongValue(S, "BulgeShape", g_w.bulgeShape)), 0, 5);
         B("BulgeBigOnly", g_w.bulgeBig);
         F("BulgeOutline", g_w.outline, 0.0f, 1.0f); F("BulgePulse", g_w.pulse, 0.0f, 1.0f);
         F("BulgeLinger", g_w.linger, 0.5f, 30.0f);
@@ -161,7 +166,6 @@ namespace During {
         std::lock_guard lk(g_wmx);
         Want w = g_w;
         if (!g_canalOn) w.canal = 0.0f;
-        if (!g_suckOn) w.suck = 0.0f;
         if (!g_bulgeOn) w.bulge = 0.0f;
         return w;
     }
@@ -174,6 +178,15 @@ namespace During {
         return true;
     }
     float Donut() { return g_donutOn ? g_donutAmt.load() : 0.0f; }
+    void SyncPPA() {
+        bool follow;
+        { std::lock_guard lk(g_wmx); follow = g_w.holeFollow; }
+        ReadToml();
+        if (!follow || !g_found || (g_t.scale <= 0.05f && g_t.scaleMax <= 0.1f)) return;
+        g_t.scale = 0.02f;
+        g_t.scaleMax = 0.05f;
+        if (WriteToml()) logger::info("Anatomica: the hole follows the schlong - PPA's own opening set to almost none (Scale 0.02)");
+    }
 
     void __stdcall RenderPage() {
         if (!g_read) ReadToml();
@@ -189,8 +202,14 @@ namespace During {
                                       "SKSE\\Plugins\\ppa-override-configs\\anatomica.toml was not found.");
                 ImGuiMCP::BeginDisabled();
             }
-            ImGuiMCP::TextWrapped("During sex PPA (Penetration Physics) opens his anus around the schlong. These are PPA's settings "
-                                  "for Anatomica's anus - every man with Anatomica's skeleton bones.");
+            ImGuiMCP::TextWrapped("PPA (Penetration Physics) places the schlong in him and grips it. These are PPA's settings for "
+                                  "Anatomica's anus - every man with Anatomica's skeleton bones.");
+            bool follow;
+            { std::lock_guard lk(g_wmx); follow = g_w.holeFollow; }
+            if (follow)
+                ImGuiMCP::TextColored(ImGuiMCP::ImVec4{0.55f, 0.85f, 1.0f, 1.0f},
+                                      "\"The hole follows the schlong\" is on (below): Anatomica sizes the hole, so PPA's own opening is kept at "
+                                      "almost none (its Scale / ScaleMax are set for you). The grip settings still apply.");
             static const char* presets[] = {"Choose a preset...", "Very tight", "Tight", "Anatomica default", "Loose", "Very loose"};
             static int pick = 0;
             if (ImGuiMCP::Combo("Preset", &pick, presets, 6) && pick > 0) {
@@ -202,11 +221,13 @@ namespace During {
                 changed = true;
             }
             Help("Sets how far and how wide he opens. \"Anatomica default\" puts every setting below back to what the mod ships.");
-            changed |= ImGuiMCP::SliderFloat("How far he opens around the schlong", &g_t.scale, 0.1f, 1.5f, "%.2f");
+            if (follow) ImGuiMCP::BeginDisabled();
+            changed |= ImGuiMCP::SliderFloat("How far he opens around the schlong", &g_t.scale, 0.0f, 1.5f, "%.2f");
             Help("PPA \"Scale\": how far the ring spreads for a schlong. Lower = tighter, he grips the shaft; higher = he opens "
                  "wider. Anatomica ships 0.40 (PPA's own default, 2.0, tears the cleft open on this mesh).");
             changed |= ImGuiMCP::SliderFloat("The widest he can open", &g_t.scaleMax, 0.3f, 3.0f, "%.2f");
             Help("PPA \"ScaleMax\": a cap for big schlongs. Lower = even a huge one only opens him so far.");
+            if (follow) ImGuiMCP::EndDisabled();
             changed |= ImGuiMCP::SliderFloat("Grip on the shaft (drag)", &g_t.grip, 0.0f, 2.0f, "%.2f");
             Help("PPA \"GripStrength\": how hard the rim holds onto the shaft - drawn in on the push, pulled out (a small pucker) "
                  "on the withdraw. 0 = no drag.");
@@ -219,6 +240,7 @@ namespace During {
             Help("PPA \"RubIntensity\": how much the rim moves with each stroke.");
             if (changed) g_note = "Not saved yet - press Save to PPA.";
             if (ImGuiMCP::Button("Save to PPA")) {
+                if (follow) { g_t.scale = 0.02f; g_t.scaleMax = 0.05f; }
                 g_note = WriteToml() ? "Saved. Press F5 in game (PPA's reload key) to use it now, or it applies at the next game start."
                                      : "Could not write anatomica.toml (is the PPA integration option installed?).";
                 if (g_note[0] == 'S') logger::info("Anatomica: PPA tightness saved (Scale {:.2f}, ScaleMax {:.2f}, Grip {:.2f})", g_t.scale, g_t.scaleMax, g_t.grip);
@@ -230,33 +252,64 @@ namespace During {
             if (!g_found) ImGuiMCP::EndDisabled();
         }
 
-        if (ImGuiMCP::CollapsingHeader("Inside him: opening, suck, belly bulge###inside")) {
-            ImGuiMCP::TextDisabled("These use Anatomica's own sliders (Anatomica Canal / Pout / Bulge 1-5): rebuild the body in "
+        if (ImGuiMCP::CollapsingHeader("The hole, the rim and the inside###inside")) {
+            ImGuiMCP::TextDisabled("These use Anatomica's own sliders (Anatomica Gape / Canal / Pout / Bulge 1-5): rebuild the body in "
                                    "BodySlide with \"Build Morphs\" ticked after updating Anatomica.");
             bool ch = false;
             std::lock_guard lk(g_wmx);
             ch |= ImGuiMCP::Checkbox("Open the inside round the schlong", &g_canalOn);
             Help("While a schlong is in him the canal opens along its whole length, so the shaft no longer pushes through the "
-                 "inside walls (PPA only opens the entrance). Bigger partners open it a little more. Recommended on.");
+                 "inside walls. With \"The hole follows the schlong\" on, the inside opens together with the hole, by the same "
+                 "amount (the slider caps it). Recommended on.");
             if (g_canalOn) {
                 float pct = g_w.canal * 100.0f;
                 if (ImGuiMCP::SliderFloat("How wide inside", &pct, 0.0f, 150.0f, "%.0f%%")) { g_w.canal = pct / 100.0f; ch = true; }
             }
-            ch |= ImGuiMCP::Checkbox("Suck on the schlong as it leaves", &g_suckOn);
-            Help("As the shaft pulls out his rim and the first part of the inside are drawn out with it - a pout that follows "
-                 "each withdraw and snaps back on the next push. Faster pull-outs draw it out more. Works with PPA's grip "
-                 "(How tight he is, above), which holds the entrance itself.");
-            if (g_suckOn) {
-                float pct = g_w.suck * 100.0f;
-                if (ImGuiMCP::SliderFloat("How strong the suck", &pct, 0.0f, 150.0f, "%.0f%%")) { g_w.suck = pct / 100.0f; ch = true; }
+            ch |= ImGuiMCP::Checkbox("The hole follows the schlong", &g_w.holeFollow);
+            Help("The hole opens to the schlong's own thickness where it passes through him, all the time: a thin shaft with a "
+                 "flared head opens him wide for the head and closes round the shaft behind it, a thick base or a knot stretches "
+                 "him as it goes in. Off = PPA opens him to one fixed size (How tight he is, above). Saving to PPA with this on "
+                 "keeps PPA's own opening at almost none - press F5 in game after.");
+            if (g_w.holeFollow) {
+                float pct = g_w.holeSize * 100.0f;
+                if (ImGuiMCP::SliderFloat("How snug", &pct, 50.0f, 160.0f, "%.0f%%")) { g_w.holeSize = pct / 100.0f; ch = true; }
+                Help("100% = the hole is exactly as wide as the schlong. Lower = he grips it tighter (the rim squeezes it); "
+                     "higher = he is opened a little wider than the shaft.");
+            }
+            ch |= ImGuiMCP::Checkbox("The rim follows the shaft", &g_w.ring);
+            Help("The rim and the first part of the inside move with the shaft: drawn into him on each push, pulled out with it "
+                 "on each withdraw, and back to rest between strokes. Each way has its own limit.");
+            if (g_w.ring) {
+                float gp = g_w.grip * 100.0f;
+                if (ImGuiMCP::SliderFloat("Grip on the shaft", &gp, 0.0f, 100.0f, "%.0f%%")) { g_w.grip = gp / 100.0f; ch = true; }
+                Help("How strongly the rim is carried along by the shaft (and how far a fast stroke takes it).");
+                ch |= ImGuiMCP::SliderFloat("Most it is pulled out", &g_w.maxOut, 0.0f, 2.0f, "%.2f units");
+                Help("The farthest the rim may stick out of him on a withdraw (game units, about 1.4 cm each). 1.00 is a big "
+                     "pout; 0.5 a natural one.");
+                ch |= ImGuiMCP::SliderFloat("Most it is drawn in", &g_w.maxIn, 0.0f, 1.5f, "%.2f units");
+                Help("The farthest the rim may be drawn into him on a push.");
+                float gr = g_w.grow * 100.0f;
+                if (ImGuiMCP::SliderFloat("Pull-out grows as he is worked", &gr, 100.0f, 200.0f, "up to %.0f%%")) { g_w.grow = gr / 100.0f; ch = true; }
+                Help("The pull-out limit grows over the scene as he is worked open, up to this much of \"Most it is pulled out\" "
+                     "(100% = it never grows). It goes back with the gape after the scene.");
             }
             ch |= ImGuiMCP::Checkbox("Belly bulge", &g_bulgeOn);
             Help("When the tip is deep in him his lower belly bulges where it is, and the bump moves up and down with each "
                  "stroke. Off by default.");
             if (g_bulgeOn) {
                 float pct = g_w.bulge * 100.0f;
-                if (ImGuiMCP::SliderFloat("Bulge strength", &pct, 0.0f, 250.0f, "%.0f%%")) { g_w.bulge = pct / 100.0f; ch = true; }
-                ch |= ImGuiMCP::SliderFloat("Shows from this deep", &g_w.bulgeStart, 4.0f, 30.0f, "%.0f units");
+                if (ImGuiMCP::SliderFloat("Bulge strength", &pct, 0.0f, 300.0f, "%.0f%%")) { g_w.bulge = pct / 100.0f; ch = true; }
+                Help("100% = a clear bump; 200-300% = very obvious.");
+                static const char* shapes[] = {"From his schlong's shape (TNG)", "A bump at the tip", "The whole shaft (long)",
+                                               "Big head (horse / flared)", "Knot (big round lump low down)", "Tentacle (wandering)"};
+                ch |= ImGuiMCP::Combo("Bulge shape", &g_w.bulgeShape, shapes, 6);
+                Help("From his schlong's shape: knotted -> knot, flared -> big head, tentacle -> tentacle, L / XL and creatures -> the "
+                     "whole shaft, anything else -> a bump at the tip.\n"
+                     "The others pick one shape for everyone. All of them grow and rise the deeper the tip goes.");
+                float rnd = g_w.bulgeRandom * 100.0f;
+                if (ImGuiMCP::SliderFloat("Randomness", &rnd, 0.0f, 100.0f, "%.0f%%")) { g_w.bulgeRandom = rnd / 100.0f; ch = true; }
+                Help("Each stroke is a little different - how high it rises and how big it gets. 0% = the same every stroke.");
+                ch |= ImGuiMCP::SliderFloat("Shows from this deep", &g_w.bulgeStart, 2.0f, 30.0f, "%.0f units");
                 Help("How far in the tip has to be (game units, about 1.4 cm each) before the bulge starts; it grows over the "
                      "next 5 units. Lower = even average schlongs show; higher = only very long ones.");
                 ch |= ImGuiMCP::Checkbox("Only from big partners (L, XL and creatures)", &g_w.bulgeBig);
@@ -283,6 +336,7 @@ namespace During {
             if (ch) {
                 g_wmx.unlock();
                 Colour::SaveNow();
+                SyncPPA();
                 g_wmx.lock();
             }
         }
@@ -291,13 +345,13 @@ namespace During {
             bool on = g_donutOn;
             float amt = g_donutAmt;
             bool ch = false;
-            ch |= ImGuiMCP::Checkbox("Puffy rim (donut) while he is taken", &on);
-            Help("The rim swells into a soft, puffy ring as he is worked open - more the longer it goes on - and settles a few "
-                 "seconds after the schlong leaves him (the after-sex swelling, After sex page, carries on from there). Uses "
-                 "the Anatomica Swell slider: the body needs \"Build Morphs\" in BodySlide.");
+            ch |= ImGuiMCP::Checkbox("Puffy ring (donut) while he is taken", &on);
+            Help("The rim swells up into a raised ring round the hole as he is worked open - more the longer it goes on - and "
+                 "settles a few seconds after the schlong leaves him (the after-sex swelling, After sex page, carries on from there). "
+                 "Uses the Anatomica Ring slider: rebuild the body with \"Build Morphs\" in BodySlide.");
             if (on) {
                 float pct = amt * 100.0f;
-                if (ImGuiMCP::SliderFloat("How puffy, at most", &pct, 0.0f, 100.0f, "%.0f%%")) { amt = pct / 100.0f; ch = true; }
+                if (ImGuiMCP::SliderFloat("How puffy, at most", &pct, 0.0f, 200.0f, "%.0f%%")) { amt = pct / 100.0f; ch = true; }
             }
             if (ch) {
                 g_donutOn = on;

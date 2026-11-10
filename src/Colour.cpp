@@ -527,6 +527,7 @@ namespace {
         float glossyStrength = 0.8f;
         float glossyTime = 900.0f;   // seconds to fade
         bool swell = true;           // puffy rim (needs the body built with morphs)
+        bool swellRing = true;       // ... as a raised ring round the hole (Anatomica Ring) instead of a soft puff (Anatomica Swell)
         float swellStrength = 0.6f;
         bool sensitive = true;       // sharper clench, slower breathing while tender
         float sensClench = 0.5f;
@@ -740,7 +741,7 @@ namespace {
         B("Bruise", g.bruise); I("BruisePartners", g.bruisePartners, 2, 6); F("BruiseLong", g.bruiseLong, 30.0f, 1800.0f);
         C("BruiseColour", g.bruiseCol); F("BruiseStrength", g.bruiseStrength, 0.0f, 1.0f);
         B("Glossy", g.glossy); F("GlossyStrength", g.glossyStrength, 0.0f, 1.0f); F("GlossyTime", g.glossyTime, 30.0f, 7200.0f);
-        B("Swell", g.swell); F("SwellStrength", g.swellStrength, 0.0f, 1.0f);
+        B("Swell", g.swell); F("SwellStrength", g.swellStrength, 0.0f, 1.0f); B("SwellRing", g.swellRing);
         B("Sensitive", g.sensitive); F("SensClench", g.sensClench, 0.0f, 1.0f); F("SensBreath", g.sensBreath, 0.0f, 0.8f);
         B("HealSleep", g.healSleep); B("HealMagic", g.healMagic);
         F("HealPotion", g.healPotion, 0.0f, 5.0f); F("HealFood", g.healFood, 0.0f, 2.0f); F("HealSpell", g.healSpell, 0.0f, 100.0f);
@@ -1485,7 +1486,8 @@ namespace {
         }
 
         (void)wet;   // wet gloss: Fluid.cpp applies it straight from the DLL now (L.gloss / L.spec stay -1 = removed)
-        if (g.swell) L.swell = static_cast<int>(std::lround(Quant(std::min(1.0f, lv.tender * g.swellStrength + vmod.swell)) * 1000.0f));
+        if (g.swell && !g.swellRing) L.swell = static_cast<int>(std::lround(Quant(std::min(1.0f, lv.tender * g.swellStrength + vmod.swell)) * 1000.0f));
+        // (ring-shaped: the DLL sets Anatomica Ring itself - SwellRingNow; the Swell morph stays 0)
 
         // his schlong: coated with cum and glossy (Fluid.cpp, started by the drip code when he pulls out)
         return L;
@@ -1973,11 +1975,12 @@ namespace {
     // who the window shows: the man under the crosshair, else the console selection, else the last one, else you
     void PickInspect() {
         RE::Actor* a = nullptr;
-        if (auto* pick = RE::CrosshairPickData::GetSingleton()) {
+        // the man clicked in the console first (in a scene the crosshair is often on the partner or the furniture)
+        if (auto sel = RE::Console::GetSelectedRef()) a = sel->As<RE::Actor>();
+        if (!a) if (auto* pick = RE::CrosshairPickData::GetSingleton()) {
             auto ref = pick->GetActiveTarget().get();
             if (ref) a = ref->As<RE::Actor>();
         }
-        if (!a) if (auto sel = RE::Console::GetSelectedRef()) a = sel->As<RE::Actor>();
         if (!a && g_inspect) a = RE::TESForm::LookupByID<RE::Actor>(g_inspect);
         if (!a) a = RE::PlayerCharacter::GetSingleton();
         if (a) g_inspect = a->GetFormID();
@@ -2116,6 +2119,8 @@ namespace {
                 Bar("Swelling", st.swell);
                 if (st.schlong > 0.01f) Bar("Schlong shine", st.schlong);
                 ImGuiMCP::Text("This round: %d partner(s), %.0f s", st.partners, st.secs);
+                if (const auto dn = Engine::DuringOf(a->GetFormID()); dn.depth > -50.0f)
+                    ImGuiMCP::Text("Being taken: tip %.1f units in | hole %.0f%% | rim %+.2f", dn.depth, dn.hole * 100.0f, dn.ring);
                 ImGuiMCP::TextUnformatted(Drip::Status(a).c_str());
                 ImGuiMCP::TextUnformatted(Virgin::Status(a).c_str());
             }
@@ -2280,6 +2285,14 @@ namespace Colour {
         if (!InnerColourFor(a, c)) return {};
         const std::string t = GenInnerTexture(c, g.ringRes >= 2 ? 1 : 0);
         return t == kRimPending ? std::string("\x01") : t;
+    }
+    float SwellRingNow(RE::Actor* a) {   // after-sex swelling as a ring (0 when off or not ring-shaped)
+        if (!a) return 0.0f;
+        std::lock_guard lk(g_lock);
+        if (!g_loaded) LoadIni();
+        if (!g.swell || !g.swellRing) return 0.0f;
+        const Levels lv = LevelsFor(a->GetFormID(), a);
+        return Quant(std::min(1.0f, lv.tender * g.swellStrength + Virgin::For(a->GetFormID()).swell));
     }
     float InnerMoist() { std::lock_guard lk(g_lock); if (!g_loaded) LoadIni(); return g.innerMoist; }
     float CloseSlowFor(RE::Actor* a) { return CloseSlow(nullptr, a); }
@@ -2984,6 +2997,8 @@ namespace Colour {
         ImGuiMCP::Text("Wet %.0f%%   Red %.0f%%   Bruise %.0f%%   Swelling %.0f%%", st.wet * 100, st.tender * 100, st.bruise * 100, st.swell * 100);
         ImGuiMCP::Text("Gape %.0f%%   Looseness %.0f%%   Schlong shine %.0f%%", st.gape * 100, st.loose * 100, st.schlong * 100);
         ImGuiMCP::Text("This round: %d partner(s), %.0f s of penetration", st.partners, st.secs);
+        if (const auto dn = Engine::DuringOf(a->GetFormID()); dn.depth > -50.0f)
+            ImGuiMCP::Text("Being taken: the tip is %.1f units in, the hole opened %.0f%%, the rim %+.2f units out", dn.depth, dn.hole * 100.0f, dn.ring);
         ImGuiMCP::TextUnformatted(Drip::Status(a).c_str());
         ImGuiMCP::TextUnformatted(Virgin::Status(a).c_str());
 
@@ -3139,6 +3154,16 @@ namespace Colour {
         if (kCum) {
             ImGuiMCP::SeparatorText("Cum");
             Drip::RenderTests(a);
+        }
+
+        }
+        if (Section("During sex")) {
+        ImGuiMCP::TextDisabled("Shows the belly bulge on him for 8 s, moving up and down (During sex page sliders not needed).");
+        static const char* shp[] = {"Bulge: tip", "Bulge: whole shaft", "Bulge: big head", "Bulge: knot", "Bulge: tentacle"};
+        for (int i = 0; i < 5; ++i) {
+            if (i) ImGuiMCP::SameLine();
+            act(shp[i], [&] { return std::string(Engine::TestBulge(a, i + 1) ? "showing for 8 s (needs the body rebuilt with Build Morphs: Anatomica Bulge 1-5)"
+                                                                             : "not shown: RaceMenu's body morph interface is not available"); });
         }
 
         }
@@ -3325,11 +3350,16 @@ namespace Colour {
                 Fluid::RenderGlossSettings();
             });
             changed |= ImGuiMCP::Checkbox("Swelling (puffy rim)", &g.swell);
-            Help("Needs the body built in BodySlide with \"Build Morphs\" ticked (Anatomica Swell).");
+            Help("Needs the body built in BodySlide with \"Build Morphs\" ticked (Anatomica Swell / Anatomica Ring).");
             if (g.swell) {
                 ImGuiMCP::SameLine();
                 ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 8.0f);
                 changed |= Pct("##swell", &g.swellStrength);
+                ImGuiMCP::Indent();
+                changed |= ImGuiMCP::Checkbox("Ring-shaped (a raised ring round the hole)", &g.swellRing);
+                Help("On: the rim swells up into a raised ring with the hole sunk in the middle (Anatomica Ring). Off: a soft, even "
+                     "puff of the whole rim (Anatomica Swell).");
+                ImGuiMCP::Unindent();
             }
             changed |= ImGuiMCP::Checkbox("First time in a while = redder", &g.rested);
             Indented(g.rested, [&] {

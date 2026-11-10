@@ -11,6 +11,9 @@ namespace Engine {
     void RegisterFuncs(RE::BSScript::IVirtualMachine* vm);
     bool TestGape(RE::Actor* a, float dil);       // an after-sex gape now (Testing page)
     float GapeOf(RE::FormID id);                  // the gape morph we last set (-1 = not ours)
+    struct During { float depth = -100.0f, hole = 0.0f, ring = 0.0f; };   // while he is taken: how deep, hole size, rim pull
+    During DuringOf(RE::FormID id);
+    bool TestBulge(RE::Actor* a, int shape);      // Testing page: show the belly bulge on him for 8 s (shape 1-5)
     bool SetLooseNow(RE::Actor* a, float v);      // lasting looseness, right now (false = no RaceMenu interface)
     std::string Status();                         // one line: what is connected
     // RaceMenu node overrides (no Papyrus); false = not available, use the old way

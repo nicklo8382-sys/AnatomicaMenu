@@ -33,4 +33,8 @@ namespace Fluid {
     bool TestString(RE::Actor* a, const float rgb[3]);
     void SlowMotion(bool on);                                                     // Testing page: everything at 15% speed
     bool SlowMotion();                           // a string to an invisible partner pulling away
+    // how thick the giver's schlong is where it passes through a plane (his hole): radius in world units, -1 = not known.
+    // Reads his schlong mesh (refreshed every few seconds) and skins it as it is now - so a flared head, a knot or a
+    // thicker base all count as they pass.
+    float GirthAt(RE::Actor* giver, const RE::NiPoint3& point, const RE::NiPoint3& normal);
 }

@@ -11,14 +11,23 @@
 //    key, so the after-sex swelling still adds to it) and settles a few seconds after.
 namespace During {
     void Ini(CSimpleIniA& ini, bool save);   // [DuringSex] in AnatomicaMenu.ini (loaded / saved with the colour settings)
-    float Donut();                           // 0 = off, else the most it swells while he is taken (0-1)
+    float Donut();                           // 0 = off, else the most the ring swells while he is taken (Anatomica Ring)
+    void SyncPPA();                          // the hole follows the schlong: keep PPA's own opening at (almost) none
     // the rest of the page, read by the gape engine each tick (0 = off)
     struct Want {
         float canal = 1.0f;       // open the inside (Anatomica Canal) round the schlong while it is in him
-        float suck = 0.5f;        // the rim and entrance drawn out with the shaft as it pulls out (Anatomica Pout)
+        bool holeFollow = true;   // the hole opens to the schlong's own thickness where it passes (Anatomica Gape)
+        float holeSize = 1.0f;    // how snug: 1 = exactly his thickness, more = a little wider
+        bool ring = true;         // the rim follows the shaft: drawn in on the push, pulled out on the withdraw (Anatomica Pout)
+        float grip = 0.5f;        // how strongly it follows the shaft
+        float maxOut = 0.5f;      // the most it is pulled out (units)
+        float maxIn = 0.4f;       // the most it is drawn in (units)
+        float grow = 1.0f;        // the pull-out limit grows to this (x) the more he is worked (1 = no growth, up to 2)
         float bulge = 0.0f;       // belly bulge strength (Anatomica Bulge 1-5)
-        float bulgeStart = 10.0f; // how deep the tip has to be before it shows (units along his canal)
+        float bulgeStart = 6.0f;  // how deep the tip has to be before it shows (units along his canal)
         bool bulgeBig = false;    // only from big partners (TNG L / XL, creatures)
+        int bulgeShape = 0;       // 0 from his schlong's shape, 1 bump at the tip, 2 long shaft, 3 big head, 4 knot, 5 tentacle
+        float bulgeRandom = 0.3f; // how much each stroke varies (height / size)
         float outline = 0.6f;     // the shaft behind the tip shows too (0 = only the tip)
         float pulse = 0.35f;      // a quick extra bump on each fast push
         float linger = 4.0f;      // seconds it takes to go down after he pulls out (longer when worked hard)

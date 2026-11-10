@@ -1,3 +1,4 @@
+#include "During.h"
 #include "Plugin.h"
 #include "Wink.h"
 #include "Drip.h"
@@ -9,6 +10,7 @@ void OnMessage(SKSE::MessagingInterface::Message* message) {
     switch (message->type) {
         case SKSE::MessagingInterface::kDataLoaded:
             Colour::TidyMade();   // the folder of textures Anatomica makes: under its size budget before anything uses it
+            During::SyncPPA();    // the hole follows the schlong: PPA's own opening kept at almost none
             break;
         case SKSE::MessagingInterface::kPostPostLoad:
             Engine::Connect();   // RaceMenu's interfaces (it answers from its PostLoad on)
