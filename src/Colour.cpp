@@ -1,3 +1,5 @@
+#include "During.h"
+#include "SoftButt.h"
 #include "Colour.h"
 #include "Drip.h"
 #include "Virgin.h"
@@ -337,6 +339,114 @@ namespace {
         return true;
     }
 
+    // ---- the inside (the canal, shape 3BA_Anus) -------------------------------------------------
+    // inner_detail.bin (AID1): the installed inside texture as brightness (128 = the entrance colour) + how deep each
+    // texel is (0 entrance .. 255 deepest). A colour x that = the inside in that colour, darker further in as before.
+    std::vector<std::uint8_t> g_inDet, g_inDepth;
+    int g_inW = 0, g_inH = 0;
+    bool g_inTried = false;
+    bool LoadInner() {
+        if (g_inTried) return !g_inDet.empty();
+        g_inTried = true;
+        std::ifstream f("Data/SKSE/Plugins/AnatomicaMenu/inner_detail.bin", std::ios::binary);
+        char magic[4]{};
+        std::uint32_t w = 0, h = 0;
+        if (!f.read(magic, 4) || std::string_view(magic, 4) != "AID1") return false;
+        f.read(reinterpret_cast<char*>(&w), 4);
+        f.read(reinterpret_cast<char*>(&h), 4);
+        if (w == 0 || h == 0 || w > 4096 || h > 4096 || (w & 3) || (h & 3)) return false;
+        const size_t n = static_cast<size_t>(w) * h;
+        g_inDet.resize(n);
+        g_inDepth.resize(n);
+        if (!f.read(reinterpret_cast<char*>(g_inDet.data()), static_cast<std::streamsize>(n)) ||
+            !f.read(reinterpret_cast<char*>(g_inDepth.data()), static_cast<std::streamsize>(n))) {
+            g_inDet.clear();
+            return false;
+        }
+        g_inW = static_cast<int>(w);
+        g_inH = static_cast<int>(h);
+        return true;
+    }
+    bool BuildInner(int r, int gg, int b, int drop, const std::string& rel, const std::filesystem::path& file) {
+        std::error_code ec;
+        const float c[3] = {r / 31.0f, gg / 31.0f, b / 31.0f};
+        int w = g_inW, h = g_inH;
+        std::vector<float> rgb(static_cast<size_t>(w) * h * 3);
+        for (size_t i = 0; i < g_inDet.size(); ++i) {
+            const float det = g_inDet[i] / 128.0f;
+            for (int ch = 0; ch < 3; ++ch) rgb[i * 3 + ch] = c[ch] * det;
+        }
+        auto half = [&]() {
+            const int nw = std::max(1, w / 2), nh = std::max(1, h / 2);
+            std::vector<float> n2(static_cast<size_t>(nw) * nh * 3);
+            for (int y = 0; y < nh; ++y)
+                for (int x = 0; x < nw; ++x)
+                    for (int ch = 0; ch < 3; ++ch) {
+                        const int x0 = std::min(2 * x, w - 1), x1 = std::min(2 * x + 1, w - 1), y0 = std::min(2 * y, h - 1), y1 = std::min(2 * y + 1, h - 1);
+                        auto at = [&](int xx, int yy) { return rgb[(static_cast<size_t>(yy) * w + xx) * 3 + ch]; };
+                        n2[(static_cast<size_t>(y) * nw + x) * 3 + ch] = 0.25f * (at(x0, y0) + at(x1, y0) + at(x0, y1) + at(x1, y1));
+                    }
+            rgb.swap(n2);
+            w = nw;
+            h = nh;
+        };
+        for (int d = 0; d < drop && w > 4; ++d) half();   // a smaller texture: start further down
+        const int topW = w, topH = h;
+        int levels = 1;
+        while ((topW >> levels) >= 1 && (topH >> levels) >= 1) ++levels;
+        std::string data;
+        for (int lv = 0; lv < levels; ++lv) {
+            EncodeLevel(rgb, w, h, data);
+            if (w == 1 && h == 1) break;
+            half();
+        }
+        std::uint32_t hdr[32]{};
+        hdr[0] = 0x20534444u;
+        hdr[1] = 124;
+        hdr[2] = 0x1 | 0x2 | 0x4 | 0x1000 | 0x20000 | 0x80000;
+        hdr[3] = static_cast<std::uint32_t>(topH);
+        hdr[4] = static_cast<std::uint32_t>(topW);
+        hdr[5] = static_cast<std::uint32_t>(std::max(1, topW / 4) * std::max(1, topH / 4) * 8);
+        hdr[7] = static_cast<std::uint32_t>(levels);
+        hdr[19] = 32;
+        hdr[20] = 0x4;
+        hdr[21] = 0x31545844u;   // DXT1
+        hdr[27] = 0x1000 | 0x8 | 0x400000;
+        std::filesystem::create_directories(file.parent_path(), ec);
+        const auto tmp = std::filesystem::path(file).concat(".tmp");
+        {
+            std::ofstream o(tmp, std::ios::binary | std::ios::trunc);
+            if (!o) return false;
+            o.write(reinterpret_cast<const char*>(hdr), sizeof(hdr));
+            o.write(data.data(), static_cast<std::streamsize>(data.size()));
+            if (!o) return false;
+        }
+        std::filesystem::rename(tmp, file, ec);
+        if (ec) return false;
+        logger::info("Anatomica colour: made {}", rel);
+        return true;
+    }
+    // the inside texture for a colour (0-1): its path, kRimPending while being made, "" if it cannot be made
+    std::string GenInnerTexture(const float c[3], int drop) {
+        if (!LoadInner()) return {};
+        CleanGenFolder(g_genBudgetMB);
+        auto q = [](float v) { return std::clamp(static_cast<int>(std::lround(v * 31.0f)), 0, 31); };
+        const int r = q(c[0]), gg = q(c[1]), b = q(c[2]);
+        drop = std::clamp(drop, 0, 1);
+        const std::string rel = std::format("{}inner_{:02d}{:02d}{:02d}_{}.dds", kGenDir, r, gg, b, g_inW >> drop);
+        const std::filesystem::path file = std::filesystem::path("Data") / std::filesystem::path(std::string(rel));
+        switch (Maker::Of(rel)) {
+            case Maker::State::done: return rel;
+            case Maker::State::busy: return kRimPending;
+            case Maker::State::failed: return {};
+            default: break;
+        }
+        std::error_code ec;
+        if (std::filesystem::exists(file, ec)) { Maker::MarkDone(rel); return rel; }
+        Maker::Queue(rel, [r, gg, b, drop, rel, file]() { return BuildInner(r, gg, b, drop, rel, file); });
+        return kRimPending;
+    }
+
     const char* kDefaultItems[] = {"Installed colour (no change)", "Pink", "Light pink", "Rose / deep red",
                                    "Mauve brown", "Skin matched", "Custom", "Random", "Skin-fit (follows Skin rules)"};
     const char* kRaceItems[] = {"Use the default", "Installed colour (no change)", "Pink", "Light pink",
@@ -454,6 +564,15 @@ namespace {
         bool statusMsg = false;      // also show the one-line message
         float skinOnRim = 1.0f;      // how much of the man's skin tone goes into the rim colour
         int follower = kUseDefault;
+        // the inside (the canal, shape 3BA_Anus): its own colour, made as a texture like the rim
+        int innerMode = 0;           // 0 = installed (pink to deep red), 1 = a deeper shade of his anus colour, 2 = one colour for everyone
+        float innerCol[3] = {0.51f, 0.22f, 0.25f};   // = the installed inside at the entrance
+        float innerDeep = 0.6f;      // mode 1: how much deeper / richer than his anus colour
+        float innerMoist = 0.0f;     // always moist inside: extra shine even when he is dry (0-1)
+        float innerWet = 1.5f;       // while wet: the inside shines this much more than the rim (x)
+        bool shineColOn = false;     // wet shine colour: the highlights of the wet rim / inside take a colour
+        float shineCol[3] = {1.0f, 0.78f, 0.84f};
+        float shineColAmt = 0.6f;
     };
 
     std::mutex g_lock;
@@ -507,6 +626,9 @@ namespace {
         bool alt = false;            // OR a second pair: each man gets one of the two (fixed per man)
         float anus2[3] = {0.48f, 0.25f, 0.58f};
         float blend2[3] = {0.55f, 0.60f, 0.85f};   // used when blendOwn (else the ring follows anus2)
+        bool innerOwn = false;       // its own colour for the inside (the canal); off = the Colours page decides
+        float inner[3] = {0.20f, 0.22f, 0.50f};
+        float inner2[3] = {0.40f, 0.18f, 0.48f};   // the OR pair's inside
     };
     constexpr int kMaxRules = 48;
     std::vector<Rule> g_rules;
@@ -631,6 +753,9 @@ namespace {
         F("LooseRecover", g.looseRecover, 0.0f, 1.0f);
         I("StatusKey", g.statusKey, 0, 300); I("StatusMods", g.statusMods, 0, 7);
         I("MoveKey", g.moveKey, 0, 300); I("MoveMods", g.moveMods, 0, 7); B("StatusMsg", g.statusMsg);
+        I("InnerMode", g.innerMode, 0, 2); C("InnerColour", g.innerCol); F("InnerDeep", g.innerDeep, 0.0f, 1.0f);
+        F("InnerMoist", g.innerMoist, 0.0f, 1.0f); F("InnerWet", g.innerWet, 0.0f, 3.0f);
+        B("ShineColourOn", g.shineColOn); C("ShineColour", g.shineCol); F("ShineColourAmt", g.shineColAmt, 0.0f, 1.0f);
     }
 
     void LoadRaceDefaults() {
@@ -660,19 +785,23 @@ namespace {
             size_t pos = 0;
             for (size_t q; (q = str.find(';', pos)) != std::string::npos; pos = q + 1) parts.push_back(str.substr(pos, q - pos));
             parts.push_back(str.substr(pos));
-            if (parts.size() < 5 || parts.size() > 8) continue;
+            if (parts.size() < 5 || parts.size() > 10) continue;
             Rule r;
             r.on = parts[0] == "1";
             r.race = parts[1];
             std::sscanf(parts[2].c_str(), "%f,%f,%f", &r.skin[0], &r.skin[1], &r.skin[2]);
             r.tol = std::clamp(static_cast<float>(std::atof(parts[3].c_str())), 5.0f, 90.0f);
             std::sscanf(parts[4].c_str(), "%f,%f,%f", &r.anus[0], &r.anus[1], &r.anus[2]);
-            if (parts.size() == 6 && parts[5] != "-")   // the anus blend colour (6th part; "-" or missing = follows the anus)
+            if (parts.size() >= 6 && parts[5] != "-")   // the anus blend colour (6th part; "-" or missing = follows the anus)
                 r.blendOwn = std::sscanf(parts[5].c_str(), "%f,%f,%f", &r.blend[0], &r.blend[1], &r.blend[2]) == 3;
             if (parts.size() >= 7 && parts[6] != "-")   // OR: a second anus colour (7th part) and its blend (8th)
                 r.alt = std::sscanf(parts[6].c_str(), "%f,%f,%f", &r.anus2[0], &r.anus2[1], &r.anus2[2]) == 3;
-            if (parts.size() == 8 && parts[7] != "-")
+            if (parts.size() >= 8 && parts[7] != "-")
                 std::sscanf(parts[7].c_str(), "%f,%f,%f", &r.blend2[0], &r.blend2[1], &r.blend2[2]);
+            if (parts.size() >= 9 && parts[8] != "-")   // the inside (canal) colour (9th part) and the OR pair's (10th)
+                r.innerOwn = std::sscanf(parts[8].c_str(), "%f,%f,%f", &r.inner[0], &r.inner[1], &r.inner[2]) == 3;
+            if (parts.size() >= 10 && parts[9] != "-")
+                std::sscanf(parts[9].c_str(), "%f,%f,%f", &r.inner2[0], &r.inner2[1], &r.inner2[2]);
             out.push_back(r);
         }
         return out;
@@ -827,6 +956,8 @@ namespace {
             Drip::Ini(di, false);
             Virgin::Ini(di, false);
             Bridge::Ini(di, false);
+            During::Ini(di, false);
+            SoftButt::Ini(di, false);
         }
         g_loaded = true;
     }
@@ -876,12 +1007,12 @@ namespace {
         ini.SetLongValue("ColourRules", "Count", static_cast<long>(g_rules.size()));
         for (size_t i = 0; i < g_rules.size(); ++i) {
             const auto& r = g_rules[i];
-            const std::string line =
+            auto c3 = [](const float* c) { return std::format("{:.3f},{:.3f},{:.3f}", c[0], c[1], c[2]); };
+            std::string line =
                 std::format("{};{};{:.3f},{:.3f},{:.3f};{:.0f};{:.3f},{:.3f},{:.3f};{}", r.on ? 1 : 0, r.race, r.skin[0], r.skin[1],
-                            r.skin[2], r.tol, r.anus[0], r.anus[1], r.anus[2],
-                            r.blendOwn ? std::format("{:.3f},{:.3f},{:.3f}", r.blend[0], r.blend[1], r.blend[2]) : std::string("-")) +
-                (r.alt ? std::format(";{:.3f},{:.3f},{:.3f};{:.3f},{:.3f},{:.3f}", r.anus2[0], r.anus2[1], r.anus2[2], r.blend2[0], r.blend2[1], r.blend2[2])
-                       : std::string());
+                            r.skin[2], r.tol, r.anus[0], r.anus[1], r.anus[2], r.blendOwn ? c3(r.blend) : std::string("-"));
+            if (r.alt || r.innerOwn) line += r.alt ? ";" + c3(r.anus2) + ";" + c3(r.blend2) : std::string(";-;-");
+            if (r.innerOwn) line += ";" + c3(r.inner) + ";" + (r.alt ? c3(r.inner2) : std::string("-"));
             ini.SetValue("ColourRules", std::format("Rule{}", i).c_str(), line.c_str());
         }
         for (const auto& [k, v] : g_races) {
@@ -915,6 +1046,8 @@ namespace {
         Drip::Ini(ini, true);
         Virgin::Ini(ini, true);
         Bridge::Ini(ini, true);
+        During::Ini(ini, true);
+        SoftButt::Ini(ini, true);
         ini.SaveFile(kIni);
     }
 
@@ -1022,7 +1155,8 @@ namespace {
     }
     int RuleChosen(RE::Actor* a, const std::vector<int>& hits) { return hits.empty() ? -1 : hits[Hash(a, 31) % hits.size()]; }
     bool RuleAlt(RE::Actor* a, const Rule& r) { return r.alt && (Hash(a, 37) & 1); }   // which of a rule's two pairs (fixed per man)
-    bool RuleFor(RE::Actor* a, const float skin[3], float out[3], float* blendOut = nullptr, bool* blendOwn = nullptr) {
+    bool RuleFor(RE::Actor* a, const float skin[3], float out[3], float* blendOut = nullptr, bool* blendOwn = nullptr,
+                 float* innerOut = nullptr, bool* innerOwn = nullptr) {
         const auto hits = RuleHits(a, skin);
         if (hits.empty()) return false;
         const Rule* r = &g_rules[RuleChosen(a, hits)];
@@ -1032,13 +1166,15 @@ namespace {
         std::copy(an, an + 3, out);
         if (blendOwn) *blendOwn = r->blendOwn;
         if (blendOut && r->blendOwn) std::copy(bl, bl + 3, blendOut);
+        if (innerOwn) *innerOwn = r->innerOwn;
+        if (innerOut && r->innerOwn) { const float* in = second ? r->inner2 : r->inner; std::copy(in, in + 3, innerOut); }
         return true;
     }
 
-    void SmartFor(RE::Actor* a, float out[3], float* blendOut = nullptr, bool* blendOwn = nullptr) {
+    void SmartFor(RE::Actor* a, float out[3], float* blendOut = nullptr, bool* blendOwn = nullptr, float* innerOut = nullptr, bool* innerOwn = nullptr) {
         float skin[3], h, sat, v;
         SkinTone(a, skin);
-        if (RuleFor(a, skin, out, blendOut, blendOwn)) return;
+        if (RuleFor(a, skin, out, blendOut, blendOwn, innerOut, innerOwn)) return;
         RGBtoHSV(skin, h, sat, v);
         if (sat < 0.08f) h = 350.0f;   // no real skin colour (plain tint): start from pink
         const float r1 = Rand01(a, 11), r2 = Rand01(a, 12), r3 = Rand01(a, 13), sign = Rand01(a, 14) < 0.5f ? -1.0f : 1.0f;
@@ -1090,6 +1226,8 @@ namespace {
         bool blendOwn = false;     // a skin rule gave the ring (anus blend) its own colour
         float blend[3] = {0, 0, 0};
         int ruleIdx = -1;          // the skin rule his colour came from (-1 = none)
+        bool innerOwn = false;     // a skin rule gave the inside (canal) its own colour
+        float inner[3] = {0, 0, 0};
     };
 
     Pick PickFor(RE::Actor* a) {
@@ -1144,7 +1282,7 @@ namespace {
             }
         }
         if (choice == kSmart) {
-            SmartFor(a, p.rgb, p.blend, &p.blendOwn);
+            SmartFor(a, p.rgb, p.blend, &p.blendOwn, p.inner, &p.innerOwn);
             float sk[3];
             SkinTone(a, sk);
             p.ruleIdx = RuleChosen(a, RuleHits(a, sk));
@@ -1353,6 +1491,26 @@ namespace {
         return L;
     }
 
+    // the inside's colour for this man (0-1, before his skin tone: the game tints the inside with it, as it always has);
+    // false = the installed inside (pink to deep red, no override)
+    bool InnerColourFor(RE::Actor* a, float out[3]) {
+        const Pick pk = PickFor(a);
+        if (!pk.active) return false;
+        if (pk.innerOwn) { std::copy(pk.inner, pk.inner + 3, out); return true; }   // his skin rule's inside colour
+        if (g.innerMode == 2) { std::copy(std::begin(g.innerCol), std::end(g.innerCol), out); return true; }
+        if (g.innerMode == 1 && pk.choice >= 0) {   // a deeper, richer shade of his anus colour
+            float pick[3], base[3], c[3], h, sat, v;
+            AnusTarget(pk.choice, pk.rgb, pick);
+            AnusTarget(kSkinPreset, pk.rgb, base);
+            const float st = g.method == 0 ? pk.strength : 1.0f;
+            for (int i = 0; i < 3; ++i) c[i] = (base[i] + (pick[i] - base[i]) * st) / 255.0f;
+            RGBtoHSV(c, h, sat, v);
+            HSVtoRGB(h, std::min(1.0f, sat * (1.0f + 0.75f * g.innerDeep)), v * (1.0f - 0.15f * g.innerDeep), out);
+            return true;
+        }
+        return false;
+    }
+
     // ---- for the simulated cum: who is wet, and with what colour
     std::vector<Colour::WetInfo> WetNowImpl() {
         std::vector<Colour::WetInfo> out;
@@ -1368,6 +1526,11 @@ namespace {
             if (lv.wet <= 0.0f && lv.gloss <= 0.0f) continue;
             Colour::WetInfo wi{id, lv.wet, {0.93f, 0.93f, 0.92f}};
             wi.gloss = lv.gloss;
+            wi.innerWet = g.innerWet;
+            if (g.shineColOn) {   // the wet highlights take a colour (After sex page > Wetness)
+                for (int i = 0; i < 3; ++i) wi.shine[i] = g.shineCol[i];
+                wi.shineAmt = g.shineColAmt;
+            }
             if (kLube && g.wetColourOn && lv.worn > 0.0f) {   // aroused only: clear, no wear colour
                 for (int i = 0; i < 3; ++i) wi.rgb[i] = wi.lrgb[i] = g.wetColour[i];
                 wi.lube = g.wetColourAmt;   // the outer wet layer takes this colour (Fluid)
@@ -1673,6 +1836,8 @@ namespace {
         std::string name, race, colour;
         float rim[3]{}, skin[3]{}, ring[3]{};
         bool ringOurs = false;   // the skin-blend ring is coloured by Anatomica (else: his own paint / none, untouched)
+        float inner[3]{};        // the inside (canal) at the entrance, with his skin tone
+        bool innerOurs = false;  // coloured by Anatomica (else the installed inside)
         float wet = 0, tender = 0, bruise = 0, swell = 0, schlong = 0, gape = 0, loose = 0;
         int partners = 0;
         float secs = 0;
@@ -1713,6 +1878,11 @@ namespace {
                 st.ringOurs = true;
             }
         }
+        {   // the inside: Anatomica's colour, or the installed one (both tinted with his skin by the game)
+            float c[3] = {0.51f, 0.22f, 0.25f};
+            st.innerOurs = InnerColourFor(a, c);
+            for (int i = 0; i < 3; ++i) st.inner[i] = std::clamp(c[i] * st.skin[i], 0.0f, 1.0f);
+        }
         const auto id = a->GetFormID();
         const Levels lv = LevelsFor(id, nullptr);
         st.wet = lv.wet, st.tender = lv.tender, st.bruise = lv.bruise;
@@ -1742,6 +1912,12 @@ namespace {
         else {
             const float grey[3] = {0.5f, 0.5f, 0.5f};
             ColourRow("Ring colour (skin-blend)", grey, "not coloured by Anatomica (his own RaceMenu paint, or no ring)");
+        }
+        if (st.innerOurs) ColourRow("Inside colour (canal)", st.inner);
+        else {
+            const auto b = [](float v) { return static_cast<int>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f)); };
+            const std::string note = std::format("#{:02X}{:02X}{:02X} - the installed inside (pink to deep red)", b(st.inner[0]), b(st.inner[1]), b(st.inner[2]));
+            ColourRow("Inside colour (canal)", st.inner, note.c_str());
         }
     }
     std::string StatusLine(const Status& st) {
@@ -2096,6 +2272,16 @@ namespace Colour {
     void WorkedNow(RE::Actor* a, float dil, float partners, RE::Actor* partner) { Worked(nullptr, a, dil, partners, partner); }
     std::vector<std::int32_t> LookNow(RE::Actor* a) { return LookFor(nullptr, a); }
     std::string ColourPath(RE::Actor* a) { const RE::BSFixedString f = ColourFor(nullptr, a); return f.c_str() ? f.c_str() : ""; }
+    std::string InnerPath(RE::Actor* a) {
+        if (!a) return {};
+        std::lock_guard lk(g_lock);
+        if (!g_loaded) LoadIni();
+        float c[3];
+        if (!InnerColourFor(a, c)) return {};
+        const std::string t = GenInnerTexture(c, g.ringRes >= 2 ? 1 : 0);
+        return t == kRimPending ? std::string("\x01") : t;
+    }
+    float InnerMoist() { std::lock_guard lk(g_lock); if (!g_loaded) LoadIni(); return g.innerMoist; }
     float CloseSlowFor(RE::Actor* a) { return CloseSlow(nullptr, a); }
     float LooseNow(RE::Actor* a, float cur, float days) { return LooseFor(nullptr, a, cur, days); }
     Snapshot SnapshotOf(RE::Actor* a) {
@@ -2377,6 +2563,32 @@ namespace Colour {
              "deeper. Neighbouring = hues next to his on the colour wheel (a red argonian gets reds, oranges, magentas - "
              "never green). Contrasting = the opposite side of the wheel, for bold looks.");
         }
+        if (Section("Inside colour (the canal)")) {
+        ImGuiMCP::TextWrapped("The inside of the anus - the canal you see when he gapes - has its own colour, separate from the "
+                              "rim. Installed it goes from pink at the entrance to deep red further in. Here it can be recoloured "
+                              "(it keeps its shading and still gets darker further in).");
+        static const char* modes[] = {"Installed (pink to deep red, never recoloured)",
+                                      "A deeper shade of his anus colour (follows each man's anus colour)",
+                                      "One colour for everyone (pick it below)"};
+        changed |= ImGuiMCP::Combo("Inside colour", &g.innerMode, modes, 3);
+        Help("Installed: the inside stays as the mod ships it.\n"
+             "Deeper shade: each man's inside takes his own anus colour (whatever gave it - his race, Random, Skin-fit, his own "
+             "colour), made richer and a little darker, as real tissue is further in. A blue anus gets a deep blue inside.\n"
+             "One colour: every man's inside is the colour below.\n"
+             "Skin rules can give the inside its own colour too (Skin rules page, \"inside\" tick) - that wins over this for "
+             "the men the rule applies to, whatever is picked here.");
+        if (g.innerMode == 1) {
+            changed |= Pct("How much deeper than the anus colour", &g.innerDeep);
+            Help("0% = the inside is the same colour as his rim. 100% = much richer and darker.");
+        }
+        if (g.innerMode == 2) {
+            changed |= ImGuiMCP::ColorEdit3("Inside colour for everyone", g.innerCol, kWheel);
+            Help("The colour at the entrance of the canal; deeper in it darkens as the installed one does. #823840 (the "
+                 "starting colour) is the installed inside. The game still shades it with each man's skin tone.");
+        }
+        ImGuiMCP::TextDisabled("Made once per colour as a texture (in the gen folder, size as \"Ring colour texture size\": 1024, or 512).");
+        ImGuiMCP::TextDisabled("Shine / moistness of the inside: After sex page > Wetness.");
+        }
 
         if (ConfirmButton("Re-roll everyone")) {
             ++g.seed;
@@ -2415,6 +2627,9 @@ namespace Colour {
             g.pool = d.pool;
             g.harmony = d.harmony;
             g.follower = d.follower;
+            g.innerMode = d.innerMode;
+            g.innerDeep = d.innerDeep;
+            std::copy(std::begin(d.innerCol), std::end(d.innerCol), g.innerCol);
             g.skinOnRim = d.skinOnRim;
             changed = true;
         }
@@ -2594,7 +2809,8 @@ namespace Colour {
             else ImGuiMCP::TextColored(ImGuiMCP::ImVec4{1.0f, 0.8f, 0.35f, 1.0f}, "%s: %d rule(s) match, but his colour is not Smart random - skin rules are not used for him.", nm ? nm : "?", static_cast<int>(hits.size()));
         }
         if (!g_rules.empty())
-            ImGuiMCP::TextDisabled("On | Race | Skin colour | matches within | Anus colour | Anus blend (ring) - tick for its own | OR - a second anus / blend pair");
+            ImGuiMCP::TextDisabled("On | Race | Skin colour | matches within | Anus colour | Anus blend (ring) - tick for its own | "
+                                   "Inside (canal) - tick for its own | OR - a second anus / blend / inside set");
         for (size_t i = 0; i < g_rules.size(); ++i) {
             auto& r = g_rules[i];
             ImGuiMCP::PushID(static_cast<int>(i));
@@ -2621,6 +2837,11 @@ namespace Colour {
             if (r.blendOwn) changed |= ImGuiMCP::ColorEdit3("anus blend##b", r.blend, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
             else ImGuiMCP::TextDisabled("anus blend: follows the anus");
             ImGuiMCP::SameLine();
+            changed |= ImGuiMCP::Checkbox("##io", &r.innerOwn);
+            ImGuiMCP::SameLine();
+            if (r.innerOwn) changed |= ImGuiMCP::ColorEdit3("inside##i", r.inner, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
+            else ImGuiMCP::TextDisabled("inside: Colours page");
+            ImGuiMCP::SameLine();
             changed |= ImGuiMCP::Checkbox("OR##alt", &r.alt);
             if (r.alt) {   // a second pair: each man gets one of the two
                 ImGuiMCP::SameLine();
@@ -2628,6 +2849,10 @@ namespace Colour {
                 if (r.blendOwn) {
                     ImGuiMCP::SameLine();
                     changed |= ImGuiMCP::ColorEdit3("anus blend##b2", r.blend2, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
+                }
+                if (r.innerOwn) {
+                    ImGuiMCP::SameLine();
+                    changed |= ImGuiMCP::ColorEdit3("inside##i2", r.inner2, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
                 }
             }
             ImGuiMCP::SameLine();
@@ -2664,6 +2889,10 @@ namespace Colour {
                 auto unskin = [&](float v, int i) { const float sk = 1.0f + (st.skin[i] - 1.0f) * g.skinOnRim; return std::clamp(sk > 0.05f ? v / sk : v, 0.0f, 1.0f); };
                 for (int i = 0; i < 3; ++i) r.anus[i] = unskin(st.rim[i], i);
                 if (st.ringOurs) { r.blendOwn = true; for (int i = 0; i < 3; ++i) r.blend[i] = unskin(st.ring[i], i); }   // and the ring he has now
+                if (st.innerOurs) {   // and the inside he has now (the game tints that with his whole skin tone)
+                    r.innerOwn = true;
+                    for (int i = 0; i < 3; ++i) r.inner[i] = std::clamp(st.skin[i] > 0.05f ? st.inner[i] / st.skin[i] : st.inner[i], 0.0f, 1.0f);
+                }
                 g_rules.push_back(r);
                 g_ruleNote = std::format("added: {} ({}), skin {:02X}{:02X}{:02X}", who->GetName(), st.race,
                                          static_cast<int>(r.skin[0] * 255), static_cast<int>(r.skin[1] * 255), static_cast<int>(r.skin[2] * 255));
@@ -2679,7 +2908,9 @@ namespace Colour {
             changed = true;
         }
         Help("Replaces the list with the rules that come with Anatomica (argonian scale colours). Tick = rule on. Race = who it applies to. Skin swatch + degrees = which skin colours match (how far round the "
-             "colour wheel from that colour). Anus swatch = the colour they get.");
+             "colour wheel from that colour). Anus swatch = the colour they get. "
+             "Inside = the canal you see when he gapes: tick to give it its own colour for this rule (unticked, the Colours page "
+             "> Inside colour decides).");
         if (changed) {
             SaveIni();
         }
@@ -2748,7 +2979,8 @@ namespace Colour {
         ImGuiMCP::Text("Colour pick: %s%s", st.colour.c_str(), st.own ? " (his own)" : "");
         ColourRows(st);
         Help("Skin colour: his skin tone as the game tints it. Anus colour: the rim as Anatomica colours it (before "
-             "reddening, bruising and wetness). Ring colour: the soft skin-blend ring around it (RaceMenu paint).");
+             "reddening, bruising and wetness). Ring colour: the soft skin-blend ring around it (RaceMenu paint). Inside colour: the canal you see when he "
+             "gapes, at the entrance (it gets darker further in).");
         ImGuiMCP::Text("Wet %.0f%%   Red %.0f%%   Bruise %.0f%%   Swelling %.0f%%", st.wet * 100, st.tender * 100, st.bruise * 100, st.swell * 100);
         ImGuiMCP::Text("Gape %.0f%%   Looseness %.0f%%   Schlong shine %.0f%%", st.gape * 100, st.loose * 100, st.schlong * 100);
         ImGuiMCP::Text("This round: %d partner(s), %.0f s of penetration", st.partners, st.secs);
@@ -3004,6 +3236,19 @@ namespace Colour {
                     Help("Per race page: races with a cum colour of their own use it here (also for the lube colour above).");
                 }
             });
+            changed |= ImGuiMCP::Checkbox("Wet shine colour", &g.shineColOn);
+            Help("The wet highlights (the glints of light on the wet rim and inside) take a colour - pink, blue, gold... - as "
+                 "if the wetness itself were coloured. Off = clear, like water. Fades with the wetness.");
+            Indented(g.shineColOn, [&] {
+                changed |= ImGuiMCP::ColorEdit3("Shine colour", g.shineCol, kWheel);
+                changed |= Pct("How strongly##shc", &g.shineColAmt);
+            });
+            {
+                float pct = g.innerWet * 100.0f;
+                if (ImGuiMCP::SliderFloat("Inside wetter than the rim", &pct, 0.0f, 300.0f, "%.0f%%")) { g.innerWet = pct / 100.0f; changed = true; }
+                Help("While he is wet the inside (the canal) shines this much compared to the rim: 100% = the same, 200% = "
+                     "twice as glassy, 0% = the inside does not get wetter after sex.");
+            }
             Fluid::RenderWetSettings();
             changed |= ImGuiMCP::Checkbox("Water dries it faster", &g.waterDry);
             Help("Swimming, or standing outside in the rain, dries him faster.");
@@ -3013,6 +3258,9 @@ namespace Colour {
                 changed |= ImGuiMCP::SliderFloat("x faster##water", &g.waterDryMul, 1.0f, 10.0f, "x%.1f");
             }
         });
+        changed |= Pct("Always moist inside", &g.innerMoist);
+        Help("The inside (the canal) looks moist all the time, not only after sex: extra shine on it even when he is dry. "
+             "0% = as installed. Works with \"Wet shine after sex\" off too.");
 
         }
         if (Section("Wet schlong")) {
@@ -3155,6 +3403,8 @@ namespace Colour {
             g.wetColourOn = d.wetColourOn, g.wetColourAmt = d.wetColourAmt;
             std::copy(std::begin(d.wetColour), std::end(d.wetColour), g.wetColour);
             g.waterDry = d.waterDry, g.waterDryMul = d.waterDryMul;
+            g.shineColOn = d.shineColOn, g.shineColAmt = d.shineColAmt, g.innerWet = d.innerWet, g.innerMoist = d.innerMoist;
+            std::copy(std::begin(d.shineCol), std::end(d.shineCol), g.shineCol);
             g.schlongWet = d.schlongWet, g.schlongStrength = d.schlongStrength, g.schlongTime = d.schlongTime;
             g.wetCumOn = d.wetCumOn, g.wetCumAmt = d.wetCumAmt, g.schlongCum = d.schlongCum, g.schlongCumRace = d.schlongCumRace, g.schlongCumAmt = d.schlongCumAmt;
             std::copy(std::begin(d.wetCum), std::end(d.wetCum), g.wetCum);

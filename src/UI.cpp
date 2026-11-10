@@ -1,3 +1,5 @@
+#include "During.h"
+#include "SoftButt.h"
 #include <string_view>
 #include "UI.h"
 #include "Colour.h"
@@ -183,6 +185,7 @@ void UI::Register() {
     SKSEMenuFramework::SetSection("Anatomica");
     SKSEMenuFramework::AddSectionItem("General", Colour::RenderGeneral);
     SKSEMenuFramework::AddSectionItem("Gape", Gape::Render);
+    SKSEMenuFramework::AddSectionItem("During sex", During::RenderPage);
     SKSEMenuFramework::AddSectionItem("Movement", Motion::Render);
     SKSEMenuFramework::AddSectionItem("Colours", Colour::RenderColours);
     SKSEMenuFramework::AddSectionItem("Per race", Colour::RenderRaces);
@@ -296,6 +299,8 @@ void __stdcall UI::Jiggle::Render() {
     }
     if (changed) g_status = "Not applied yet - press Apply.";
     if (!g_status.empty()) ImGuiMCP::TextWrapped("%s", g_status.c_str());
+    ImGuiMCP::Spacing();
+    SoftButt::RenderSection();
 }
 
 void __stdcall UI::About::Render() {

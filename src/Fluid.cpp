@@ -357,6 +357,8 @@ namespace {
         float wetCum = 0.0f;             // cum in the wetness: bead opacity (0 = clear water / lube)
         float gloss = 0.0f;              // glossy skin round the hole (After sex page), 0-1
         float lube = 0.0f; float lrgb[3] = {1.0f, 1.0f, 1.0f};   // lube colour for the outer wet layer
+        float shineRgb[3] = {1.0f, 1.0f, 1.0f}; float shineAmt = 0.0f;   // wet shine colour (After sex page)
+        float innerWet = 1.0f;           // the inside shines this much more than the rim
         std::string wetTex;              // what the wet layer shows now ("" = its own texture)
         float coatAlpha = 1.0f;          // cum on his schlong: opacity
         bool dripOn = true;              // a drip from his tip now and then
@@ -1341,17 +1343,18 @@ namespace {
     }
     // ---- wet shine, straight on the materials (no RaceMenu / Papyrus): each shape gets its own copy of its material
     // once, and we remember what it looked like so it goes back exactly when he dries
-    struct ShineBase { RE::BSShaderMaterial* mat = nullptr; float gloss = 30.0f, spec = 3.0f; };
+    struct ShineBase { RE::BSShaderMaterial* mat = nullptr; float gloss = 30.0f, spec = 3.0f; RE::NiColor col{1.0f, 1.0f, 1.0f}; };
     std::unordered_map<RE::BSGeometry*, ShineBase> g_shine;
-    void Shine(RE::BSGeometry* geo, float w, float glossAdd, float specAdd) {
+    // w = how wet (0 = dry: put it back); col / colAmt = the colour the wet highlights take (wet shine colour)
+    void Shine(RE::BSGeometry* geo, float w, float glossAdd, float specAdd, const float* col = nullptr, float colAmt = 0.0f) {
         auto* lsp = geo ? geo->lightingShaderProp_cast() : nullptr;
         auto* mat = lsp ? static_cast<RE::BSLightingShaderMaterialBase*>(lsp->material) : nullptr;
         if (!mat) return;
         auto it = g_shine.find(geo);
         if (it == g_shine.end() || it->second.mat != mat) {
             if (w <= 0.0f) return;   // never touched, nothing to put back
-            ShineBase b{nullptr, mat->specularPower, mat->specularColorScale};
-            if (it != g_shine.end() && it->second.mat) b = ShineBase{nullptr, it->second.gloss, it->second.spec};
+            ShineBase b{nullptr, mat->specularPower, mat->specularColorScale, mat->specularColor};
+            if (it != g_shine.end() && it->second.mat) b = ShineBase{nullptr, it->second.gloss, it->second.spec, it->second.col};
             if (auto* nm = static_cast<RE::BSLightingShaderMaterialBase*>(mat->Create())) {   // our own copy: materials are shared between men
                 nm->CopyMembers(mat);
                 lsp->SetMaterial(nm, true);
@@ -1368,6 +1371,11 @@ namespace {
         }
         mat->specularPower = it->second.gloss + glossAdd * w;
         mat->specularColorScale = it->second.spec + specAdd * w;
+        {   // the highlight colour: from its own toward the wet shine colour, as wet as he is
+            const float k = (col && w > 0.0f) ? std::clamp(colAmt * std::min(1.0f, w * 1.5f), 0.0f, 1.0f) : 0.0f;
+            const RE::NiColor& c0 = it->second.col;
+            mat->specularColor = k > 0.0f ? RE::NiColor{c0.red + (col[0] - c0.red) * k, c0.green + (col[1] - c0.green) * k, c0.blue + (col[2] - c0.blue) * k} : c0;
+        }
         if (w <= 0.0f) g_shine.erase(it);
     }
     std::vector<RE::BSGeometry*> SchlongGeos(RE::Actor* a) {
@@ -1773,7 +1781,9 @@ namespace {
         const float q = std::round(w * 40.0f) / 40.0f;
         for (const char* nd : {"3BA_AnusRim", "3BA_Anus"}) {
             auto* o = root->GetObjectByName(RE::BSFixedString(nd));
-            Shine(o ? o->AsGeometry() : nullptr, q, 180.0f * g.rimShine, 8.0f * g.rimShine * g.shine);   // glassy, like water
+            const float k = (std::string_view(nd) == "3BA_Anus") ? std::clamp(A.innerWet, 0.0f, 3.0f) : 1.0f;   // the inside: wetter than the rim (After sex page)
+            Shine(o ? o->AsGeometry() : nullptr, q, 180.0f * g.rimShine * k, 8.0f * g.rimShine * g.shine * k,   // glassy, like water
+                  A.shineRgb, A.shineAmt);
         }
         if (!kCum)   // the rim armor's cum pieces (pool in the canal, film, lip): never with cum off
             for (const char* nd : {"AnatomicaPool", "AnatomicaFilm", "AnatomicaLip"})
@@ -1997,6 +2007,9 @@ namespace {
                 A.gloss = w.gloss;
                 A.lube = w.lube;
                 for (int i = 0; i < 3; ++i) A.lrgb[i] = w.lrgb[i];
+                for (int i = 0; i < 3; ++i) A.shineRgb[i] = w.shine[i];
+                A.shineAmt = w.shineAmt;
+                A.innerWet = w.innerWet;
                 A.swet = w.schlong;
                 A.wetCum = w.cum;
                 for (int i = 0; i < 3; ++i) A.wetRgb[i] = w.rgb[i];

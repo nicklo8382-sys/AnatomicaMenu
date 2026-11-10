@@ -28,6 +28,8 @@ namespace Colour {
     void WorkedNow(RE::Actor* a, float dil, float partners, RE::Actor* partner);
     std::vector<std::int32_t> LookNow(RE::Actor* a);
     std::string ColourPath(RE::Actor* a);
+    std::string InnerPath(RE::Actor* a);   // the inside (canal) texture: "" = the installed one, "\x01" = being made (keep his)
+    float InnerMoist();                    // "always moist inside": extra shine on the canal even when dry (0-1)
     float CloseSlowFor(RE::Actor* a);
     float LooseNow(RE::Actor* a, float cur, float days);
     void RestHours(RE::FormID id, float hours);   // healing: this many extra hours of rest for his lasting looseness
@@ -53,6 +55,9 @@ namespace Colour {
         float scum = 0.0f;                // cum on his schlong: opacity (0 = only the wet shine)
         bool sdrip = false;               // and now and then a drip from the tip
         float srgb[3] = {0.96f, 0.95f, 0.90f};
+        float shine[3] = {1.0f, 1.0f, 1.0f};   // wet shine colour: the colour of the wet highlights on the rim and inside
+        float shineAmt = 0.0f;                 // how much (0 = clear, as before)
+        float innerWet = 1.0f;                 // the inside shines this much more than the rim while wet
     };
     std::vector<WetInfo> WetNow();     // every man who is wet right now (0-1) and the colour of it (Fluid draws it)
 }
