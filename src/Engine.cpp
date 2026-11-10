@@ -1,3 +1,6 @@
+#include "During.h"
+#include "Extras.h"
+#include "SoftButt.h"
 #include "Engine.h"
 #include "Virgin.h"
 #include "Size.h"
@@ -71,7 +74,7 @@ namespace {
     RE::NiAVObject* Node(RE::NiAVObject* root, const char* n) { return root ? root->GetObjectByName(RE::BSFixedString(n)) : nullptr; }
 
     // the canal entrance of this man, from bones rigid with his pelvis
-    struct Canal { bool ok = false; V h, a; float sc = 1.0f; V pelvis; };
+    struct Canal { bool ok = false; V h, a; float sc = 1.0f; V pelvis; V x, u, f; };
     Canal CanalOf(RE::Actor* act) {
         Canal c;
         auto* root = act->Get3D(false);
@@ -95,8 +98,37 @@ namespace {
         c.h = P + (u * 0.1604f + f * 7.4795f) * c.sc;
         c.a = u * -0.2664f + f * -0.9639f;
         c.pelvis = P;
+        c.x = x; c.u = u; c.f = f;
         c.ok = true;
         return c;
+    }
+    // the same frame on the Anatomica mesh (bind pose, BodySlide units): pelvis and its axes - for the belly bulge
+    const V kMeshP{0.0f, 0.0f, 68.9113f}, kMeshX{1.0f, 0.0f, 0.0f}, kMeshU{0.0f, -0.810145f, 0.586230f}, kMeshF{0.0f, -0.586230f, -0.810145f};
+    V ToMesh(const Canal& c, const V& w) {
+        const V r = (w - c.pelvis) * (1.0f / c.sc);
+        return kMeshP + kMeshX * Dot(r, c.x) + kMeshU * Dot(r, c.u) + kMeshF * Dot(r, c.f);
+    }
+    // the belly bulge may show through what he wears (During sex page: 0 only bare, 1 clothes too, 2 armour too)
+    bool BulgeShows(RE::Actor* a, int through) {
+        if (through >= 2 || Extras::Exposed(a)) return true;
+        auto* body = a->GetWornArmor(RE::BGSBipedObjectForm::BipedObjectSlot::kBody);
+        if (!body) return true;
+        return through >= 1 && body->IsClothing();
+    }
+    // how deep o's schlong is in him: the tip (past the last bone) measured along his canal axis, and where it is
+    struct Tip { bool ok = false; float depth = 0.0f; V p; };
+    Tip TipIn(const Canal& c, RE::Actor* o) {
+        Tip t;
+        auto* root = o ? o->Get3D(false) : nullptr;
+        auto* g6 = Node(root, "NPC Genitals06 [Gen06]");
+        auto* g5 = Node(root, "NPC Genitals05 [Gen05]");
+        if (!g6 || !g5) return t;
+        V d = V(g6->world.translate) - V(g5->world.translate);
+        const float ld = Len(d);
+        t.p = V(g6->world.translate) + (ld > 1e-4f ? d * (1.5f * c.sc / ld) : V{});
+        t.depth = Dot(t.p - c.h, c.a) / c.sc;
+        t.ok = true;
+        return t;
     }
     // where o's schlong is: 2 = a bone in the first 8 units of the canal, within rad of its axis;
     // 1 = the tip still at the entrance (just outside it, PPA still spreading the ring round it); 0 = out
@@ -130,6 +162,12 @@ namespace {
         bool inScene = false;
         float sz = 1.0f;          // partner size (TNG): how far he opens this round
         RE::FormID szFirst = 0;   // the round's first partner (his size can still be on its way from TNG)
+        float donut = 0.0f, donutSent = -1.0f;   // During sex page: the puffy rim while he is taken
+        float depth = -100.0f;                   // how deep the schlong in him is (last tick), for the withdraw
+        float pout = 0.0f, canal = 0.0f, bulge[5]{};   // During sex page: suck, open inside, belly bulge
+        float pulse = 0.0f, bulgeDil = 0.0f;     // thrust pulse; how worked he was while it bulged (lingering)
+        double bulgeLast = -100.0;               // last time it bulged
+        float poutSent = -1.0f, canalSent = -1.0f, bulgeSent[5]{-1.0f, -1.0f, -1.0f, -1.0f, -1.0f};
     };
     std::mutex g_mx;
     std::unordered_map<RE::FormID, St> g_st;
@@ -152,7 +190,7 @@ namespace {
     }
 
     // ---- one man, one tick
-    void Process(RE::Actor* act, St& s, float dt, double now, const std::vector<RE::Actor*>& others) {
+    void Process(RE::Actor* act, St& s, float dt, double now, const std::vector<RE::Actor*>& others, RE::Actor* player) {
         if (!s.init) {   // pick up where a save left him
             s.init = true;
             s.dil = std::clamp(GetMorph(act, "AGDil", K), 0.0f, 1.0f);
@@ -167,6 +205,7 @@ namespace {
         const Virgin::Mods vm = Virgin::For(act->GetFormID());   // his virginity / experience (Virginity page)
         const Canal c = CanalOf(act);
         RE::Actor* partner = nullptr;
+        RE::Actor* atMan = nullptr;   // the man whose tip is at his entrance
         bool atEntrance = false;   // his tip is right at the hole (an almost-full pull-out): no left-over gape yet
         float nearest = 1e9f;
         if (c.ok)
@@ -181,7 +220,7 @@ namespace {
                 }
                 const int in = Inside(c, o, rad);
                 if (in == 2) { partner = o; break; }
-                if (in == 1 && s.was) atEntrance = true;   // only the man already in him (not someone walking past)
+                if (in == 1 && s.was) { atEntrance = true; atMan = o; }   // only the man already in him (not someone walking past)
             }
         float g = 0.0f, gd = 0.0f;
         if (partner) {
@@ -254,10 +293,84 @@ namespace {
             s.sent = shown;
             update = true;
         }
+        {   // During sex page: the rim swells into a puffy ring while he is taken, and settles a few seconds after
+            const float amt = During::Donut();
+            const float want = (amt > 0.0f && (partner || atEntrance || s.inScene)) ? amt * Smooth(s.dil) : 0.0f;
+            if (want > s.donut) s.donut = std::min(want, s.donut + dt / 1.5f);
+            else s.donut = std::max(want, s.donut - dt / 4.0f);
+            if (std::abs(s.donut - s.donutSent) > 0.01f || (s.donut == 0.0f && s.donutSent > 0.0f)) {
+                if (s.donutSent >= 0.0f || s.donut > 0.0f) { SetMorph(act, "Anatomica Swell", "AnatomicaDuring", s.donut); update = true; }
+                s.donutSent = s.donut;
+            }
+        }
         if (std::abs(s.dil - s.dilSent) > 0.02f || (s.dil == 0.0f && s.dilSent != 0.0f)) {   // kept with the save
             SetMorph(act, "AGDil", K, s.dil);
             SetMorph(act, "AGEp", K, s.ep);
             s.dilSent = s.dil;
+        }
+        // During sex page: open the inside round the schlong, the suck on a withdraw, the belly bulge
+        {
+            const During::Want dw = During::Get();
+            RE::Actor* in = partner ? partner : atMan;
+            Tip tip;
+            if (in && c.ok) tip = TipIn(c, in);
+            const float vel = (tip.ok && s.depth > -50.0f && dt > 0.0f) ? (tip.depth - s.depth) / dt : 0.0f;   // units / s, < 0 = pulling out
+            s.depth = tip.ok ? tip.depth : -100.0f;
+            auto ease = [&](float& v, float want, float up, float down) {
+                v = want > v ? std::min(want, v + dt / up) : std::max(want, v - dt / down);
+            };
+            ease(s.canal, (partner && dw.canal > 0.0f) ? dw.canal * std::clamp(Size::For(partner).open, 0.7f, 1.4f) : 0.0f, 0.25f, 0.8f);
+            const float suck = (tip.ok && dw.suck > 0.0f && vel < -1.5f) ? dw.suck * std::clamp((-vel - 1.5f) / 8.0f, 0.0f, 1.0f) : 0.0f;
+            ease(s.pout, suck, 0.10f, 0.30f);
+            float bw[5]{};
+            // thrust pulse: a fast push adds a quick extra bump that dies away in a fraction of a second
+            s.pulse = std::max(0.0f, s.pulse - dt / 0.22f);
+            if (vel > 4.0f) s.pulse = std::max(s.pulse, dw.pulse * std::clamp((vel - 4.0f) / 12.0f, 0.0f, 1.0f));
+            bool bulging = false;
+            if (tip.ok && partner && dw.bulge > 0.0f && During::BulgeFor(act, player) && BulgeShows(act, dw.bulgeThrough)) {
+                const int cat = Size::Cat(partner);
+                if (!dw.bulgeBig || cat >= 3) {
+                    const float amt = dw.bulge * std::clamp(Size::For(partner).open, 0.7f, 1.5f) * (1.0f + s.pulse);
+                    // one point of the shaft (or the tip): a bump at its height, as deep as it is past "shows from"
+                    auto at = [&](const V& w, float depth, float k) {
+                        const float d = std::clamp((depth - dw.bulgeStart) / 5.0f, 0.0f, 1.0f) * k;
+                        if (d <= 0.0f) return;
+                        const float z = std::clamp(ToMesh(c, w).z, 66.0f, 82.0f);
+                        const float f = (z - 66.0f) / 4.0f;   // bulges at 66, 70, 74, 78, 82
+                        const int i0 = std::min(3, static_cast<int>(f));
+                        const float fr = std::clamp(f - static_cast<float>(i0), 0.0f, 1.0f);
+                        bw[i0] = std::max(bw[i0], amt * d * (1.0f - fr));
+                        bw[i0 + 1] = std::max(bw[i0 + 1], amt * d * fr);
+                    };
+                    at(tip.p, tip.depth, 1.0f);
+                    if (dw.outline > 0.0f) {   // the shaft behind the tip shows too (its outline up his belly)
+                        static const char* kGen[] = {"NPC Genitals02 [Gen02]", "NPC Genitals03 [Gen03]", "NPC Genitals04 [Gen04]",
+                                                     "NPC Genitals05 [Gen05]", "NPC Genitals06 [Gen06]"};
+                        auto* proot = partner->Get3D(false);
+                        for (auto* nm : kGen)
+                            if (auto* nd = Node(proot, nm)) {
+                                const V w = nd->world.translate;
+                                at(w, Dot(w - c.h, c.a) / c.sc, dw.outline);
+                            }
+                    }
+                    bulging = true;
+                }
+            }
+            if (bulging) s.bulgeLast = now, s.bulgeDil = std::max(s.bulgeDil, s.dil);
+            // lingering: after he pulls out the bump eases down slowly (longer the more worked he was), not at once
+            const float linger = (now - s.bulgeLast < 30.0) ? std::max(0.8f, dw.linger * (0.5f + Smooth(s.bulgeDil))) : 0.8f;
+            if (!bulging && now - s.bulgeLast > 30.0) s.bulgeDil = 0.0f;
+            for (int i = 0; i < 5; ++i) ease(s.bulge[i], bw[i], 0.12f, bulging ? 0.35f : linger);
+            auto send = [&](const char* morph, float v, float& sent) {
+                if (std::abs(v - sent) > 0.02f || (v == 0.0f && sent > 0.0f)) {
+                    if (sent >= 0.0f || v > 0.0f) { SetMorph(act, morph, "AnatomicaDuring", v); update = true; }
+                    sent = v;
+                }
+            };
+            send("Anatomica Canal", s.canal, s.canalSent);
+            send("Anatomica Pout", s.pout, s.poutSent);
+            static const char* kBulge[5] = {"Anatomica Bulge 1", "Anatomica Bulge 2", "Anatomica Bulge 3", "Anatomica Bulge 4", "Anatomica Bulge 5"};
+            for (int i = 0; i < 5; ++i) send(kBulge[i], s.bulge[i], s.bulgeSent[i]);
         }
         if (update && g_morph) g_morph->UpdateModelWeight(act, false);
     }
@@ -356,6 +469,30 @@ namespace {
         else if (v[1] >= 0) PutInt(a, "3BA_AnusRim", 7, v[1]);
         // the old wet gloss (Fluid does the gloss now): clear what an older version left
         if (v[4] == -1) for (const char* nd : {"3BA_AnusRim", "3BA_Anus"}) { Remove(a, nd, 2, -1); Remove(a, nd, 3, -1); }
+        // the inside (the canal): its own colour texture (Colours page > Inside), and "always moist inside"
+        {
+            const std::string in = Colour::InnerPath(a);
+            if (in != "\x01") {   // "\x01" = his new one is being made: keep what he has
+                const std::string cur = GetStr(a, "3BA_Anus", 9, 0);
+                if (in.empty()) {
+                    if (!cur.empty()) {   // back to the installed inside
+                        PutStr(a, "3BA_Anus", 9, 0, "textures\\actors\\character\\male\\Anatomica\\anatomica.dds", false);
+                        Remove(a, "3BA_Anus", 9, 0);
+                    }
+                } else if (in != cur) PutStr(a, "3BA_Anus", 9, 0, in);
+            }
+            const float m = Colour::InnerMoist();
+            const float gl = 30.0f + 170.0f * m, sp = 3.0f + 5.0f * m;   // the installed inside: glossiness 30, specular 3
+            if (m > 0.001f) {
+                if (std::abs(GetFloat(a, "3BA_Anus", 2) - gl) > 0.5f) PutFloat(a, "3BA_Anus", 2, gl);
+                if (std::abs(GetFloat(a, "3BA_Anus", 3) - sp) > 0.05f) PutFloat(a, "3BA_Anus", 3, sp);
+            } else if (GetFloat(a, "3BA_Anus", 2) > 0.0f) {
+                PutFloat(a, "3BA_Anus", 2, 30.0f, false);
+                PutFloat(a, "3BA_Anus", 3, 3.0f, false);
+                Remove(a, "3BA_Anus", 2, -1);
+                Remove(a, "3BA_Anus", 3, -1);
+            }
+        }
         if (v.size() > 9) {
             if (v[7] != -2 && g_morph) {
                 const float f = static_cast<float>(v[7]) / 1000.0f;
@@ -640,7 +777,7 @@ namespace {
                 if (!Allowed(a, player)) continue;
                 if (a != player && a->GetPosition().GetDistance(player->GetPosition()) > 4000.0f) continue;
                 Virgin::Watch(a);   // virgin or not: known (and OVirginity asked) before anything happens
-                Process(a, g_st[a->GetFormID()], dt, now, all);
+                Process(a, g_st[a->GetFormID()], dt, now, all, player);
             }
         }
         Bridge::Tick(player, all);   // other mods: arousal, SkyrimNet (paces itself)
@@ -655,7 +792,9 @@ namespace {
             g_lastCol = now;
             const bool full = g_ovr && g_ovl;
             if (full) ColourOne(player); else RingOne(player);
-            for (auto* a : Colour::Men()) { if (full) ColourOne(a); else RingOne(a); }
+            const auto men = Colour::Men();
+            for (auto* a : men) { if (full) ColourOne(a); else RingOne(a); }
+            SoftButt::Tick(player, men);   // Jiggle page: the SMP soft butt on the men chosen (off by default)
         }
     }
 
