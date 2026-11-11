@@ -148,6 +148,7 @@ namespace During {
         };
         B("OpenInside", g_canalOn); F("OpenInsideAmount", g_w.canal, 0.0f, 1.5f);
         B("HoleFollows", g_w.holeFollow); F("HoleSize", g_w.holeSize, 0.5f, 1.6f);
+        B("HoleMoves", g_w.shift); F("HoleMoveMax", g_w.shiftMax, 0.0f, 4.0f);
         if (save) ini.SetLongValue(S, "HoleDetail", g_w.holeDetail);
         else g_w.holeDetail = std::clamp(static_cast<int>(ini.GetLongValue(S, "HoleDetail", g_w.holeDetail)), 0, 2);
         B("RingFollows", g_w.ring); F("RingGrip", g_w.grip, 0.0f, 1.5f); F("RingMaxOut", g_w.maxOut, 0.0f, 3.0f);
@@ -275,6 +276,15 @@ namespace During {
                  "saving to PPA); the rim's pull in and out still works. Uses the Anatomica Hole / Inside sliders. Off = PPA "
                  "opens him to one fixed size (How tight he is, above).");
             if (g_w.holeFollow) {
+                ch |= ImGuiMCP::Checkbox("The hole moves with the shaft", &g_w.shift);
+                Help("When the shaft is pulled down, up or to a side, the whole hole - the rim, the skin round it and the inside - "
+                     "moves with it and stays tight all round, instead of only stretching towards it. The inside bends with "
+                     "an angled shaft. Uses the Anatomica Shift sliders.");
+                if (g_w.shift) {
+                    ch |= ImGuiMCP::SliderFloat("Most it moves", &g_w.shiftMax, 0.0f, 4.0f, "%.1f units");
+                    Help("How far the hole may be dragged from where it sits (game units, about 1.4 cm each). 2 is plenty; "
+                         "past 3 the skin round it stretches a lot.");
+                }
                 static const char* kDetail[3] = {"Normal (4 directions, 3 depths)", "Fine (8 directions x 2 rings, 6 depths)",
                                                  "Super fine (16 directions x 3 rings, 10 depths) - testing"};
                 ch |= ImGuiMCP::Combo("Detail", &g_w.holeDetail, kDetail, 3);

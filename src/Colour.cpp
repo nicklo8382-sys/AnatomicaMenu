@@ -2111,7 +2111,11 @@ namespace {
                 ImGuiMCP::Text("%s  (%s)", st.name.c_str(), st.race.c_str());
                 ImGuiMCP::Text("Colour pick: %s%s", st.colour.c_str(), st.own ? " (his own)" : "");
                 ColourRows(st);
-                Bar("Gape", st.gape);
+                {   // while he is taken the left-over gape is 0: show how far the hole is opened round him instead
+                    const auto dn0 = Engine::DuringOf(a->GetFormID());
+                    if (dn0.depth > -50.0f) Bar("Opened round him", std::clamp(dn0.hole, 0.0f, 1.0f));
+                    else Bar("Gape", st.gape);
+                }
                 Bar("Looseness", st.loose / 0.6f);
                 Bar("Wet", st.wet);
                 Bar("Red", st.tender);
@@ -2120,7 +2124,10 @@ namespace {
                 if (st.schlong > 0.01f) Bar("Schlong shine", st.schlong);
                 ImGuiMCP::Text("This round: %d partner(s), %.0f s", st.partners, st.secs);
                 if (const auto dn = Engine::DuringOf(a->GetFormID()); dn.depth > -50.0f)
-                    ImGuiMCP::Text("Being taken: tip %.1f units in | hole %.0f%% | rim %+.2f", dn.depth, dn.hole * 100.0f, dn.ring);
+                {
+                    ImGuiMCP::Text("Being taken: tip %.1f units in | hole %.0f%% | rim %+.2f%s", dn.depth, dn.hole * 100.0f, dn.ring, dn.held ? " | held" : "");
+                    if (dn.off >= 0.0f) ImGuiMCP::Text("  shaft %.1f units off the hole's centre", dn.off);
+                }
                 ImGuiMCP::TextUnformatted(Drip::Status(a).c_str());
                 ImGuiMCP::TextUnformatted(Virgin::Status(a).c_str());
             }
@@ -2998,7 +3005,11 @@ namespace Colour {
         ImGuiMCP::Text("Gape %.0f%%   Looseness %.0f%%   Schlong shine %.0f%%", st.gape * 100, st.loose * 100, st.schlong * 100);
         ImGuiMCP::Text("This round: %d partner(s), %.0f s of penetration", st.partners, st.secs);
         if (const auto dn = Engine::DuringOf(a->GetFormID()); dn.depth > -50.0f)
-            ImGuiMCP::Text("Being taken: the tip is %.1f units in, the hole opened %.0f%%, the rim %+.2f units out", dn.depth, dn.hole * 100.0f, dn.ring);
+        {
+            ImGuiMCP::Text("Being taken: the tip is %.1f units in, the hole opened %.0f%%, the rim %+.2f units out%s", dn.depth, dn.hole * 100.0f, dn.ring,
+                           dn.held ? " (held in: the bones alone lost him)" : "");
+            if (dn.off >= 0.0f) ImGuiMCP::Text("  the shaft is %.1f units off the hole's centre at the entrance", dn.off);
+        }
         ImGuiMCP::TextUnformatted(Drip::Status(a).c_str());
         ImGuiMCP::TextUnformatted(Virgin::Status(a).c_str());
 

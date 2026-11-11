@@ -40,7 +40,8 @@ namespace Fluid {
     // the same at several depths along his canal at once, and in four directions from the canal's centre (right, up,
     // left, down): an oval or off-centre shaft opens each side to its own extent. -1 = no schlong at that depth.
     // q[k]: how far the shaft reaches in direction k (angle k * 360 / nDirs from 'right' towards 'up'), up to 16 directions
-    struct Slice { float r = -1.0f; float q[16]{}; };
+    struct Slice { float r = -1.0f; float q[16]{}; float cx = 0.0f, cy = 0.0f; };   // cx / cy: the shaft's centre off his canal centre (right / up)
     std::vector<Slice> SlicesAt(RE::Actor* giver, const RE::NiPoint3& origin, const RE::NiPoint3& axis, const RE::NiPoint3& right,
-                                const RE::NiPoint3& up, const std::vector<float>& depths, int nDirs = 4);
+                                const RE::NiPoint3& up, const std::vector<float>& depths, int nDirs = 4,
+                                float maxSide = 0.0f);   // > 0: only schlong vertices this close to his canal's centre line (world units)
 }

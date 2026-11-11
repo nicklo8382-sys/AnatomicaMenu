@@ -2450,7 +2450,7 @@ namespace Fluid {
         return r[r.size() * 3 / 4];   // the outer part of the slice (a few stray inner vertices do not shrink it)
     }
     std::vector<Slice> SlicesAt(RE::Actor* giver, const RE::NiPoint3& origin, const RE::NiPoint3& axis, const RE::NiPoint3& right,
-                                const RE::NiPoint3& up, const std::vector<float>& depths, int nDirs) {
+                                const RE::NiPoint3& up, const std::vector<float>& depths, int nDirs, float maxSide) {
         std::vector<Slice> out(depths.size());
         nDirs = std::clamp(nDirs, 1, 16);
         if (!giver) return out;
@@ -2476,7 +2476,15 @@ namespace Fluid {
             std::vector<V3> sl;
             for (float band : {0.35f, 0.7f}) {
                 sl.clear();
-                for (const auto& w : G.s.wp) if (std::abs(Dot(w - c, n)) < band) sl.push_back(w);
+                for (const auto& w : G.s.wp) {
+                    const V3 d = w - c;
+                    const float t = Dot(d, n);
+                    if (std::abs(t) >= band) continue;
+                    // the slice plane is endless: without this it also caught his balls, sheath or base wherever the plane
+                    // crossed them, and the hole jumped wide open
+                    if (maxSide > 0.0f && Len(d - n * t) > maxSide) continue;
+                    sl.push_back(w);
+                }
                 if (sl.size() >= 8) break;
             }
             if (sl.size() < 8) continue;
@@ -2488,13 +2496,16 @@ namespace Fluid {
             for (const auto& w : sl) { V3 d = w - m; d = d - n * Dot(d, n); rr.push_back(Len(d)); }
             std::sort(rr.begin(), rr.end());
             out[k].r = rr[rr.size() * 3 / 4];
+            out[k].cx = Dot(m - c, rt);
+            out[k].cy = Dot(m - c, upv);
             // each side: how far the shaft reaches that way from HIS canal's centre (off-centre counts)
             for (int q = 0; q < nDirs; ++q) {
                 std::vector<float> e;
-                for (const auto& w : sl) { const float p = Dot(w - c, dirs[q]); if (p > 0.0f) e.push_back(p); }
-                if (e.empty()) { out[k].q[q] = 0.0f; continue; }
+                // how far the shaft reaches that way (its near-outermost point; negative = it is all on the other side),
+                // so the extent from a moved hole centre is simply this minus the move
+                for (const auto& w : sl) e.push_back(Dot(w - c, dirs[q]));
                 std::sort(e.begin(), e.end());
-                out[k].q[q] = e[std::min(e.size() - 1, e.size() * 9 / 10)];
+                out[k].q[q] = e[std::min(e.size() - 1, e.size() * 19 / 20)];
             }
         }
         return out;

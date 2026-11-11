@@ -18,6 +18,8 @@ namespace During {
         float canal = 1.0f;       // open the inside (Anatomica Canal) round the schlong while it is in him
         bool holeFollow = true;   // the hole opens to the schlong's own thickness where it passes (Anatomica Gape)
         float holeSize = 1.0f;    // how snug: 1 = exactly his thickness, more = a little wider
+        bool shift = true;        // the hole moves sideways with the shaft (Anatomica Shift / Shift Deep), not only opens
+        float shiftMax = 2.0f;    // the most it moves (units)
         int holeDetail = 1;       // 0 Normal (4 directions, 3 depths), 1 Fine (8 x 2 rings, 6 depths), 2 Super fine (16 x 3, 10)
         bool ring = true;         // the rim follows the shaft: drawn in on the push, pulled out on the withdraw (Anatomica Pout)
         float grip = 0.6f;        // how strongly it follows the shaft

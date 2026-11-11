@@ -201,6 +201,10 @@ namespace {
         // rings) then the inside depths. All three are kept so a switch eases the old set closed.
         float hv[3][64]{}, hs[3][64]{};
         bool hsInit = false;
+        double inLast = -100.0;                  // last time a schlong was found in him by the bones
+        float off = -1.0f;                       // the shaft's centre off his canal centre at the entrance (units)
+        bool held = false;                       // kept in by the hold this tick
+        float shE[2]{}, shD[2]{}, shSent[4]{-100.0f, -100.0f, -100.0f, -100.0f};   // the hole moved with the shaft: entrance, inside (right, up)
         float ringPos = 0.0f;                    // the rim carried along by the shaft (units, + = out of him)
         float depthAvg = -100.0f;                // where the strokes are centred (slow average of the depth)
         float rndH = 0.0f, rndA = 0.0f;          // this stroke's bulge randomness
@@ -215,7 +219,7 @@ namespace {
     std::unordered_map<RE::FormID, St> g_st;
     std::mutex g_gapeMx;                                 // only for GapeOf (the status page asks under other locks)
     std::unordered_map<RE::FormID, float> g_gape;
-    struct DuringNow { float depth = -100.0f, hole = 0.0f, ring = 0.0f; };
+    struct DuringNow { float depth = -100.0f, hole = 0.0f, ring = 0.0f, off = -1.0f; bool held = false; };
     std::unordered_map<RE::FormID, DuringNow> g_during;   // for the status window
     std::atomic<bool> g_queued{false};
     double g_last = 0.0, g_lastCol = 0.0;
@@ -265,6 +269,21 @@ namespace {
                 const int in = Inside(c, o, rad);
                 if (in == 2) { partner = o; break; }
                 if (in == 1 && s.was) { atEntrance = true; atMan = o; }   // only the man already in him (not someone walking past)
+            }
+        // the hold: the bone check alone flickers (a shaft a little off his canal's centre drops out of it every other
+        // moment, and the hole then snapped shut and back). The man who was in him stays in as long as his tip is still
+        // past the entrance and not far off to the side.
+        s.held = false;
+        if (partner) s.inLast = now;
+        else if (c.ok && s.was && s.lastP)
+            for (auto* o : others) {
+                if (o == act || o->GetFormID() != s.lastP) continue;
+                const Tip t = TipIn(c, o);
+                if (!t.ok) break;
+                const V v = t.p - c.h;
+                const float side = Len(v - c.a * Dot(v, c.a)) / c.sc;
+                if (t.depth > 0.3f && side < 7.0f) { partner = o; s.held = true; s.inLast = now; }
+                break;
             }
         float g = 0.0f, gd = 0.0f;
         if (partner) {
@@ -376,6 +395,7 @@ namespace {
             if (!s.hsInit) { for (auto& row : s.hs) for (auto& v : row) v = -100.0f; s.hsInit = true; }
             float want[3][64]{};
             const HoleSet& hset = HoleSetOf(lvl);
+            s.off = -1.0f;
             if (in && c.ok && dw.holeFollow) {
                 V upw = c.u - c.a * Dot(c.u, c.a);
                 const float lu = Len(upw);
@@ -383,25 +403,50 @@ namespace {
                 std::vector<float> depths;
                 for (float d : hset.ringD) depths.push_back(d * c.sc);
                 for (float d : hset.inD) depths.push_back(d * c.sc);
-                const auto sl = Fluid::SlicesAt(in, c.h.ni(), c.a.ni(), c.x.ni(), upw.ni(), depths, hset.n);
+                const auto sl = Fluid::SlicesAt(in, c.h.ni(), c.a.ni(), c.x.ni(), upw.ni(), depths, hset.n, 4.5f * c.sc);
                 const float fallback = 0.95f * std::clamp(Size::For(in).open, 0.7f, 1.6f);   // his mesh could not be read: by his size
-                int i = 0;
-                for (int r = 0; r < hset.rings; ++r)
-                    for (int q = 0; q < hset.n; ++q, ++i) {
-                        // a ring the shaft does not reach yet (only just at the entrance) stays shut, not opened by his size
-                        float e = sl[r].r > 0.0f ? sl[r].q[q] / c.sc : (r == 0 ? fallback : 0.0f);
-                        if (r > 0 && sl[r].r <= 0.0f && sl[0].r <= 0.0f) e = fallback;   // mesh unreadable: every ring by his size
-                        want[lvl][i] = std::clamp((e * dw.holeSize - 0.08f) / 1.35f, 0.0f, 3.0f);
+                s.off = sl[0].r > 0.0f ? std::sqrt(sl[0].cx * sl[0].cx + sl[0].cy * sl[0].cy) / c.sc : -1.0f;
+                // the hole moved with the shaft: the entrance to where the shaft's centre is at the mouth, the inside to where
+                // it is about 5 units in (the canal bends with an angled shaft)
+                float wantE[2]{}, wantD[2]{};
+                if (dw.shift && sl[0].r > 0.0f) {
+                    wantE[0] = sl[0].cx / c.sc; wantE[1] = sl[0].cy / c.sc;
+                    size_t best = 0; float bd = 1e9f;
+                    for (size_t k = 0; k < depths.size(); ++k)
+                        if (sl[k].r > 0.0f && std::abs(depths[k] / c.sc - 5.0f) < bd) { bd = std::abs(depths[k] / c.sc - 5.0f); best = k; }
+                    if (bd < 3.0f) { wantD[0] = sl[best].cx / c.sc; wantD[1] = sl[best].cy / c.sc; }
+                    else { wantD[0] = wantE[0]; wantD[1] = wantE[1]; }
+                    for (float* w : {wantE, wantD}) {
+                        const float l = std::sqrt(w[0] * w[0] + w[1] * w[1]);
+                        if (l > dw.shiftMax && l > 1e-4f) { w[0] *= dw.shiftMax / l; w[1] *= dw.shiftMax / l; }
                     }
+                }
+                for (int j = 0; j < 2; ++j) { ease(s.shE[j], wantE[j], 0.08f, 0.08f); ease(s.shD[j], wantD[j], 0.1f, 0.1f); }
+                auto ss = [](float a0, float a1, float x) { const float t = std::clamp((x - a0) / (a1 - a0), 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t); };
+                int i = 0;
+                for (int r = 0; r < hset.rings; ++r) {
+                    // where the hole's centre now is at this ring's depth (the two shift zones blend from 1.5 to 3.5 units)
+                    const float wd = ss(1.5f, 3.5f, hset.ringD[r]);
+                    const float mx = s.shE[0] * (1.0f - wd) + s.shD[0] * wd, my = s.shE[1] * (1.0f - wd) + s.shD[1] * wd;
+                    for (int q = 0; q < hset.n; ++q, ++i) {
+                        const float ang = 6.2831853f * static_cast<float>(q) / static_cast<float>(hset.n);
+                        // how far the shaft reaches this way from the (moved) centre; a ring the shaft does not reach stays shut
+                        float e = sl[r].r > 0.0f ? sl[r].q[q] / c.sc - (mx * std::cos(ang) + my * std::sin(ang)) : (r == 0 ? fallback : 0.0f);
+                        if (r > 0 && sl[r].r <= 0.0f && sl[0].r <= 0.0f) e = fallback;   // mesh unreadable: every ring by his size
+                        want[lvl][i] = std::clamp((e * dw.holeSize - 0.08f) / 1.35f, 0.0f, 1.8f);
+                    }
+                }
                 if (dw.canal > 0.0f)
                     for (size_t k = 0; k < hset.inD.size(); ++k, ++i) {
                         const auto& x = sl[hset.rings + k];
-                        if (x.r > 0.0f) want[lvl][i] = std::min(dw.canal, 1.0f) * std::clamp((x.r / c.sc * dw.holeSize - 0.1f) / 1.4f, 0.0f, 3.0f);
+                        if (x.r > 0.0f) want[lvl][i] = std::min(dw.canal, 1.0f) * std::clamp((x.r / c.sc * dw.holeSize - 0.1f) / 1.4f, 0.0f, 1.8f);
                     }
+            } else {
+                for (int j = 0; j < 2; ++j) { ease(s.shE[j], 0.0f, 0.08f, 0.25f); ease(s.shD[j], 0.0f, 0.1f, 0.25f); }
             }
             for (int l = 0; l < 3; ++l) {
                 const size_t cnt = HoleSetOf(l).names.size();
-                for (size_t i = 0; i < cnt; ++i) ease(s.hv[l][i], want[l][i], 0.05f, want[l][i] > 0.0f ? 0.12f : (in ? 0.15f : 0.35f));
+                for (size_t i = 0; i < cnt; ++i) ease(s.hv[l][i], want[l][i], 0.12f, want[l][i] > 0.0f ? 0.15f : (in ? 0.2f : 0.35f));   // (full open in 0.12 s: one bad reading cannot jump it)
             }
             {   // for the status window: the entrance ring, on average
                 float sum = 0.0f;
@@ -491,6 +536,10 @@ namespace {
                 }
             };
             send("Anatomica Gape", 0.0f, s.holeSent);   // (2.4 test builds opened the hole with the gape shape: cleared)
+            send("Anatomica Shift Right", s.shE[0], s.shSent[0]);
+            send("Anatomica Shift Up", s.shE[1], s.shSent[1]);
+            send("Anatomica Shift Deep Right", s.shD[0], s.shSent[2]);
+            send("Anatomica Shift Deep Up", s.shD[1], s.shSent[3]);
             for (int l = 0; l < 3; ++l) {
                 const auto& nm = HoleSetOf(l).names;
                 for (size_t i = 0; i < nm.size(); ++i) send(nm[i].c_str(), s.hv[l][i], s.hs[l][i]);
@@ -505,7 +554,7 @@ namespace {
                                              "Anatomica Bulge Flare 1", "Anatomica Bulge Flare 2", "Anatomica Bulge Flare 3",
                                              "Anatomica Bulge Flare 4", "Anatomica Bulge Flare 5", "Anatomica Bulge Flare 6"};
             for (int i = 0; i < 19; ++i) send(kBulge[i], s.bulge[i], s.bulgeSent[i]);
-            { std::lock_guard gl(g_gapeMx); g_during[act->GetFormID()] = {tip.ok ? tip.depth : -100.0f, s.hole, s.ringPos}; }
+            { std::lock_guard gl(g_gapeMx); g_during[act->GetFormID()] = {tip.ok ? tip.depth : -100.0f, s.hole, s.ringPos, s.off, s.held}; }
         }
         if (update && g_morph) g_morph->UpdateModelWeight(act, false);
     }
@@ -1074,7 +1123,7 @@ namespace Engine {
         std::lock_guard gl(g_gapeMx);
         auto it = g_during.find(id);
         if (it == g_during.end()) return {};
-        return {it->second.depth, it->second.hole, it->second.ring};
+        return {it->second.depth, it->second.hole, it->second.ring, it->second.off, it->second.held};
     }
     bool TestBulge(RE::Actor* a, int shape) {
         if (!a || !g_morph) return false;
