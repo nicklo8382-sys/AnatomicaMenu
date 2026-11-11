@@ -37,4 +37,10 @@ namespace Fluid {
     // Reads his schlong mesh (refreshed every few seconds) and skins it as it is now - so a flared head, a knot or a
     // thicker base all count as they pass.
     float GirthAt(RE::Actor* giver, const RE::NiPoint3& point, const RE::NiPoint3& normal);
+    // the same at several depths along his canal at once, and in four directions from the canal's centre (right, up,
+    // left, down): an oval or off-centre shaft opens each side to its own extent. -1 = no schlong at that depth.
+    // q[k]: how far the shaft reaches in direction k (angle k * 360 / nDirs from 'right' towards 'up'), up to 16 directions
+    struct Slice { float r = -1.0f; float q[16]{}; };
+    std::vector<Slice> SlicesAt(RE::Actor* giver, const RE::NiPoint3& origin, const RE::NiPoint3& axis, const RE::NiPoint3& right,
+                                const RE::NiPoint3& up, const std::vector<float>& depths, int nDirs = 4);
 }

@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <array>
 #include <format>
 #include <fstream>
 #include <mutex>
@@ -39,6 +40,33 @@
 //  ~10 checks a second for a handful of men: a few bone positions and some vector maths each - microseconds.
 // ---------------------------------------------------------------------------------------------------------------
 namespace {
+    // the tight-follow slider sets (BodySlide: hole4.py = Normal, hole5.py = Fine / Super fine). Depths are mesh units along
+    // his canal (scaled by his size at run time): where each ring / inside piece is measured on the schlong.
+    struct HoleSet {
+        int n = 4, rings = 1;
+        std::vector<float> ringD, inD;
+        std::vector<std::string> names;   // rings * n hole pieces, then the inside pieces
+    };
+    std::array<HoleSet, 3> MakeHoleSets() {
+        std::array<HoleSet, 3> x;
+        x[0].n = 4; x[0].rings = 1; x[0].ringD = {0.0f}; x[0].inD = {2.9f, 5.1f, 6.8f};
+        x[0].names = {"Anatomica Hole Right", "Anatomica Hole Up", "Anatomica Hole Left", "Anatomica Hole Down",
+                      "Anatomica Inside 1", "Anatomica Inside 2", "Anatomica Inside 3"};
+        x[1].n = 8; x[1].rings = 2; x[1].ringD = {0.0f, 1.6f}; x[1].inD = {2.65f, 3.55f, 4.45f, 5.35f, 6.25f, 7.15f};
+        x[2].n = 16; x[2].rings = 3; x[2].ringD = {0.0f, 1.25f, 2.15f};
+        for (int i = 0; i < 10; ++i) x[2].inD.push_back(2.85f + 0.5f * static_cast<float>(i));
+        for (int l = 1; l < 3; ++l) {
+            const char* pre = l == 1 ? "Anatomica Fine" : "Anatomica XFine";
+            for (int r = 0; r < x[l].rings; ++r)
+                for (int q = 0; q < x[l].n; ++q) x[l].names.push_back(std::format("{} Hole {}{}", pre, "ABC"[r], q + 1));
+            for (size_t j = 0; j < x[l].inD.size(); ++j) x[l].names.push_back(std::format("{} Inside {}", pre, j + 1));
+        }
+        return x;
+    }
+    const HoleSet& HoleSetOf(int lvl) {
+        static const std::array<HoleSet, 3> sets = MakeHoleSets();
+        return sets[std::clamp(lvl, 0, 2)];
+    }
     using clk = std::chrono::steady_clock;
     double Now() { return std::chrono::duration<double>(clk::now().time_since_epoch()).count(); }
     std::mt19937 g_rng{std::random_device{}()};
@@ -168,7 +196,11 @@ namespace {
         float depth = -100.0f;                   // how deep the schlong in him is (last tick), for the withdraw
         float pout = 0.0f, canal = 0.0f, bulge[19]{};   // During sex page: rim, open inside, belly bulge (Seg 1-6, Head 1-6, Knot, Flare 1-6)
         float pulse = 0.0f, bulgeDil = 0.0f;     // thrust pulse; how worked he was while it bulged (lingering)
-        float hole = 0.0f, holeSent = -100.0f;     // the hole opened to the schlong's thickness (Anatomica Gape, AnatomicaDuring)
+        float hole = 0.0f, holeSent = -100.0f;
+        // the hole following the schlong, per detail level (Normal / Fine / Super fine): the entrance rings (directions x
+        // rings) then the inside depths. All three are kept so a switch eases the old set closed.
+        float hv[3][64]{}, hs[3][64]{};
+        bool hsInit = false;
         float ringPos = 0.0f;                    // the rim carried along by the shaft (units, + = out of him)
         float depthAvg = -100.0f;                // where the strokes are centred (slow average of the depth)
         float rndH = 0.0f, rndA = 0.0f;          // this stroke's bulge randomness
@@ -335,19 +367,49 @@ namespace {
             auto ease = [&](float& v, float want, float up, float down) {
                 v = want > v ? std::min(want, v + dt / up) : std::max(want, v - dt / down);
             };
-            // the hole: as wide as the schlong is where it passes through him (a flared head, a thick base, a knot...)
-            float holeWant = 0.0f;
+            // the hole follows the schlong as tightly as it can: the entrance opened in four directions to the shaft's own
+            // extent (an oval or off-centre shaft opens each side as far as it reaches) and the inside at three depths to its
+            // thickness there (a flared head or a knot widens the inside where it is, it closes again behind it). This replaces
+            // the round opening (Anatomica Gape / Canal) and PPA's own opening; the rim's pull in and out stays.
+            // detail: Normal = 4 directions + 3 depths, Fine = 8 x 2 rings + 6, Super fine = 16 x 3 rings + 10 (During page)
+            const int lvl = std::clamp(dw.holeDetail, 0, 2);
+            if (!s.hsInit) { for (auto& row : s.hs) for (auto& v : row) v = -100.0f; s.hsInit = true; }
+            float want[3][64]{};
+            const HoleSet& hset = HoleSetOf(lvl);
             if (in && c.ok && dw.holeFollow) {
-                float r = Fluid::GirthAt(in, c.h.ni(), c.a.ni());
-                if (r > 0.0f) r /= c.sc;
-                else r = 0.95f * std::clamp(Size::For(in).open, 0.7f, 1.6f);   // his mesh could not be read: by his size
-                holeWant = std::clamp((r * dw.holeSize - 0.12f) / 1.35f, 0.0f, 3.0f);   // the gape shape opens the entrance to ~1.45 at 100%
+                V upw = c.u - c.a * Dot(c.u, c.a);
+                const float lu = Len(upw);
+                upw = lu > 1e-4f ? upw * (1.0f / lu) : c.u;
+                std::vector<float> depths;
+                for (float d : hset.ringD) depths.push_back(d * c.sc);
+                for (float d : hset.inD) depths.push_back(d * c.sc);
+                const auto sl = Fluid::SlicesAt(in, c.h.ni(), c.a.ni(), c.x.ni(), upw.ni(), depths, hset.n);
+                const float fallback = 0.95f * std::clamp(Size::For(in).open, 0.7f, 1.6f);   // his mesh could not be read: by his size
+                int i = 0;
+                for (int r = 0; r < hset.rings; ++r)
+                    for (int q = 0; q < hset.n; ++q, ++i) {
+                        // a ring the shaft does not reach yet (only just at the entrance) stays shut, not opened by his size
+                        float e = sl[r].r > 0.0f ? sl[r].q[q] / c.sc : (r == 0 ? fallback : 0.0f);
+                        if (r > 0 && sl[r].r <= 0.0f && sl[0].r <= 0.0f) e = fallback;   // mesh unreadable: every ring by his size
+                        want[lvl][i] = std::clamp((e * dw.holeSize - 0.08f) / 1.35f, 0.0f, 3.0f);
+                    }
+                if (dw.canal > 0.0f)
+                    for (size_t k = 0; k < hset.inD.size(); ++k, ++i) {
+                        const auto& x = sl[hset.rings + k];
+                        if (x.r > 0.0f) want[lvl][i] = std::min(dw.canal, 1.0f) * std::clamp((x.r / c.sc * dw.holeSize - 0.1f) / 1.4f, 0.0f, 3.0f);
+                    }
             }
-            ease(s.hole, holeWant, 0.06f, holeWant > 0.0f ? 0.12f : 0.35f);
-            // the inside opens along its length
-            // (with the hole following the schlong the inside opens with it, by the same amount, so the entrance, the hole and
-            //  the inside move together - Anatomica Canal is the part of the canal the gape shape does not reach)
-            if (dw.holeFollow) s.canal = dw.canal > 0.0f ? s.hole * std::min(dw.canal, 1.0f) : 0.0f;
+            for (int l = 0; l < 3; ++l) {
+                const size_t cnt = HoleSetOf(l).names.size();
+                for (size_t i = 0; i < cnt; ++i) ease(s.hv[l][i], want[l][i], 0.05f, want[l][i] > 0.0f ? 0.12f : (in ? 0.15f : 0.35f));
+            }
+            {   // for the status window: the entrance ring, on average
+                float sum = 0.0f;
+                for (int q = 0; q < hset.n; ++q) sum += s.hv[lvl][q];
+                s.hole = sum / static_cast<float>(hset.n);
+            }
+            // without it: the inside opened round the schlong by his size (the round Anatomica Canal)
+            if (dw.holeFollow) s.canal = 0.0f;
             else ease(s.canal, (partner && dw.canal > 0.0f) ? dw.canal * std::clamp(Size::For(partner).open, 0.7f, 1.4f) : 0.0f, 0.25f, 0.8f);
             // the rim carried along by the shaft: in on the push, out on the withdraw, springing back to rest
             if (tip.ok && dw.ring) {
@@ -428,7 +490,11 @@ namespace {
                     sent = v;
                 }
             };
-            send("Anatomica Gape", s.hole, s.holeSent);
+            send("Anatomica Gape", 0.0f, s.holeSent);   // (2.4 test builds opened the hole with the gape shape: cleared)
+            for (int l = 0; l < 3; ++l) {
+                const auto& nm = HoleSetOf(l).names;
+                for (size_t i = 0; i < nm.size(); ++i) send(nm[i].c_str(), s.hv[l][i], s.hs[l][i]);
+            }
             send("Anatomica Canal", s.canal, s.canalSent);
             send("Anatomica Pout", s.ringPos, s.poutSent);
             static const char* kBulge[19] = {"Anatomica Bulge Seg 1", "Anatomica Bulge Seg 2", "Anatomica Bulge Seg 3",

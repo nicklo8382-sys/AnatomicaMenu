@@ -148,6 +148,8 @@ namespace During {
         };
         B("OpenInside", g_canalOn); F("OpenInsideAmount", g_w.canal, 0.0f, 1.5f);
         B("HoleFollows", g_w.holeFollow); F("HoleSize", g_w.holeSize, 0.5f, 1.6f);
+        if (save) ini.SetLongValue(S, "HoleDetail", g_w.holeDetail);
+        else g_w.holeDetail = std::clamp(static_cast<int>(ini.GetLongValue(S, "HoleDetail", g_w.holeDetail)), 0, 2);
         B("RingFollows", g_w.ring); F("RingGrip", g_w.grip, 0.0f, 1.5f); F("RingMaxOut", g_w.maxOut, 0.0f, 3.0f);
         F("RingMaxIn", g_w.maxIn, 0.0f, 3.0f); F("RingGrowExtra", g_w.grow, 0.0f, 2.0f);
         B("Bulge", g_bulgeOn); F("BulgeAmount", g_w.bulge, 0.0f, 3.0f); F("BulgeStart", g_w.bulgeStart, 2.0f, 30.0f);
@@ -258,18 +260,31 @@ namespace During {
             bool ch = false;
             std::lock_guard lk(g_wmx);
             ch |= ImGuiMCP::Checkbox("Open the inside round the schlong", &g_canalOn);
-            Help("While a schlong is in him the canal opens along its whole length, so the shaft no longer pushes through the "
-                 "inside walls. With \"The hole follows the schlong\" on, the inside opens together with the hole, by the same "
-                 "amount (the slider caps it). Recommended on.");
+            Help("While a schlong is in him the canal opens along its length, so the shaft no longer pushes through the inside "
+                 "walls. With \"The hole follows the schlong\" on it follows the shaft's own thickness at each depth (the slider "
+                 "caps it); off, it opens by his size. Recommended on.");
             if (g_canalOn) {
                 float pct = g_w.canal * 100.0f;
                 if (ImGuiMCP::SliderFloat("How wide inside", &pct, 0.0f, 150.0f, "%.0f%%")) { g_w.canal = pct / 100.0f; ch = true; }
             }
             ch |= ImGuiMCP::Checkbox("The hole follows the schlong", &g_w.holeFollow);
-            Help("The hole opens to the schlong's own thickness where it passes through him, all the time: a thin shaft with a "
-                 "flared head opens him wide for the head and closes round the shaft behind it, a thick base or a knot stretches "
-                 "him as it goes in. Off = PPA opens him to one fixed size (How tight he is, above). Saving to PPA with this on "
-                 "keeps PPA's own opening at almost none - press F5 in game after.");
+            Help("The hole follows the schlong as tightly as it can, all the time. The entrance opens in four directions to "
+                 "how far the shaft reaches each way (an oval or off-centre shaft opens it to its own shape), and the inside opens "
+                 "at three depths to its thickness there (a flared head or a knot widens the inside where it is and it closes "
+                 "behind it). This replaces the round opening and PPA's own opening (kept at almost none - F5 in game after "
+                 "saving to PPA); the rim's pull in and out still works. Uses the Anatomica Hole / Inside sliders. Off = PPA "
+                 "opens him to one fixed size (How tight he is, above).");
+            if (g_w.holeFollow) {
+                static const char* kDetail[3] = {"Normal (4 directions, 3 depths)", "Fine (8 directions x 2 rings, 6 depths)",
+                                                 "Super fine (16 directions x 3 rings, 10 depths) - testing"};
+                ch |= ImGuiMCP::Combo("Detail", &g_w.holeDetail, kDetail, 3);
+                Help("How finely the hole is fitted to the schlong. Normal = the entrance in four directions and the inside at "
+                     "three depths. Fine = eight directions in two rings at the entrance (the first part inside keeps the "
+                     "shaft's shape too) and six depths inside. Super fine = sixteen directions in three rings and ten depths: "
+                     "closest to the shaft, but more morph updates each moment and it can twitch on low-poly schlongs - mainly "
+                     "for testing. Each level has its own sliders in BodySlide (Anatomica Hole / Fine / XFine): rebuild with "
+                     "Build Morphs.");
+            }
             if (g_w.holeFollow) {
                 float pct = g_w.holeSize * 100.0f;
                 if (ImGuiMCP::SliderFloat("How snug", &pct, 50.0f, 160.0f, "%.0f%%")) { g_w.holeSize = pct / 100.0f; ch = true; }

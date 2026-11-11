@@ -2449,4 +2449,54 @@ namespace Fluid {
         std::sort(r.begin(), r.end());
         return r[r.size() * 3 / 4];   // the outer part of the slice (a few stray inner vertices do not shrink it)
     }
+    std::vector<Slice> SlicesAt(RE::Actor* giver, const RE::NiPoint3& origin, const RE::NiPoint3& axis, const RE::NiPoint3& right,
+                                const RE::NiPoint3& up, const std::vector<float>& depths, int nDirs) {
+        std::vector<Slice> out(depths.size());
+        nDirs = std::clamp(nDirs, 1, 16);
+        if (!giver) return out;
+        std::lock_guard lk(g_girthMx);
+        std::uint32_t most = 0;
+        RE::BSGeometry* geo = SchlongGeo(giver, &most);
+        if (!geo) return out;
+        Girth& G = g_girth[giver->GetFormID()];
+        const double now = Now();
+        if (G.s.geo.get() != geo || now - G.readAt > 8.0) {
+            G.s.Read(geo, [](const V3&) { return true; }, std::max(1, static_cast<int>(most / 1500)));
+            G.readAt = now;
+        }
+        if (!G.s.ok || !G.s.Pose()) return out;
+        const V3 o(origin), n = Norm(V3(axis)), rt = Norm(V3(right)), upv = Norm(V3(up));
+        V3 dirs[16];
+        for (int q = 0; q < nDirs; ++q) {
+            const float t = 6.2831853f * static_cast<float>(q) / static_cast<float>(nDirs);
+            dirs[q] = rt * std::cos(t) + upv * std::sin(t);
+        }
+        for (size_t k = 0; k < depths.size(); ++k) {
+            const V3 c = o + n * depths[k];
+            std::vector<V3> sl;
+            for (float band : {0.35f, 0.7f}) {
+                sl.clear();
+                for (const auto& w : G.s.wp) if (std::abs(Dot(w - c, n)) < band) sl.push_back(w);
+                if (sl.size() >= 8) break;
+            }
+            if (sl.size() < 8) continue;
+            // the whole slice: its spread round its own centre
+            V3 m;
+            for (const auto& w : sl) m += w;
+            m = m / static_cast<float>(sl.size());
+            std::vector<float> rr;
+            for (const auto& w : sl) { V3 d = w - m; d = d - n * Dot(d, n); rr.push_back(Len(d)); }
+            std::sort(rr.begin(), rr.end());
+            out[k].r = rr[rr.size() * 3 / 4];
+            // each side: how far the shaft reaches that way from HIS canal's centre (off-centre counts)
+            for (int q = 0; q < nDirs; ++q) {
+                std::vector<float> e;
+                for (const auto& w : sl) { const float p = Dot(w - c, dirs[q]); if (p > 0.0f) e.push_back(p); }
+                if (e.empty()) { out[k].q[q] = 0.0f; continue; }
+                std::sort(e.begin(), e.end());
+                out[k].q[q] = e[std::min(e.size() - 1, e.size() * 9 / 10)];
+            }
+        }
+        return out;
+    }
 }
