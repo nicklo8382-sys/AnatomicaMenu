@@ -308,15 +308,16 @@ namespace During {
                 ch |= ImGuiMCP::Combo("Bulge shape", &g_w.bulgeShape, shapes, 6);
                 Help("From his schlong's shape: knotted -> knot, flared -> big head, tentacle -> tentacle, L / XL and creatures -> the "
                      "whole shaft, anything else -> a bump at the tip.\n"
-                     "The others pick one shape for everyone. The shaft, big head, knot and tentacle are the outline of a schlong up "
-                     "his belly (Anatomica Bulge <shape> 1-3 sliders), longer the deeper the tip goes; the bump is a round lump "
-                     "that rises with the tip.");
+                     "The others pick one shape for everyone. It is built from six sections up his belly that fill one after "
+                     "another (Anatomica Bulge Seg 1-6), a head that rolls along at the front (round: Head 1-6, flared horse head: "
+                     "Flare 1-6) and a knot low down (Knot).");
                 float rnd = g_w.bulgeRandom * 100.0f;
                 if (ImGuiMCP::SliderFloat("Randomness", &rnd, 0.0f, 100.0f, "%.0f%%")) { g_w.bulgeRandom = rnd / 100.0f; ch = true; }
                 Help("Each stroke is a little different - how high it rises and how big it gets. 0% = the same every stroke.");
                 ch |= ImGuiMCP::SliderFloat("Shows from this deep", &g_w.bulgeStart, 2.0f, 30.0f, "%.0f units");
-                Help("How far in the tip has to be (game units, about 1.4 cm each) before the bulge starts; it grows over the "
-                     "next 5 units. Lower = even average schlongs show; higher = only very long ones.");
+                Help("How far in the tip has to be (game units, about 1.4 cm each) before the bulge starts. Then it fills up his "
+                     "belly over the next 10 units: section by section from the bottom, the head rolling up ahead of it. Lower = "
+                     "even average schlongs show; higher = only very long ones.");
                 ch |= ImGuiMCP::Checkbox("Only from big partners (L, XL and creatures)", &g_w.bulgeBig);
                 Help("Needs The New Gentleman for the size (creatures always count).");
                 {

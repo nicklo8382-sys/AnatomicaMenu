@@ -166,18 +166,17 @@ namespace {
         RE::FormID szFirst = 0;   // the round's first partner (his size can still be on its way from TNG)
         float donut = 0.0f, donutSent = -1.0f;   // During sex page: the puffy rim while he is taken
         float depth = -100.0f;                   // how deep the schlong in him is (last tick), for the withdraw
-        float pout = 0.0f, canal = 0.0f, bulge[5]{};   // During sex page: suck, open inside, belly bulge
+        float pout = 0.0f, canal = 0.0f, bulge[19]{};   // During sex page: rim, open inside, belly bulge (Seg 1-6, Head 1-6, Knot, Flare 1-6)
         float pulse = 0.0f, bulgeDil = 0.0f;     // thrust pulse; how worked he was while it bulged (lingering)
         float hole = 0.0f, holeSent = -100.0f;     // the hole opened to the schlong's thickness (Anatomica Gape, AnatomicaDuring)
         float ringPos = 0.0f;                    // the rim carried along by the shaft (units, + = out of him)
         float depthAvg = -100.0f;                // where the strokes are centred (slow average of the depth)
-        float bshape[12]{};                      // the schlong-shaped bulges (Shaft / Horse / Knot / Tentacle 1-3)
-        float bshapeSent[12]{-100.0f, -100.0f, -100.0f, -100.0f, -100.0f, -100.0f, -100.0f, -100.0f, -100.0f, -100.0f, -100.0f, -100.0f};
         float rndH = 0.0f, rndA = 0.0f;          // this stroke's bulge randomness
         float lastVel = 0.0f;
         bool ringSwellCleared = false;
         double bulgeLast = -100.0;               // last time it bulged
-        float poutSent = -100.0f, canalSent = -100.0f, bulgeSent[5]{-100.0f, -100.0f, -100.0f, -100.0f, -100.0f};
+        float poutSent = -100.0f, canalSent = -100.0f, bulgeSent[19]{-100.0f, -100.0f, -100.0f, -100.0f, -100.0f, -100.0f, -100.0f, -100.0f, -100.0f, -100.0f, -100.0f, -100.0f, -100.0f,
+                                                                       -100.0f, -100.0f, -100.0f, -100.0f, -100.0f, -100.0f};
         double testBulge = 0.0; int testShape = 1;   // Testing page: show the bulge
     };
     std::mutex g_mx;
@@ -364,8 +363,9 @@ namespace {
                 if (std::abs(s.ringPos) < 0.01f) s.ringPos = 0.0f;
             }
             // belly bulge
-            float bw[5]{};
-            float s_bw[12]{};
+            // belly bulge: six segments that fill one after another from the base (Seg 1 must be full before Seg 2 starts...),
+            // a head that rolls along at the end of the filled part (Head 1-6, neighbours blended) and a knot low down
+            float bw[19]{};   // Seg 1-6, Head 1-6, Knot, Flare 1-6
             s.pulse = std::max(0.0f, s.pulse - dt / 0.22f);   // a fast push adds a quick extra bump that dies away at once
             if (vel > 4.0f) s.pulse = std::max(s.pulse, dw.pulse * std::clamp((vel - 4.0f) / 12.0f, 0.0f, 1.0f));
             if (vel > 2.0f && s.lastVel <= 2.0f) {   // a new push: this stroke's randomness
@@ -385,64 +385,41 @@ namespace {
                         shape = w.find("knot") != std::string::npos ? 4 : w.find("flare") != std::string::npos ? 3
                               : w.find("tentacle") != std::string::npos ? 5 : (cat >= 3 ? 2 : 1);
                     }
-                    // how far in, past "shows from" (0-1+), and where the bump is (0 = low on his belly .. 4 = high)
-                    const float p = test ? 0.5f + 0.5f * std::sin(static_cast<float>(now) * 2.0f)
-                                         : std::clamp((tip.depth - dw.bulgeStart) / 7.0f, 0.0f, 1.3f);
+                    // how far in, past "shows from": 0 .. 1 = the whole path filled
+                    const float p = test ? 0.55f + 0.45f * std::sin(static_cast<float>(now) * 1.6f)
+                                         : std::clamp((tip.depth - dw.bulgeStart) / 10.0f, 0.0f, 1.0f);
                     const float A = (test ? 0.6f : dw.bulge * std::clamp(Size::For(partner).open, 0.7f, 1.5f)) *
-                                    std::clamp(p * 2.0f, 0.0f, 1.0f) * (1.0f + s.pulse) * (1.0f + 0.4f * s.rndA);
-                    float hp = std::clamp(p * 4.0f + s.rndH * 0.8f, 0.0f, 4.0f);
-                    if (shape == 5) hp = std::clamp(hp + 1.1f * std::sin(static_cast<float>(now) * 2.3f + static_cast<float>(act->GetFormID() % 7)), 0.0f, 4.0f);
-                    auto bump = [&](float h, float a) {   // a bump at height h (0-4), between the two nearest bulge shapes
-                        h = std::clamp(h, 0.0f, 4.0f);
-                        const int i0 = std::min(3, static_cast<int>(h));
-                        const float fr = h - static_cast<float>(i0);
-                        bw[i0] = std::max(bw[i0], a * (1.0f - fr));
-                        bw[i0 + 1] = std::max(bw[i0 + 1], a * fr);
-                    };
-                    if (A > 0.0f && shape >= 2 && shape <= 5) {   // the outline of a schlong up his belly, longer the deeper
-                        const int base = (shape - 2) * 3;
-                        float sp = std::clamp(p * 3.0f + s.rndH * 0.4f, 0.0f, 3.0f);
-                        if (shape == 5) sp = std::clamp(sp + 0.3f * std::sin(static_cast<float>(now) * 2.3f), 0.0f, 3.0f);
-                        const float big = (shape == 3 || shape == 4) ? 1.15f : 1.0f;
-                        if (sp < 1.0f) s_bw[base] = A * big * sp;
-                        else {
-                            const int i0 = std::min(1, static_cast<int>(sp) - 1);
-                            const float fr = std::clamp(sp - 1.0f - static_cast<float>(i0), 0.0f, 1.0f);
-                            s_bw[base + i0] = A * big * (1.0f - fr);
-                            s_bw[base + i0 + 1] = A * big * fr;
-                        }
-                    } else if (A > 0.0f) {
-                        switch (shape) {
-                            case 2:   // the whole shaft: a column up to the tip
-                                for (int i = 0; i <= static_cast<int>(hp); ++i) bw[i] = std::max(bw[i], A * (0.55f + 0.45f * (hp > 0.0f ? i / hp : 1.0f)));
-                                bump(hp, A);
-                                break;
-                            case 3:   // a big head: large and wide at the tip
-                                bump(hp, A * 1.5f); bump(hp - 1.0f, A * 0.6f); bump(hp + 1.0f, A * 0.6f);
-                                break;
-                            case 4:   // a knot: a big round lump low down once it is in, the tip above it
-                                if (p > 0.3f) { bump(0.4f, A * 1.6f); bump(1.2f, A * 0.9f); }
-                                bump(hp, A * 0.55f);
-                                break;
-                            case 5:   // a tentacle: a wandering bump with a faint trail
-                                bump(hp, A);
-                                for (int i = 0; i < static_cast<int>(hp); ++i) bw[i] = std::max(bw[i], A * 0.35f);
-                                break;
-                            default:  // a bump at the tip
-                                bump(hp, A);
-                                break;
-                        }
-                        if (dw.outline > 0.0f && shape != 2)   // the shaft behind it shows too
-                            for (int i = 0; i < static_cast<int>(hp); ++i) bw[i] = std::max(bw[i], A * dw.outline * 0.5f);
+                                    (1.0f + s.pulse) * (1.0f + 0.4f * s.rndA);
+                    float segK = 1.0f, headK = 0.6f, knotK = 0.0f, wob = 0.0f;
+                    switch (shape) {
+                        case 1: segK = dw.outline * 0.4f; headK = 1.0f; break;   // a bump at the tip (and a faint trail)
+                        case 3: segK = 1.15f; headK = 1.2f; break;                  // big head (horse): the flared head
+                        case 4: knotK = 1.0f; break;                                // knot
+                        case 5: segK = 0.65f; headK = 0.5f; wob = 0.5f; break;      // tentacle: thin, the head wanders
+                        default: break;                                             // the whole shaft
                     }
-                    bulging = A > 0.0f;
+                    float filled = std::clamp(p * 6.0f + s.rndH * 0.6f, 0.0f, 6.0f);
+                    if (wob > 0.0f) filled = std::clamp(filled + wob * std::sin(static_cast<float>(now) * 2.3f + static_cast<float>(act->GetFormID() % 7)), 0.0f, 6.0f);
+                    if (A > 0.0f && filled > 0.0f) {
+                        for (int k = 0; k < 6; ++k) bw[k] = A * segK * std::clamp(filled - static_cast<float>(k), 0.0f, 1.0f);
+                        const int hb = shape == 3 ? 13 : 6;   // the round head, or the flared (horse) one
+                        const float hi = filled - 0.6f;   // head k sits 0.6 of a segment back from the end of segment k + 1
+                        if (hi <= 0.0f) bw[hb] = A * headK * std::clamp(filled / 0.6f, 0.0f, 1.0f);
+                        else {
+                            const int h0 = std::min(4, static_cast<int>(hi));
+                            const float fr = std::clamp(hi - static_cast<float>(h0), 0.0f, 1.0f);
+                            bw[hb + h0] = A * headK * (1.0f - fr);
+                            bw[hb + h0 + 1] = A * headK * fr;
+                        }
+                        if (knotK > 0.0f) bw[12] = A * knotK * std::clamp((filled - 1.2f) / 0.8f, 0.0f, 1.0f);   // once it is in
+                        bulging = true;
+                    }
                 }
             }
             if (bulging) s.bulgeLast = now, s.bulgeDil = std::max(s.bulgeDil, s.dil);
             const float linger = (now - s.bulgeLast < 30.0) ? std::max(0.8f, dw.linger * (0.5f + Smooth(s.bulgeDil))) : 0.8f;
             if (!bulging && now - s.bulgeLast > 30.0) s.bulgeDil = 0.0f;
-            for (int i = 0; i < 5; ++i) ease(s.bulge[i], bw[i], 0.10f, bulging ? 0.25f : linger);
-            for (int i = 0; i < 12; ++i) ease(s.bshape[i], s_bw[i], 0.10f, bulging ? 0.25f : linger);
+            for (int i = 0; i < 19; ++i) ease(s.bulge[i], bw[i], 0.08f, bulging ? 0.25f : linger);
             // (the first time each session it is always sent: a save made mid-scene keeps the morphs it had)
             auto send = [&](const char* morph, float v, float& sent) {
                 if (sent < -50.0f || std::abs(v - sent) > 0.02f || (std::abs(v) < 1e-4f && std::abs(sent) > 1e-4f)) {
@@ -454,13 +431,14 @@ namespace {
             send("Anatomica Gape", s.hole, s.holeSent);
             send("Anatomica Canal", s.canal, s.canalSent);
             send("Anatomica Pout", s.ringPos, s.poutSent);
-            static const char* kBulge[5] = {"Anatomica Bulge 1", "Anatomica Bulge 2", "Anatomica Bulge 3", "Anatomica Bulge 4", "Anatomica Bulge 5"};
-            for (int i = 0; i < 5; ++i) send(kBulge[i], s.bulge[i], s.bulgeSent[i]);
-            static const char* kBShape[12] = {"Anatomica Bulge Shaft 1", "Anatomica Bulge Shaft 2", "Anatomica Bulge Shaft 3",
-                                              "Anatomica Bulge Horse 1", "Anatomica Bulge Horse 2", "Anatomica Bulge Horse 3",
-                                              "Anatomica Bulge Knot 1", "Anatomica Bulge Knot 2", "Anatomica Bulge Knot 3",
-                                              "Anatomica Bulge Tentacle 1", "Anatomica Bulge Tentacle 2", "Anatomica Bulge Tentacle 3"};
-            for (int i = 0; i < 12; ++i) send(kBShape[i], s.bshape[i], s.bshapeSent[i]);
+            static const char* kBulge[19] = {"Anatomica Bulge Seg 1", "Anatomica Bulge Seg 2", "Anatomica Bulge Seg 3",
+                                             "Anatomica Bulge Seg 4", "Anatomica Bulge Seg 5", "Anatomica Bulge Seg 6",
+                                             "Anatomica Bulge Head 1", "Anatomica Bulge Head 2", "Anatomica Bulge Head 3",
+                                             "Anatomica Bulge Head 4", "Anatomica Bulge Head 5", "Anatomica Bulge Head 6",
+                                             "Anatomica Bulge Knot",
+                                             "Anatomica Bulge Flare 1", "Anatomica Bulge Flare 2", "Anatomica Bulge Flare 3",
+                                             "Anatomica Bulge Flare 4", "Anatomica Bulge Flare 5", "Anatomica Bulge Flare 6"};
+            for (int i = 0; i < 19; ++i) send(kBulge[i], s.bulge[i], s.bulgeSent[i]);
             { std::lock_guard gl(g_gapeMx); g_during[act->GetFormID()] = {tip.ok ? tip.depth : -100.0f, s.hole, s.ringPos}; }
         }
         if (update && g_morph) g_morph->UpdateModelWeight(act, false);
