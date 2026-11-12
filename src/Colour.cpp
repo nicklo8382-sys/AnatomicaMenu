@@ -3199,6 +3199,7 @@ namespace Colour {
         g_statusWin = SKSEMenuFramework::AddWindow(RenderStatusWindow, false);
         if (g_statusWin) { g_statusWin->IsOpen = false; g_statusWin->BlockUserInput = false; }
         SKSEMenuFramework::AddInputEvent(FrameworkInput);
+        Engine::RegisterHud();
     }
 
     void __stdcall RenderAfter() {

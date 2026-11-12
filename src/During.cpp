@@ -148,7 +148,7 @@ namespace During {
         };
         B("OpenInside", g_canalOn); F("OpenInsideAmount", g_w.canal, 0.0f, 1.5f);
         B("HoleFollows", g_w.holeFollow); F("HoleSize", g_w.holeSize, 0.5f, 1.6f);
-        B("HoleMoves", g_w.shift); F("HoleMoveMax", g_w.shiftMax, 0.0f, 4.0f);
+        B("HoleMoves", g_w.shift); F("HoleMoveMax", g_w.shiftMax, 0.0f, 8.0f);
         if (save) ini.SetLongValue(S, "HoleDetail", g_w.holeDetail);
         else g_w.holeDetail = std::clamp(static_cast<int>(ini.GetLongValue(S, "HoleDetail", g_w.holeDetail)), 0, 2);
         B("RingFollows", g_w.ring); F("RingGrip", g_w.grip, 0.0f, 1.5f); F("RingMaxOut", g_w.maxOut, 0.0f, 3.0f);
@@ -281,10 +281,15 @@ namespace During {
                      "moves with it and stays tight all round, instead of only stretching towards it. The inside bends with "
                      "an angled shaft. Uses the Anatomica Shift sliders.");
                 if (g_w.shift) {
-                    ch |= ImGuiMCP::SliderFloat("Most it moves", &g_w.shiftMax, 0.0f, 4.0f, "%.1f units");
-                    Help("How far the hole may be dragged from where it sits (game units, about 1.4 cm each). 2 is plenty; "
-                         "past 3 the skin round it stretches a lot.");
+                    ch |= ImGuiMCP::SliderFloat("Most it moves", &g_w.shiftMax, 0.0f, 8.0f, "%.1f units");
+                    Help("How far the hole may be dragged from where it sits (game units, about 1.4 cm each). 4 is the default; "
+                         "past 5 the skin round it stretches a lot.");
                 }
+                ch |= ImGuiMCP::Checkbox("Show the fit outline (testing)", &g_w.fitOutline);
+                Help("Draws over the game, on everyone being taken: GREEN = the outline measured round his shaft (at the "
+                     "entrance and each depth inside), YELLOW = the shape the hole is asked to open to (where the mesh should "
+                     "be), RED dot = the hole's resting centre, BLUE dots = where his shaft's bone line crosses. Green not "
+                     "hugging the schlong = a measuring problem; yellow on green but the mesh not on yellow = a shaping problem.");
                 static const char* kDetail[3] = {"Normal (4 directions, 3 depths)", "Fine (8 directions x 2 rings, 6 depths)",
                                                  "Super fine (16 directions x 3 rings, 10 depths) - testing"};
                 ch |= ImGuiMCP::Combo("Detail", &g_w.holeDetail, kDetail, 3);

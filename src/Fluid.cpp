@@ -2450,7 +2450,7 @@ namespace Fluid {
         return r[r.size() * 3 / 4];   // the outer part of the slice (a few stray inner vertices do not shrink it)
     }
     std::vector<Slice> SlicesAt(RE::Actor* giver, const RE::NiPoint3& origin, const RE::NiPoint3& axis, const RE::NiPoint3& right,
-                                const RE::NiPoint3& up, const std::vector<float>& depths, int nDirs, float maxSide) {
+                                const RE::NiPoint3& up, const std::vector<float>& depths, int nDirs, float maxSide, const std::vector<RE::NiPoint3>* hints, bool outline) {
         std::vector<Slice> out(depths.size());
         nDirs = std::clamp(nDirs, 1, 16);
         if (!giver) return out;
@@ -2473,6 +2473,7 @@ namespace Fluid {
         }
         for (size_t k = 0; k < depths.size(); ++k) {
             const V3 c = o + n * depths[k];
+            const V3 hc = (hints && k < hints->size()) ? V3((*hints)[k]) : c;   // the side filter follows his shaft, not the canal
             std::vector<V3> sl;
             for (float band : {0.35f, 0.7f}) {
                 sl.clear();
@@ -2482,7 +2483,7 @@ namespace Fluid {
                     if (std::abs(t) >= band) continue;
                     // the slice plane is endless: without this it also caught his balls, sheath or base wherever the plane
                     // crossed them, and the hole jumped wide open
-                    if (maxSide > 0.0f && Len(d - n * t) > maxSide) continue;
+                    if (maxSide > 0.0f) { const V3 dh = w - hc; if (Len(dh - n * Dot(dh, n)) > maxSide) continue; }
                     sl.push_back(w);
                 }
                 if (sl.size() >= 8) break;
@@ -2506,6 +2507,18 @@ namespace Fluid {
                 for (const auto& w : sl) e.push_back(Dot(w - c, dirs[q]));
                 std::sort(e.begin(), e.end());
                 out[k].q[q] = e[std::min(e.size() - 1, e.size() * 19 / 20)];
+            }
+            if (outline) {   // the fit outline (During sex page, testing): the same measure in 24 directions
+                std::vector<float> e;
+                for (int q = 0; q < 24; ++q) {
+                    const float t = 6.2831853f * static_cast<float>(q) / 24.0f;
+                    const V3 dq = rt * std::cos(t) + upv * std::sin(t);
+                    e.clear();
+                    for (const auto& w : sl) e.push_back(Dot(w - c, dq));
+                    std::sort(e.begin(), e.end());
+                    out[k].qd[q] = e[std::min(e.size() - 1, e.size() * 19 / 20)];
+                }
+                out[k].hasQd = true;
             }
         }
         return out;
