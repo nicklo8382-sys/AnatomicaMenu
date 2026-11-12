@@ -2449,6 +2449,32 @@ namespace Fluid {
         std::sort(r.begin(), r.end());
         return r[r.size() * 3 / 4];   // the outer part of the slice (a few stray inner vertices do not shrink it)
     }
+    int InTube(RE::Actor* giver, const RE::NiPoint3& origin, const RE::NiPoint3& axis, float radius, float d0, float d1, float* deepest) {
+        if (deepest) *deepest = -1e9f;
+        if (!giver) return 0;
+        std::lock_guard lk(g_girthMx);
+        std::uint32_t most = 0;
+        RE::BSGeometry* geo = SchlongGeo(giver, &most);
+        if (!geo) return 0;
+        Girth& G = g_girth[giver->GetFormID()];
+        const double now = Now();
+        if (G.s.geo.get() != geo || now - G.readAt > 8.0) {
+            G.s.Read(geo, [](const V3&) { return true; }, std::max(1, static_cast<int>(most / 1500)));
+            G.readAt = now;
+        }
+        if (!G.s.ok || !G.s.Pose()) return 0;
+        const V3 o(origin), n = Norm(V3(axis));
+        const float r2 = radius * radius;
+        int cnt = 0;
+        for (const auto& w : G.s.wp) {
+            const V3 d = w - o;
+            const float t = Dot(d, n);
+            if (t < d0 || t > d1) continue;
+            const V3 side = d - n * t;
+            if (Dot(side, side) < r2) { ++cnt; if (deepest && t > *deepest) *deepest = t; }
+        }
+        return cnt;
+    }
     std::vector<Slice> SlicesAt(RE::Actor* giver, const RE::NiPoint3& origin, const RE::NiPoint3& axis, const RE::NiPoint3& right,
                                 const RE::NiPoint3& up, const std::vector<float>& depths, int nDirs, float maxSide, const std::vector<RE::NiPoint3>* hints, bool outline) {
         std::vector<Slice> out(depths.size());
@@ -2476,15 +2502,25 @@ namespace Fluid {
             const V3 hc = (hints && k < hints->size()) ? V3((*hints)[k]) : c;   // the side filter follows his shaft, not the canal
             std::vector<V3> sl;
             for (float band : {0.35f, 0.7f}) {
-                sl.clear();
-                for (const auto& w : G.s.wp) {
-                    const V3 d = w - c;
-                    const float t = Dot(d, n);
-                    if (std::abs(t) >= band) continue;
-                    // the slice plane is endless: without this it also caught his balls, sheath or base wherever the plane
-                    // crossed them, and the hole jumped wide open
-                    if (maxSide > 0.0f) { const V3 dh = w - hc; if (Len(dh - n * Dot(dh, n)) > maxSide) continue; }
-                    sl.push_back(w);
+                // the slice plane is endless: only vertices near the shaft count (not his balls, sheath or base wherever
+                // the plane crosses them). Without a hint: first wide round the canal, then tight round what that found -
+                // the shaft as the mesh is really posed (PPA bends the mesh into him, his bones can be elsewhere).
+                V3 cen = hc;
+                for (int pass = (hints || maxSide <= 0.0f) ? 1 : 0; pass < 2; ++pass) {
+                    const float lim = pass == 0 ? maxSide * 1.8f : maxSide;
+                    sl.clear();
+                    for (const auto& w : G.s.wp) {
+                        const V3 d = w - c;
+                        const float t = Dot(d, n);
+                        if (std::abs(t) >= band) continue;
+                        if (maxSide > 0.0f) { const V3 dh = w - cen; if (Len(dh - n * Dot(dh, n)) > lim) continue; }
+                        sl.push_back(w);
+                    }
+                    if (pass == 0 && !sl.empty()) {
+                        V3 m0;
+                        for (const auto& w : sl) m0 += w;
+                        cen = m0 / static_cast<float>(sl.size());
+                    }
                 }
                 if (sl.size() >= 8) break;
             }

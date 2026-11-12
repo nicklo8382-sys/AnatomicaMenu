@@ -171,26 +171,6 @@ namespace {
     }
     // where o's schlong is: 2 = a bone in the first 8 units of the canal, within rad of its axis;
     // 1 = the tip still at the entrance (just outside it, PPA still spreading the ring round it); 0 = out
-    // where o's shaft (the line of his schlong bones, out to the tip) crosses his canal at depth d (units along it)
-    bool ShaftAt(const Canal& c, RE::Actor* o, float d, V& out) {
-        auto* root = o ? o->Get3D(false) : nullptr;
-        if (!root) return false;
-        static const char* kGen[] = {"NPC Genitals01 [Gen01]", "NPC Genitals02 [Gen02]", "NPC Genitals03 [Gen03]",
-                                     "NPC Genitals04 [Gen04]", "NPC Genitals05 [Gen05]", "NPC Genitals06 [Gen06]"};
-        std::vector<V> pts;
-        for (auto* nm : kGen) if (auto* n = Node(root, nm)) pts.push_back(V(n->world.translate));
-        if (pts.size() < 2) return false;
-        const Tip t = TipIn(c, o);
-        if (t.ok) pts.push_back(t.p);
-        for (size_t k = 0; k + 1 < pts.size(); ++k) {
-            const float ta = Dot(pts[k] - c.h, c.a) / c.sc, tb = Dot(pts[k + 1] - c.h, c.a) / c.sc;
-            if ((ta - d) * (tb - d) <= 0.0f && std::abs(tb - ta) > 1e-4f) {
-                out = pts[k] + (pts[k + 1] - pts[k]) * ((d - ta) / (tb - ta));
-                return true;
-            }
-        }
-        return false;
-    }
     int Inside(const Canal& c, RE::Actor* o, float rad) {
         auto* root = o->Get3D(false);
         if (!root) return 0;
@@ -303,21 +283,16 @@ namespace {
         // the hold: the bone check alone flickers (a shaft a little off his canal's centre drops out of it every other
         // moment, and the hole then snapped shut and back). The man who was in him stays in as long as his tip is still
         // past the entrance and not far off to the side.
-        // Also the first time: a shaft that goes in off to one side never lined up with the bone check at all, so the hole
-        // only opened on the odd thrust that did. Whoever's schlong crosses his entrance near the hole with the tip past it
-        // is in him (the one already in him first).
+        // The bones are not where the schlong is: PPA bends the schlong MESH into his hole and leaves the bones where the
+        // animation put them, so the bone check misses him (or finds him only on the odd thrust that lines up). The mesh is
+        // the truth: whoever has enough of his schlong's actual surface inside the canal is in him (the one already in first).
         s.held = false;
         if (partner) s.inLast = now;
         else if (c.ok) {
             RE::Actor* best = nullptr;
             for (auto* o : others) {
                 if (o == act || act->GetPosition().GetDistance(o->GetPosition()) > 90.0f) continue;
-                const Tip t = TipIn(c, o);
-                if (!t.ok || t.depth < 0.3f || t.depth > 16.0f) continue;
-                V p;
-                if (!ShaftAt(c, o, 0.0f, p)) continue;
-                const V v = p - c.h;
-                if (Len(v - c.a * Dot(v, c.a)) / c.sc > 6.5f) continue;
+                if (Fluid::InTube(o, c.h.ni(), c.a.ni(), 3.2f * c.sc, -0.3f * c.sc, 9.0f * c.sc) < 6) continue;
                 best = o;
                 if (o->GetFormID() == s.lastP) break;
             }
@@ -418,7 +393,16 @@ namespace {
             const During::Want dw = During::Get();
             RE::Actor* in = partner ? partner : atMan;
             Tip tip;
-            if (in && c.ok) tip = TipIn(c, in);
+            if (in && c.ok) {
+                tip = TipIn(c, in);
+                // the real tip: the deepest point of his schlong's mesh inside the canal (PPA bends the mesh, not the bones)
+                float deep = 0.0f;
+                if (Fluid::InTube(in, c.h.ni(), c.a.ni(), 3.2f * c.sc, -0.3f * c.sc, 14.0f * c.sc, &deep) >= 6) {
+                    tip.ok = true;
+                    tip.depth = deep / c.sc;
+                    tip.p = c.h + c.a * deep;
+                }
+            }
             const float vel = (tip.ok && s.depth > -50.0f && dt > 0.0f) ? (tip.depth - s.depth) / dt : 0.0f;   // units / s, > 0 = pushing in
             s.depth = tip.ok ? tip.depth : -100.0f;
             s.reachMax = (tip.ok && in) ? std::max(tip.depth, s.reachMax - dt * 4.0f) : std::max(0.0f, s.reachMax - dt * 8.0f);
@@ -442,12 +426,7 @@ namespace {
                 std::vector<float> depths;
                 for (float d : hset.ringD) depths.push_back(d * c.sc);
                 for (float d : hset.inD) depths.push_back(d * c.sc);
-                std::vector<RE::NiPoint3> hints;
-                for (float d : depths) {
-                    V p;
-                    hints.push_back(ShaftAt(c, in, d / c.sc, p) ? p.ni() : (c.h + c.a * d).ni());
-                }
-                const auto sl = Fluid::SlicesAt(in, c.h.ni(), c.a.ni(), c.x.ni(), upw.ni(), depths, hset.n, 3.8f * c.sc, &hints, dw.fitOutline);
+                const auto sl = Fluid::SlicesAt(in, c.h.ni(), c.a.ni(), c.x.ni(), upw.ni(), depths, hset.n, 3.8f * c.sc, nullptr, dw.fitOutline);
                 const float fallback = 0.95f * std::clamp(Size::For(in).open, 0.7f, 1.6f);   // his mesh could not be read: by his size
                 s.off = sl[0].r > 0.0f ? std::sqrt(sl[0].cx * sl[0].cx + sl[0].cy * sl[0].cy) / c.sc : -1.0f;
                 // the hole moved with the shaft: the entrance to where the shaft's centre is at the mouth, the inside to where
@@ -507,7 +486,8 @@ namespace {
                     FitDbg fd;
                     fd.at = std::chrono::steady_clock::now();
                     fd.red.push_back(c.h.ni());
-                    for (const auto& hp : hints) fd.blue.push_back(hp);
+                    for (size_t k = 0; k < depths.size(); ++k)   // blue: the shaft's centre at each depth, from the mesh
+                        if (sl[k].r > 0.0f) fd.blue.push_back((c.h + c.a * depths[k] + c.x * sl[k].cx + upw * sl[k].cy).ni());
                     const V rt = c.x, upv = upw;
                     auto dirAt = [&](float t) { return rt * std::cos(t) + upv * std::sin(t); };
                     const float wN = 6.2831853f / static_cast<float>(hset.n);
