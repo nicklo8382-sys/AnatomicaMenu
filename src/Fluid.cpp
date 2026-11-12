@@ -2456,6 +2456,34 @@ namespace Fluid {
         if (!g) return "none";
         return std::format("{} ({} verts)", g->name.c_str() ? g->name.c_str() : "?", most);
     }
+    std::string SchlongBones(RE::Actor* giver) {
+        RE::BSGeometry* g = giver ? SchlongGeo(giver) : nullptr;
+        if (!g) return "-";
+        auto* si = g->GetGeometryRuntimeData().skinInstance.get();
+        if (!si || !si->skinData || !si->bones) return "no skin";
+        const std::uint32_t nb = si->skinData->GetBoneCount();
+        std::string out = std::format("{} bones:", nb);
+        for (std::uint32_t b = 0; b < nb && b < 24; ++b) out += std::format(" {}", si->bones[b] ? si->bones[b]->name.c_str() : "null");
+        return out;
+    }
+    std::vector<RE::NiPoint3> SchlongSample(RE::Actor* giver, int n) {
+        std::vector<RE::NiPoint3> out;
+        if (!giver || n <= 0) return out;
+        std::lock_guard lk(g_girthMx);
+        std::uint32_t most = 0;
+        RE::BSGeometry* geo = SchlongGeo(giver, &most);
+        if (!geo) return out;
+        Girth& G = g_girth[giver->GetFormID()];
+        const double now = Now();
+        if (G.s.geo.get() != geo || now - G.readAt > 8.0) {
+            G.s.Read(geo, [](const V3&) { return true; }, std::max(1, static_cast<int>(most / 1500)));
+            G.readAt = now;
+        }
+        if (!G.s.ok || !G.s.Pose()) return out;
+        const size_t step = std::max<size_t>(1, G.s.wp.size() / static_cast<size_t>(n));
+        for (size_t k = 0; k < G.s.wp.size(); k += step) out.push_back({G.s.wp[k].x, G.s.wp[k].y, G.s.wp[k].z});
+        return out;
+    }
     int InTube(RE::Actor* giver, const RE::NiPoint3& origin, const RE::NiPoint3& axis, float radius, float d0, float d1, float* deepest) {
         if (deepest) *deepest = -1e9f;
         if (!giver) return 0;
