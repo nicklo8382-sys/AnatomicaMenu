@@ -288,8 +288,8 @@ namespace During {
                 ch |= ImGuiMCP::Checkbox("Show the fit outline (testing)", &g_w.fitOutline);
                 Help("Draws over the game, on everyone being taken: GREEN = the outline measured round his shaft (at the "
                      "entrance and each depth inside), YELLOW = the shape the hole is asked to open to (where the mesh should "
-                     "be), RED dot = the hole's resting centre, BLUE dots = where his shaft's bone line crosses. Green not "
-                     "hugging the schlong = a measuring problem; yellow on green but the mesh not on yellow = a shaping problem.");
+                     "be), RED dot = the hole's resting centre, BLUE dots = the shaft's centre as measured, MAGENTA dots = his schlong "
+                     "bones as the engine read them, WHITE line = his schlong bones right now as the frame is drawn.");
                 static const char* kDetail[3] = {"Normal (4 directions, 3 depths)", "Fine (8 directions x 2 rings, 6 depths)",
                                                  "Super fine (16 directions x 3 rings, 10 depths) - testing"};
                 ch |= ImGuiMCP::Combo("Detail", &g_w.holeDetail, kDetail, 3);
