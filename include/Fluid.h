@@ -41,6 +41,7 @@ namespace Fluid {
     // left, down): an oval or off-centre shaft opens each side to its own extent. -1 = no schlong at that depth.
     // how many of giver's schlong vertices (as the mesh is actually posed - PPA bends the mesh, not his bones) lie inside
     // a tube round his canal: radius, from depth d0 to d1 (world units along axis)
+    std::string SchlongDesc(RE::Actor* giver);   // testing: which mesh is read as his schlong ("none" = no schlong found)
     int InTube(RE::Actor* giver, const RE::NiPoint3& origin, const RE::NiPoint3& axis, float radius, float d0, float d1,
                float* deepest = nullptr);   // deepest: how far along the axis the deepest of them is (the real tip)
     // q[k]: how far the shaft reaches in direction k (angle k * 360 / nDirs from 'right' towards 'up'), up to 16 directions

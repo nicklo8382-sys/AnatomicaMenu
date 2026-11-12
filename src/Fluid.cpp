@@ -2449,6 +2449,13 @@ namespace Fluid {
         std::sort(r.begin(), r.end());
         return r[r.size() * 3 / 4];   // the outer part of the slice (a few stray inner vertices do not shrink it)
     }
+    std::string SchlongDesc(RE::Actor* giver) {
+        if (!giver) return "none";
+        std::uint32_t most = 0;
+        RE::BSGeometry* g = SchlongGeo(giver, &most);
+        if (!g) return "none";
+        return std::format("{} ({} verts)", g->name.c_str() ? g->name.c_str() : "?", most);
+    }
     int InTube(RE::Actor* giver, const RE::NiPoint3& origin, const RE::NiPoint3& axis, float radius, float d0, float d1, float* deepest) {
         if (deepest) *deepest = -1e9f;
         if (!giver) return 0;

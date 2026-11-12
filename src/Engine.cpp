@@ -150,7 +150,9 @@ namespace {
     // the fit outline (During sex page, testing): drawn over the game by a HUD element
     struct FitDbg {
         std::vector<std::vector<RE::NiPoint3>> green, yellow;
-        std::vector<RE::NiPoint3> red, blue;
+        std::vector<RE::NiPoint3> red, blue, tick;   // tick: his schlong bones where this tick read them
+        RE::FormID giver = 0;
+        std::string label;
         std::chrono::steady_clock::time_point at;
     };
     std::mutex g_dbgMx;
@@ -486,6 +488,24 @@ namespace {
                     FitDbg fd;
                     fd.at = std::chrono::steady_clock::now();
                     fd.red.push_back(c.h.ni());
+                    fd.giver = in->GetFormID();
+                    {
+                        int nb = 0;
+                        if (auto* gr = in->Get3D(false))
+                            for (const char* nm : {"NPC Genitals01 [Gen01]", "NPC Genitals02 [Gen02]", "NPC Genitals03 [Gen03]",
+                                                   "NPC Genitals04 [Gen04]", "NPC Genitals05 [Gen05]", "NPC Genitals06 [Gen06]"})
+                                if (Node(gr, nm)) ++nb;
+                        int ok = 0;
+                        for (const auto& x : sl) if (x.r > 0.0f) ++ok;
+                        const int inTube = Fluid::InTube(in, c.h.ni(), c.a.ni(), 3.2f * c.sc, -0.3f * c.sc, 9.0f * c.sc);
+                        fd.label = std::format("{} taken by {} | found by {} | schlong mesh: {} | bones {}/6 | mesh pts in hole {} | measured {}/{} | tip {:.1f}",
+                                               act->GetName(), in->GetName(), s.held ? "mesh" : "bones", Fluid::SchlongDesc(in), nb, inTube,
+                                               ok, depths.size(), tip.ok ? tip.depth : -99.0f);
+                    }
+                    if (auto* gr = in->Get3D(false))
+                        for (const char* nm : {"NPC Genitals01 [Gen01]", "NPC Genitals02 [Gen02]", "NPC Genitals03 [Gen03]",
+                                               "NPC Genitals04 [Gen04]", "NPC Genitals05 [Gen05]", "NPC Genitals06 [Gen06]"})
+                            if (auto* n = Node(gr, nm)) fd.tick.push_back(n->world.translate);
                     for (size_t k = 0; k < depths.size(); ++k)   // blue: the shaft's centre at each depth, from the mesh
                         if (sl[k].r > 0.0f) fd.blue.push_back((c.h + c.a * depths[k] + c.x * sl[k].cx + upw * sl[k].cy).ni());
                     const V rt = c.x, upv = upw;
@@ -1165,8 +1185,34 @@ namespace Engine {
             const auto& d = it->second;
             for (const auto& g : d.green) loop(g, 0xFF40FF40u, 2.0f);    // ABGR: green
             for (const auto& y : d.yellow) loop(y, 0xFF30E0FFu, 1.5f);   // yellow
-            for (const auto& p : d.red) { ImGuiMCP::ImVec2 o; if (proj(p, o)) ImGuiMCP::ImDrawListManager::AddCircleFilled(dl, o, 4.0f, 0xFF3030FFu, 12); }
+            for (const auto& p : d.red) {
+                ImGuiMCP::ImVec2 o;
+                if (!proj(p, o)) continue;
+                ImGuiMCP::ImDrawListManager::AddCircleFilled(dl, o, 4.0f, 0xFF3030FFu, 12);
+                if (!d.label.empty()) {
+                    const ImGuiMCP::ImVec2 t{o.x + 12.0f, o.y - 30.0f};
+                    ImGuiMCP::ImDrawListManager::AddText(dl, ImGuiMCP::ImVec2{t.x + 1.0f, t.y + 1.0f}, 0xFF000000u, d.label.c_str());
+                    ImGuiMCP::ImDrawListManager::AddText(dl, t, 0xFFFFFFFFu, d.label.c_str());
+                }
+            }
             for (const auto& p : d.blue) { ImGuiMCP::ImVec2 o; if (proj(p, o)) ImGuiMCP::ImDrawListManager::AddCircleFilled(dl, o, 3.0f, 0xFFFF9030u, 12); }
+            // his schlong bones: MAGENTA = where the engine tick read them, WHITE = where they are right now as the frame is
+            // drawn. White on the visible schlong but magenta off it = PPA moves the bones after the tick reads them.
+            for (const auto& p : d.tick) { ImGuiMCP::ImVec2 o; if (proj(p, o)) ImGuiMCP::ImDrawListManager::AddCircleFilled(dl, o, 3.5f, 0xFFFF40FFu, 12); }
+            if (auto* g = d.giver ? RE::TESForm::LookupByID<RE::Actor>(d.giver) : nullptr)
+                if (auto* gr = g->Get3D(false)) {
+                    ImGuiMCP::ImVec2 prev{};
+                    bool have = false;
+                    for (const char* nm : {"NPC Genitals01 [Gen01]", "NPC Genitals02 [Gen02]", "NPC Genitals03 [Gen03]",
+                                           "NPC Genitals04 [Gen04]", "NPC Genitals05 [Gen05]", "NPC Genitals06 [Gen06]"}) {
+                        auto* n = gr->GetObjectByName(RE::BSFixedString(nm));
+                        ImGuiMCP::ImVec2 o;
+                        if (!n || !proj(n->world.translate, o)) { have = false; continue; }
+                        ImGuiMCP::ImDrawListManager::AddCircleFilled(dl, o, 3.0f, 0xFFFFFFFFu, 12);
+                        if (have) ImGuiMCP::ImDrawListManager::AddLine(dl, prev, o, 0xFFFFFFFFu, 1.0f);
+                        prev = o; have = true;
+                    }
+                }
             ++it;
         }
     }
