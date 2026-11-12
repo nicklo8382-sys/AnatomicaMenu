@@ -2484,6 +2484,136 @@ namespace Fluid {
         for (size_t k = 0; k < G.s.wp.size(); k += step) out.push_back({G.s.wp[k].x, G.s.wp[k].y, G.s.wp[k].z});
         return out;
     }
+    SchlongReport ReportSchlong(RE::Actor* giver, const RE::NiPoint3& origin, const RE::NiPoint3& axis, float sc) {
+        SchlongReport R;
+        if (!giver) return R;
+        auto* root = giver->Get3D(false);
+        if (!root) { R.lines.push_back("  no 3D"); return R; }
+        RE::BSGeometry* picked = SchlongGeo(giver);
+        // his schlong bone line
+        std::vector<V3> gen;
+        for (const char* nm : {"NPC Genitals01 [Gen01]", "NPC Genitals02 [Gen02]", "NPC Genitals03 [Gen03]", "NPC Genitals04 [Gen04]",
+                               "NPC Genitals05 [Gen05]", "NPC Genitals06 [Gen06]"})
+            if (auto* n = root->GetObjectByName(RE::BSFixedString(nm))) gen.push_back(V3(n->world.translate));
+        auto distLine = [&](const V3& p) {
+            float best = 1e9f;
+            for (size_t k = 0; k + 1 < gen.size(); ++k) {
+                const V3 a = gen[k], b = gen[k + 1], ab = b - a;
+                const float l2 = Dot(ab, ab);
+                const float t = l2 > 1e-6f ? std::clamp(Dot(p - a, ab) / l2, 0.0f, 1.0f) : 0.0f;
+                best = std::min(best, Len(p - (a + ab * t)));
+            }
+            return best;
+        };
+        const V3 o(origin), ax = Norm(V3(axis));
+        auto inHole = [&](const V3& p) {
+            const V3 d = p - o; const float t = Dot(d, ax);
+            return t > -0.3f * sc && t < 9.0f * sc && Len(d - ax * t) < 3.2f * sc;
+        };
+        RE::BSVisit::TraverseScenegraphGeometries(root, [&](RE::BSGeometry* geo) {
+            auto& rd = geo->GetGeometryRuntimeData();
+            auto* si = rd.skinInstance.get();
+            if (!si || !si->skinData || !si->bones) return RE::BSVisit::BSVisitControl::kContinue;
+            const std::uint32_t nb = si->skinData->GetBoneCount();
+            bool genBone = false;
+            for (std::uint32_t b = 0; b < nb; ++b)
+                if (si->bones[b] && std::strstr(si->bones[b]->name.c_str(), "Genitals")) { genBone = true; break; }
+            if (!genBone) return RE::BSVisit::BSVisitControl::kContinue;
+            RE::NiSkinPartition* sp = si->skinPartition.get();
+            if (!sp) sp = si->skinData->skinPartition.get();
+            bool hidden = false;
+            for (RE::NiAVObject* x = geo; x; x = x->parent) if (x->GetFlags().any(RE::NiAVObject::Flag::kHidden)) { hidden = true; break; }
+            std::string line = std::format("  mesh '{}'{} type {} | {} verts | {} partitions | {} bones | {}{}", geo->name.c_str() ? geo->name.c_str() : "?",
+                geo == picked ? " [PICKED]" : "", static_cast<int>(geo->GetType().get()), sp ? sp->vertexCount : 0, sp ? sp->numPartitions : 0, nb,
+                hidden ? "HIDDEN" : "shown", geo->parent ? std::format(" | under '{}'", geo->parent->name.c_str() ? geo->parent->name.c_str() : "?") : "");
+            if (!sp || sp->numPartitions == 0 || !sp->partitions[0].buffData || !sp->partitions[0].buffData->rawVertexData) {
+                R.lines.push_back(line + " | no vertex data");
+                return RE::BSVisit::BSVisitControl::kContinue;
+            }
+            for (std::uint32_t p = 0; p < sp->numPartitions && p < 6; ++p) line += std::format(" | part{}: {}v {}b", p, sp->partitions[p].vertices, sp->partitions[p].numBones);
+            R.lines.push_back(line);
+            auto& part0 = sp->partitions[0];
+            const auto desc = part0.vertexDesc;
+            std::uint64_t raw = 0;
+            std::memcpy(&raw, &desc, sizeof(raw));
+            const std::uint32_t stride = static_cast<std::uint32_t>(raw & 0xF) * 4;
+            if (stride == 0 || !desc.HasFlag(RE::BSGraphics::Vertex::VF_SKINNED)) { R.lines.push_back("    not skinned vertex data"); return RE::BSVisit::BSVisitControl::kContinue; }
+            const bool full = desc.HasFlag(RE::BSGraphics::Vertex::VF_FULLPREC);
+            const std::uint32_t oP = desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_POSITION);
+            const std::uint32_t oS = desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_SKINNING);
+            const std::uint8_t* d = part0.buffData->rawVertexData;
+            const std::uint32_t count = sp->vertexCount;
+            std::vector<Xf> M(nb);
+            for (std::uint32_t b = 0; b < nb; ++b) M[b] = si->bones[b] ? Mul(Xf(si->bones[b]->world), Xf(si->skinData->GetBoneDataSkinToBone(b))) : Xf();
+            const Xf rp(si->skinData->rootParentToSkin);
+            // dynamic vertex data (a morphable shape keeps its live positions there)
+            const float* dyn = nullptr; std::uint32_t dynStride = 0;
+            if (auto* dts = geo->AsDynamicTriShape()) {
+                auto& dd = dts->GetDynamicTrishapeRuntimeData();
+                if (dd.dynamicData && count) { dyn = static_cast<const float*>(dd.dynamicData); dynStride = dd.dataSize / count / 4; }
+            }
+            auto pos = [&](std::uint32_t i) {
+                const std::uint8_t* q = d + static_cast<size_t>(i) * stride;
+                if (full) { float f[3]; std::memcpy(f, q + oP, 12); return V3(f[0], f[1], f[2]); }
+                std::uint16_t h[3]; std::memcpy(h, q + oP, 6); return V3(Half(h[0]), Half(h[1]), Half(h[2]));
+            };
+            auto skin = [&](std::uint32_t i, const V3& v, const std::uint16_t* remap, std::uint16_t remapN, bool withRP) {
+                const std::uint8_t* q = d + static_cast<size_t>(i) * stride;
+                std::uint16_t hw[4]; std::memcpy(hw, q + oS, 8);
+                std::uint8_t bb[4]; std::memcpy(bb, q + oS + 8, 4);
+                V3 out; float sum = 0.0f;
+                for (int k = 0; k < 4; ++k) {
+                    std::uint32_t b = bb[k];
+                    if (remap) { if (b >= remapN) continue; b = remap[b]; }
+                    if (b >= nb) continue;
+                    const float w = std::max(0.0f, Half(hw[k]));
+                    if (w <= 0.0f) continue;
+                    out += (withRP ? Mul(M[b], rp) : M[b]).Apply(v) * w; sum += w;
+                }
+                return sum > 1e-4f ? out / sum : V3();
+            };
+            std::vector<V3> va[4];
+            const std::uint32_t step = std::max<std::uint32_t>(1, count / 300);
+            for (std::uint32_t i = 0; i < count; i += step) {
+                const V3 v = pos(i);
+                va[0].push_back(skin(i, v, nullptr, 0, false));
+                va[2].push_back(skin(i, v, nullptr, 0, true));
+                if (dyn && dynStride >= 3) va[3].push_back(skin(i, V3(dyn[i * dynStride], dyn[i * dynStride + 1], dyn[i * dynStride + 2]), nullptr, 0, false));
+            }
+            for (std::uint32_t p = 0; p < sp->numPartitions; ++p) {   // B: bone indices as partition-local
+                auto& pt = sp->partitions[p];
+                if (!pt.bones) continue;
+                for (std::uint32_t lv = 0; lv < pt.vertices; lv += step) {
+                    const std::uint32_t g = pt.vertexMap ? pt.vertexMap[lv] : lv;
+                    if (g >= count) continue;
+                    va[1].push_back(skin(g, pos(g), pt.bones, pt.numBones, false));
+                }
+            }
+            static const char* kV[4] = {"A as read now", "B partition bones", "C rootParentToSkin", "D dynamic data"};
+            for (int k = 0; k < 4; ++k) {
+                if (va[k].empty()) { R.lines.push_back(std::format("    {}: -", kV[k])); continue; }
+                std::vector<float> dl;
+                int hole = 0;
+                V3 cen;
+                for (const auto& p : va[k]) { dl.push_back(distLine(p) / sc); if (inHole(p)) ++hole; cen += p; }
+                cen = cen / static_cast<float>(va[k].size());
+                std::sort(dl.begin(), dl.end());
+                const V3 cd = cen - o;
+                R.lines.push_back(std::format("    {}: from his bone line median {:.1f} / max {:.1f} units | in the hole {}/{} | centre {:.1f} units from the hole",
+                    kV[k], dl[dl.size() / 2], dl.back(), hole, va[k].size(), Len(cd) / sc));
+                if (geo == picked) {
+                    const size_t st = std::max<size_t>(1, va[k].size() / 70);
+                    for (size_t j = 0; j < va[k].size(); j += st) R.samples[k].push_back({va[k][j].x, va[k][j].y, va[k][j].z});
+                } else if (k == 0) {
+                    const size_t st = std::max<size_t>(1, va[k].size() / 40);
+                    for (size_t j = 0; j < va[k].size(); j += st) R.others.push_back({va[k][j].x, va[k][j].y, va[k][j].z});
+                }
+            }
+            return RE::BSVisit::BSVisitControl::kContinue;
+        });
+        if (R.lines.empty()) R.lines.push_back("  no mesh skinned to his schlong bones");
+        return R;
+    }
     int InTube(RE::Actor* giver, const RE::NiPoint3& origin, const RE::NiPoint3& axis, float radius, float d0, float d1, float* deepest) {
         if (deepest) *deepest = -1e9f;
         if (!giver) return 0;

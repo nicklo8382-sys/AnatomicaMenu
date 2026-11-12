@@ -155,6 +155,7 @@ namespace {
         std::string label;
         std::vector<std::string> lines;          // everyone near him
         std::vector<RE::NiPoint3> cyan;          // his schlong mesh as the mod reads it
+        std::vector<RE::NiPoint3> var[3], others; // the same read other ways (B orange, C pink, D purple); his other schlong meshes (grey)
         std::chrono::steady_clock::time_point at;
     };
     std::mutex g_dbgMx;
@@ -523,6 +524,13 @@ namespace {
                                 Fluid::InTube(o, c.h.ni(), c.a.ni(), 3.2f * c.sc, -0.3f * c.sc, 9.0f * c.sc), smp.empty() ? -1.0f : near));
                         }
                         fd.lines.push_back("  his schlong mesh is skinned to " + Fluid::SchlongBones(in));
+                        {
+                            auto rep = Fluid::ReportSchlong(in, c.h.ni(), c.a.ni(), c.sc);
+                            for (auto& l : rep.lines) fd.lines.push_back(std::move(l));
+                            fd.cyan = std::move(rep.samples[0]);
+                            for (int k = 0; k < 3; ++k) fd.var[k] = std::move(rep.samples[k + 1]);
+                            fd.others = std::move(rep.others);
+                        }
                         fd.lines.push_back(std::format("  canal: scale {:.2f} | entrance {:.0f},{:.0f},{:.0f} | axis {:.2f},{:.2f},{:.2f}", c.sc, c.h.x, c.h.y, c.h.z, c.a.x, c.a.y, c.a.z));
                         {   // the same once a second in the log (Documents\My Games\Skyrim Special Edition\SKSE\AnatomicaMenu.log)
                             static std::chrono::steady_clock::time_point lastLog{};
@@ -1241,6 +1249,12 @@ namespace Engine {
             // drawn. White on the visible schlong but magenta off it = PPA moves the bones after the tick reads them.
             // CYAN = his schlong mesh as the mod reads it (should sit on the schlong you see)
             for (const auto& p : d.cyan) { ImGuiMCP::ImVec2 o; if (proj(p, o)) ImGuiMCP::ImDrawListManager::AddCircleFilled(dl, o, 2.0f, 0xFFFFFF00u, 6); }
+            // the same mesh read other ways: ORANGE = partition bone lists, PINK = through rootParentToSkin, PURPLE = live
+            // dynamic vertex data; GREY = his other schlong meshes. Whichever colour sits on the schlong you see is right.
+            static const ImGuiMCP::ImU32 kVarCol[3] = {0xFF2090FFu, 0xFFB070FFu, 0xFFFF40A0u};
+            for (int k = 0; k < 3; ++k)
+                for (const auto& p : d.var[k]) { ImGuiMCP::ImVec2 o; if (proj(p, o)) ImGuiMCP::ImDrawListManager::AddCircleFilled(dl, o, 2.0f, kVarCol[k], 6); }
+            for (const auto& p : d.others) { ImGuiMCP::ImVec2 o; if (proj(p, o)) ImGuiMCP::ImDrawListManager::AddCircleFilled(dl, o, 1.5f, 0xFFA0A0A0u, 6); }
             for (const auto& p : d.tick) { ImGuiMCP::ImVec2 o; if (proj(p, o)) ImGuiMCP::ImDrawListManager::AddCircleFilled(dl, o, 3.5f, 0xFFFF40FFu, 12); }
             if (auto* g = d.giver ? RE::TESForm::LookupByID<RE::Actor>(d.giver) : nullptr)
                 if (auto* gr = g->Get3D(false)) {

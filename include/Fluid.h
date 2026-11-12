@@ -43,7 +43,12 @@ namespace Fluid {
     // a tube round his canal: radius, from depth d0 to d1 (world units along axis)
     std::string SchlongDesc(RE::Actor* giver);
     std::string SchlongBones(RE::Actor* giver);   // testing: the bones his schlong mesh is skinned to
-    std::vector<RE::NiPoint3> SchlongSample(RE::Actor* giver, int n);   // testing: n points of his schlong mesh as posed   // testing: which mesh is read as his schlong ("none" = no schlong found)
+    std::vector<RE::NiPoint3> SchlongSample(RE::Actor* giver, int n);   // testing: n points of his schlong mesh as posed
+    // testing: every mesh on giver skinned to his schlong bones, each read four ways (A as the mod does it, B with
+    // per-partition bone lists, C through rootParentToSkin, D from the live dynamic vertex data); lines describe each,
+    // samples[variant] = points of the mesh the mod picks (A-D), others = variant A of every other schlong mesh
+    struct SchlongReport { std::vector<std::string> lines; std::vector<RE::NiPoint3> samples[4]; std::vector<RE::NiPoint3> others; };
+    SchlongReport ReportSchlong(RE::Actor* giver, const RE::NiPoint3& origin, const RE::NiPoint3& axis, float sc);   // testing: which mesh is read as his schlong ("none" = no schlong found)
     int InTube(RE::Actor* giver, const RE::NiPoint3& origin, const RE::NiPoint3& axis, float radius, float d0, float d1,
                float* deepest = nullptr);   // deepest: how far along the axis the deepest of them is (the real tip)
     // q[k]: how far the shaft reaches in direction k (angle k * 360 / nDirs from 'right' towards 'up'), up to 16 directions
