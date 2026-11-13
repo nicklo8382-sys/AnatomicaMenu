@@ -89,6 +89,22 @@ namespace {
         return o;
     }
 
+    // positions are full 32-bit floats when the slot before the next attribute is 16 bytes, whatever the flag says:
+    // skinned shapes (schlongs, the body) come without VF_FULLPREC but store full floats - read as half floats they
+    // landed hundreds of units off and the shaft was never measured
+    bool FullPos(const RE::BSGraphics::VertexDesc& d, std::uint32_t stride) {
+        if (d.HasFlag(RE::BSGraphics::Vertex::VF_FULLPREC)) return true;
+        const std::uint32_t oP = d.GetAttributeOffset(RE::BSGraphics::Vertex::VA_POSITION);
+        std::uint32_t next = stride;
+        for (auto a : {RE::BSGraphics::Vertex::VA_TEXCOORD0, RE::BSGraphics::Vertex::VA_TEXCOORD1, RE::BSGraphics::Vertex::VA_NORMAL,
+                       RE::BSGraphics::Vertex::VA_BINORMAL, RE::BSGraphics::Vertex::VA_COLOR, RE::BSGraphics::Vertex::VA_SKINNING,
+                       RE::BSGraphics::Vertex::VA_EYEDATA}) {
+            if (!d.HasFlag(static_cast<RE::BSGraphics::Vertex::Flags>(1u << static_cast<unsigned>(a)))) continue;
+            const std::uint32_t off = d.GetAttributeOffset(a);
+            if (off > oP && off < next) next = off;
+        }
+        return next - oP >= 16;
+    }
     float Half(std::uint16_t h) {
         const std::uint32_t s = (h >> 15) & 1, e = (h >> 10) & 0x1F, m = h & 0x3FF;
         float v;
@@ -177,7 +193,7 @@ namespace {
             std::memcpy(&raw, &desc, sizeof(raw));
             const std::uint32_t stride_ = static_cast<std::uint32_t>(raw & 0xF) * 4;
             if (stride_ == 0 || !desc.HasFlag(RE::BSGraphics::Vertex::VF_SKINNED)) return false;
-            const bool full = desc.HasFlag(RE::BSGraphics::Vertex::VF_FULLPREC);
+            const bool full = FullPos(desc, stride_);
             const bool hasN = desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL);
             const std::uint32_t oP = desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_POSITION);
             const std::uint32_t oN = desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_NORMAL);
@@ -1547,7 +1563,7 @@ namespace {
         std::uint64_t raw = 0; std::memcpy(&raw, &desc, sizeof(raw));
         const std::uint32_t stride = static_cast<std::uint32_t>(raw & 0xF) * 4;
         if (stride == 0 || !desc.HasFlag(RE::BSGraphics::Vertex::VF_UV)) return {};
-        const bool full = desc.HasFlag(RE::BSGraphics::Vertex::VF_FULLPREC);
+        const bool full = FullPos(desc, stride);
         const std::uint32_t oP = desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_POSITION);
         const std::uint32_t oT = desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_TEXCOORD0);
         const bool skinned = desc.HasFlag(RE::BSGraphics::Vertex::VF_SKINNED);
@@ -2542,7 +2558,7 @@ namespace Fluid {
             std::memcpy(&raw, &desc, sizeof(raw));
             const std::uint32_t stride = static_cast<std::uint32_t>(raw & 0xF) * 4;
             if (stride == 0 || !desc.HasFlag(RE::BSGraphics::Vertex::VF_SKINNED)) { R.lines.push_back("    not skinned vertex data"); return RE::BSVisit::BSVisitControl::kContinue; }
-            const bool full = desc.HasFlag(RE::BSGraphics::Vertex::VF_FULLPREC);
+            const bool full = FullPos(desc, stride);
             const std::uint32_t oP = desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_POSITION);
             const std::uint32_t oS = desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_SKINNING);
             const std::uint8_t* d = part0.buffData->rawVertexData;
