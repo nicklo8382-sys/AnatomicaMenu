@@ -491,8 +491,11 @@ namespace {
                     FitDbg fd;
                     fd.at = std::chrono::steady_clock::now();
                     fd.red.push_back(c.h.ni());
-                    fd.giver = in->GetFormID();
-                    {
+                    // the diagnostics go to the log only (once a second): Documents\My Games\Skyrim Special Edition\SKSE\AnatomicaMenu.log, [fit]
+                    static std::chrono::steady_clock::time_point lastLog{};
+                    const auto tnow = std::chrono::steady_clock::now();
+                    if (tnow - lastLog > std::chrono::seconds(1)) {
+                        lastLog = tnow;
                         int nb = 0;
                         if (auto* gr = in->Get3D(false))
                             for (const char* nm : {"NPC Genitals01 [Gen01]", "NPC Genitals02 [Gen02]", "NPC Genitals03 [Gen03]",
@@ -501,54 +504,27 @@ namespace {
                         int ok = 0;
                         for (const auto& x : sl) if (x.r > 0.0f) ++ok;
                         const int inTube = Fluid::InTube(in, c.h.ni(), c.a.ni(), 3.2f * c.sc, -0.3f * c.sc, 9.0f * c.sc);
-                        fd.cyan = Fluid::SchlongSample(in, 80);
-                        // everyone close: who could be in him and what the mod sees of each
+                        logger::info("[fit] {} taken by {} | found by {} | schlong mesh: {} | bones {}/6 | mesh pts in hole {} | measured {}/{} | tip {:.1f} | hole {:.0f}% | shift {:+.2f},{:+.2f} deep {:+.2f},{:+.2f} | off {:.2f}",
+                                     act->GetName(), in->GetName(), s.held ? "mesh" : "bones", Fluid::SchlongDesc(in), nb, inTube, ok, depths.size(),
+                                     tip.ok ? tip.depth : -99.0f, s.hole * 100.0f, s.shE[0], s.shE[1], s.shD[0], s.shD[1], s.off);
+                        {
+                            std::string vals;
+                            for (size_t k = 0; k < sl.size(); ++k) vals += std::format(" d{:.1f}:r{:.2f}", depths[k] / c.sc, sl[k].r / c.sc);
+                            logger::info("[fit]  measured radius per depth:{}", vals);
+                            std::string sent;
+                            for (size_t k = 0; k < hset.names.size(); ++k) sent += std::format(" {:.2f}", s.hv[lvl][k]);
+                            logger::info("[fit]  sent (detail {}):{}", lvl, sent);
+                        }
                         for (auto* o : others) {
                             if (o == act) continue;
                             const float dist = act->GetPosition().GetDistance(o->GetPosition());
                             if (dist > 90.0f) continue;
-                            int ob = 0;
-                            if (auto* gr = o->Get3D(false))
-                                for (const char* nm : {"NPC Genitals01 [Gen01]", "NPC Genitals02 [Gen02]", "NPC Genitals03 [Gen03]",
-                                                       "NPC Genitals04 [Gen04]", "NPC Genitals05 [Gen05]", "NPC Genitals06 [Gen06]"})
-                                    if (Node(gr, nm)) ++ob;
-                            const auto smp = Fluid::SchlongSample(o, 60);
-                            float meshNear = 1e9f;
-                            for (const auto& q : smp) {
-                                const V v = V(q) - c.h;
-                                const float t = Dot(v, c.a);
-                                meshNear = std::min(meshNear, Len(v - c.a * t) / c.sc + (t < 0.0f ? -t / c.sc : 0.0f));
-                            }
-                            fd.lines.push_back(std::format("  {} {:08X}: {:.0f} away | schlong {} | gen bones {}/6 | bone check {} | mesh pts in hole {} | mesh nearest the hole {:.1f} units",
-                                o->GetName(), o->GetFormID(), dist, Fluid::SchlongDesc(o), ob, Inside(c, o, rad),
-                                Fluid::InTube(o, c.h.ni(), c.a.ni(), 3.2f * c.sc, -0.3f * c.sc, 9.0f * c.sc), smp.empty() ? -1.0f : meshNear));
+                            logger::info("[fit]  {} {:08X}: {:.0f} away | schlong {} | bone check {} | mesh pts in hole {}", o->GetName(), o->GetFormID(), dist,
+                                         Fluid::SchlongDesc(o), Inside(c, o, rad), Fluid::InTube(o, c.h.ni(), c.a.ni(), 3.2f * c.sc, -0.3f * c.sc, 9.0f * c.sc));
                         }
-                        fd.lines.push_back("  his schlong mesh is skinned to " + Fluid::SchlongBones(in));
-                        {
-                            auto rep = Fluid::ReportSchlong(in, c.h.ni(), c.a.ni(), c.sc);
-                            for (auto& l : rep.lines) fd.lines.push_back(std::move(l));
-                            fd.cyan = std::move(rep.samples[0]);
-                            for (int k = 0; k < 3; ++k) fd.var[k] = std::move(rep.samples[k + 1]);
-                            fd.others = std::move(rep.others);
-                        }
-                        fd.lines.push_back(std::format("  canal: scale {:.2f} | entrance {:.0f},{:.0f},{:.0f} | axis {:.2f},{:.2f},{:.2f}", c.sc, c.h.x, c.h.y, c.h.z, c.a.x, c.a.y, c.a.z));
-                        {   // the same once a second in the log (Documents\My Games\Skyrim Special Edition\SKSE\AnatomicaMenu.log)
-                            static std::chrono::steady_clock::time_point lastLog{};
-                            const auto tnow = std::chrono::steady_clock::now();
-                            if (tnow - lastLog > std::chrono::seconds(1)) {
-                                lastLog = tnow;
-                                logger::info("[fit] {}", std::format("{} taken by {} | found by {} | tip {:.1f}", act->GetName(), in->GetName(), s.held ? "mesh" : "bones", tip.ok ? tip.depth : -99.0f));
-                                for (const auto& l : fd.lines) logger::info("[fit]{}", l);
-                            }
-                        }
-                        fd.label = std::format("{} taken by {} | found by {} | schlong mesh: {} | bones {}/6 | mesh pts in hole {} | measured {}/{} | tip {:.1f}",
-                                               act->GetName(), in->GetName(), s.held ? "mesh" : "bones", Fluid::SchlongDesc(in), nb, inTube,
-                                               ok, depths.size(), tip.ok ? tip.depth : -99.0f);
+                        for (const auto& l : Fluid::ReportSchlong(in, c.h.ni(), c.a.ni(), c.sc).lines) logger::info("[fit]{}", l);
+                        logger::info("[fit]  canal: scale {:.2f} | entrance {:.0f},{:.0f},{:.0f} | axis {:.2f},{:.2f},{:.2f}", c.sc, c.h.x, c.h.y, c.h.z, c.a.x, c.a.y, c.a.z);
                     }
-                    if (auto* gr = in->Get3D(false))
-                        for (const char* nm : {"NPC Genitals01 [Gen01]", "NPC Genitals02 [Gen02]", "NPC Genitals03 [Gen03]",
-                                               "NPC Genitals04 [Gen04]", "NPC Genitals05 [Gen05]", "NPC Genitals06 [Gen06]"})
-                            if (auto* n = Node(gr, nm)) fd.tick.push_back(n->world.translate);
                     for (size_t k = 0; k < depths.size(); ++k)   // blue: the shaft's centre at each depth, from the mesh
                         if (sl[k].r > 0.0f) fd.blue.push_back((c.h + c.a * depths[k] + c.x * sl[k].cx + upw * sl[k].cy).ni());
                     const V rt = c.x, upv = upw;
@@ -1228,48 +1204,8 @@ namespace Engine {
             const auto& d = it->second;
             for (const auto& g : d.green) loop(g, 0xFF40FF40u, 2.0f);    // ABGR: green
             for (const auto& y : d.yellow) loop(y, 0xFF30E0FFu, 1.5f);   // yellow
-            for (const auto& p : d.red) {
-                ImGuiMCP::ImVec2 o;
-                if (!proj(p, o)) continue;
-                ImGuiMCP::ImDrawListManager::AddCircleFilled(dl, o, 4.0f, 0xFF3030FFu, 12);
-                if (!d.label.empty()) {
-                    const ImGuiMCP::ImVec2 t{o.x + 12.0f, o.y - 30.0f};
-                    ImGuiMCP::ImDrawListManager::AddText(dl, ImGuiMCP::ImVec2{t.x + 1.0f, t.y + 1.0f}, 0xFF000000u, d.label.c_str());
-                    ImGuiMCP::ImDrawListManager::AddText(dl, t, 0xFFFFFFFFu, d.label.c_str());
-                    float yy = t.y + 18.0f;
-                    for (const auto& l : d.lines) {
-                        ImGuiMCP::ImDrawListManager::AddText(dl, ImGuiMCP::ImVec2{t.x + 1.0f, yy + 1.0f}, 0xFF000000u, l.c_str());
-                        ImGuiMCP::ImDrawListManager::AddText(dl, ImGuiMCP::ImVec2{t.x, yy}, 0xFFE0E0E0u, l.c_str());
-                        yy += 18.0f;
-                    }
-                }
-            }
+            for (const auto& p : d.red) { ImGuiMCP::ImVec2 o; if (proj(p, o)) ImGuiMCP::ImDrawListManager::AddCircleFilled(dl, o, 4.0f, 0xFF3030FFu, 12); }
             for (const auto& p : d.blue) { ImGuiMCP::ImVec2 o; if (proj(p, o)) ImGuiMCP::ImDrawListManager::AddCircleFilled(dl, o, 3.0f, 0xFFFF9030u, 12); }
-            // his schlong bones: MAGENTA = where the engine tick read them, WHITE = where they are right now as the frame is
-            // drawn. White on the visible schlong but magenta off it = PPA moves the bones after the tick reads them.
-            // CYAN = his schlong mesh as the mod reads it (should sit on the schlong you see)
-            for (const auto& p : d.cyan) { ImGuiMCP::ImVec2 o; if (proj(p, o)) ImGuiMCP::ImDrawListManager::AddCircleFilled(dl, o, 2.0f, 0xFFFFFF00u, 6); }
-            // the same mesh read other ways: ORANGE = partition bone lists, PINK = through rootParentToSkin, PURPLE = live
-            // dynamic vertex data; GREY = his other schlong meshes. Whichever colour sits on the schlong you see is right.
-            static const ImGuiMCP::ImU32 kVarCol[3] = {0xFF2090FFu, 0xFFB070FFu, 0xFFFF40A0u};
-            for (int k = 0; k < 3; ++k)
-                for (const auto& p : d.var[k]) { ImGuiMCP::ImVec2 o; if (proj(p, o)) ImGuiMCP::ImDrawListManager::AddCircleFilled(dl, o, 2.0f, kVarCol[k], 6); }
-            for (const auto& p : d.others) { ImGuiMCP::ImVec2 o; if (proj(p, o)) ImGuiMCP::ImDrawListManager::AddCircleFilled(dl, o, 1.5f, 0xFFA0A0A0u, 6); }
-            for (const auto& p : d.tick) { ImGuiMCP::ImVec2 o; if (proj(p, o)) ImGuiMCP::ImDrawListManager::AddCircleFilled(dl, o, 3.5f, 0xFFFF40FFu, 12); }
-            if (auto* g = d.giver ? RE::TESForm::LookupByID<RE::Actor>(d.giver) : nullptr)
-                if (auto* gr = g->Get3D(false)) {
-                    ImGuiMCP::ImVec2 prev{};
-                    bool have = false;
-                    for (const char* nm : {"NPC Genitals01 [Gen01]", "NPC Genitals02 [Gen02]", "NPC Genitals03 [Gen03]",
-                                           "NPC Genitals04 [Gen04]", "NPC Genitals05 [Gen05]", "NPC Genitals06 [Gen06]"}) {
-                        auto* n = gr->GetObjectByName(RE::BSFixedString(nm));
-                        ImGuiMCP::ImVec2 o;
-                        if (!n || !proj(n->world.translate, o)) { have = false; continue; }
-                        ImGuiMCP::ImDrawListManager::AddCircleFilled(dl, o, 3.0f, 0xFFFFFFFFu, 12);
-                        if (have) ImGuiMCP::ImDrawListManager::AddLine(dl, prev, o, 0xFFFFFFFFu, 1.0f);
-                        prev = o; have = true;
-                    }
-                }
             ++it;
         }
     }

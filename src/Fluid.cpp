@@ -2430,7 +2430,27 @@ namespace Fluid {
 
     // ---- the hole follows the schlong (During sex page): its thickness where it passes through his hole
     namespace {
-        struct Girth { Surface s; double readAt = 0.0; };
+        // shaft[i]: the vertex belongs to the shaft (weighted at least half to Genitals01-06) - not the scrotum, the base
+        // skin or the pelvis, which hang across the entrance when he is deep and pulled the measured centre down
+        struct Girth { Surface s; double readAt = 0.0; std::vector<std::uint8_t> shaft; };
+        void ReadGirth(Girth& G, RE::BSGeometry* geo, std::uint32_t most) {
+            G.s.Read(geo, [](const V3&) { return true; }, std::max(1, static_cast<int>(most / 1500)));
+            G.shaft.assign(G.s.v.size(), 1);
+            auto* si = geo ? geo->GetGeometryRuntimeData().skinInstance.get() : nullptr;
+            if (!G.s.ok || !si || !si->skinData || !si->bones) return;
+            const std::uint32_t nb = si->skinData->GetBoneCount();
+            std::vector<std::uint8_t> isShaft(nb, 0);
+            for (std::uint32_t b = 0; b < nb; ++b)
+                if (si->bones[b] && std::strstr(si->bones[b]->name.c_str(), "Genitals0")) isShaft[b] = 1;
+            size_t kept = 0;
+            std::vector<std::uint8_t> m(G.s.v.size(), 0);
+            for (size_t i = 0; i < G.s.v.size(); ++i) {
+                float w = 0.0f;
+                for (int k = 0; k < 4; ++k) if (G.s.bi[i][k] < nb && isShaft[G.s.bi[i][k]]) w += G.s.bw[i][k];
+                if (w >= 0.5f) { m[i] = 1; ++kept; }
+            }
+            if (kept >= 30) G.shaft = std::move(m);   // a schlong not on these bones: keep everything
+        }
         std::unordered_map<RE::FormID, Girth> g_girth;
         std::mutex g_girthMx;
     }
@@ -2443,7 +2463,7 @@ namespace Fluid {
         Girth& G = g_girth[giver->GetFormID()];
         const double now = Now();
         if (G.s.geo.get() != geo || now - G.readAt > 8.0) {
-            G.s.Read(geo, [](const V3&) { return true; }, std::max(1, static_cast<int>(most / 1500)));
+            ReadGirth(G, geo, most);
             G.readAt = now;
         }
         if (!G.s.ok || !G.s.Pose()) return -1.0f;
@@ -2492,7 +2512,7 @@ namespace Fluid {
         Girth& G = g_girth[giver->GetFormID()];
         const double now = Now();
         if (G.s.geo.get() != geo || now - G.readAt > 8.0) {
-            G.s.Read(geo, [](const V3&) { return true; }, std::max(1, static_cast<int>(most / 1500)));
+            ReadGirth(G, geo, most);
             G.readAt = now;
         }
         if (!G.s.ok || !G.s.Pose()) return out;
@@ -2690,14 +2710,16 @@ namespace Fluid {
         Girth& G = g_girth[giver->GetFormID()];
         const double now = Now();
         if (G.s.geo.get() != geo || now - G.readAt > 8.0) {
-            G.s.Read(geo, [](const V3&) { return true; }, std::max(1, static_cast<int>(most / 1500)));
+            ReadGirth(G, geo, most);
             G.readAt = now;
         }
         if (!G.s.ok || !G.s.Pose()) return 0;
         const V3 o(origin), n = Norm(V3(axis));
         const float r2 = radius * radius;
         int cnt = 0;
-        for (const auto& w : G.s.wp) {
+        for (size_t i = 0; i < G.s.wp.size(); ++i) {
+            if (i < G.shaft.size() && !G.shaft[i]) continue;
+            const V3& w = G.s.wp[i];
             const V3 d = w - o;
             const float t = Dot(d, n);
             if (t < d0 || t > d1) continue;
@@ -2718,7 +2740,7 @@ namespace Fluid {
         Girth& G = g_girth[giver->GetFormID()];
         const double now = Now();
         if (G.s.geo.get() != geo || now - G.readAt > 8.0) {
-            G.s.Read(geo, [](const V3&) { return true; }, std::max(1, static_cast<int>(most / 1500)));
+            ReadGirth(G, geo, most);
             G.readAt = now;
         }
         if (!G.s.ok || !G.s.Pose()) return out;
@@ -2740,7 +2762,9 @@ namespace Fluid {
                 for (int pass = (hints || maxSide <= 0.0f) ? 1 : 0; pass < 2; ++pass) {
                     const float lim = pass == 0 ? maxSide * 1.8f : maxSide;
                     sl.clear();
-                    for (const auto& w : G.s.wp) {
+                    for (size_t i = 0; i < G.s.wp.size(); ++i) {
+                        if (i < G.shaft.size() && !G.shaft[i]) continue;
+                        const V3& w = G.s.wp[i];
                         const V3 d = w - c;
                         const float t = Dot(d, n);
                         if (std::abs(t) >= band) continue;
