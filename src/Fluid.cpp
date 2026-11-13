@@ -2519,6 +2519,10 @@ namespace Fluid {
             for (std::uint32_t b = 0; b < nb; ++b)
                 if (si->bones[b] && std::strstr(si->bones[b]->name.c_str(), "Genitals")) { genBone = true; break; }
             if (!genBone) return RE::BSVisit::BSVisitControl::kContinue;
+            {   // RaceMenu overlay copies of the body: identical, only clutter
+                const std::string_view nm = geo->name.c_str() ? geo->name.c_str() : "";
+                if (nm.find("[Ovl") != std::string_view::npos || nm.find("[SOvl") != std::string_view::npos) return RE::BSVisit::BSVisitControl::kContinue;
+            }
             RE::NiSkinPartition* sp = si->skinPartition.get();
             if (!sp) sp = si->skinData->skinPartition.get();
             bool hidden = false;
@@ -2543,6 +2547,24 @@ namespace Fluid {
             const std::uint32_t oS = desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_SKINNING);
             const std::uint8_t* d = part0.buffData->rawVertexData;
             const std::uint32_t count = sp->vertexCount;
+            {   // the raw facts: how the vertex data is laid out, and where the engine itself thinks the mesh is
+                const auto& wb = geo->worldBound;
+                R.lines.push_back(std::format("    raw: desc {:016X} | stride {} | pos at {} | skin at {} | {} | engine bound centre {:.0f},{:.0f},{:.0f} r {:.0f} ({:.1f} units from the hole)",
+                    raw, stride, oP, oS, full ? "full floats" : "half floats", wb.center.x, wb.center.y, wb.center.z, wb.radius, Len(V3(wb.center) - o) / sc));
+                for (std::uint32_t i = 0; i < 3 && i < count; ++i) {
+                    const std::uint8_t* q = d + static_cast<size_t>(i) * stride;
+                    std::string hex;
+                    for (std::uint32_t b = 0; b < stride && b < 48; ++b) hex += std::format("{:02X}", q[b]);
+                    R.lines.push_back(std::format("    v{} bytes {}", i, hex));
+                }
+                if (nb > 0 && si->bones[0]) {
+                    const auto& bw0 = si->bones[0]->world;
+                    const auto& sk0 = si->skinData->GetBoneDataSkinToBone(0);
+                    R.lines.push_back(std::format("    bone0 '{}' world {:.1f},{:.1f},{:.1f} s{:.2f} | skinToBone {:.1f},{:.1f},{:.1f} s{:.2f} | rootParentToSkin {:.1f},{:.1f},{:.1f} s{:.2f}",
+                        si->bones[0]->name.c_str(), bw0.translate.x, bw0.translate.y, bw0.translate.z, bw0.scale, sk0.translate.x, sk0.translate.y, sk0.translate.z, sk0.scale,
+                        si->skinData->rootParentToSkin.translate.x, si->skinData->rootParentToSkin.translate.y, si->skinData->rootParentToSkin.translate.z, si->skinData->rootParentToSkin.scale));
+                }
+            }
             std::vector<Xf> M(nb);
             for (std::uint32_t b = 0; b < nb; ++b) M[b] = si->bones[b] ? Mul(Xf(si->bones[b]->world), Xf(si->skinData->GetBoneDataSkinToBone(b))) : Xf();
             const Xf rp(si->skinData->rootParentToSkin);
@@ -2572,12 +2594,35 @@ namespace Fluid {
                 }
                 return sum > 1e-4f ? out / sum : V3();
             };
-            std::vector<V3> va[4];
+            auto inv = [](const Xf& a) {
+                Xf o;
+                for (int r = 0; r < 3; ++r) for (int c = 0; c < 3; ++c) o.r[r][c] = a.r[c][r];
+                o.s = a.s != 0.0f ? 1.0f / a.s : 1.0f;
+                o.t = o.Rot(a.t * -1.0f) * o.s;
+                return o;
+            };
+            std::vector<Xf> Mi(nb);
+            for (std::uint32_t b = 0; b < nb; ++b) Mi[b] = si->bones[b] ? Mul(Xf(si->bones[b]->world), inv(Xf(si->skinData->GetBoneDataSkinToBone(b)))) : Xf();
+            std::vector<V3> va[6];
             const std::uint32_t step = std::max<std::uint32_t>(1, count / 300);
             for (std::uint32_t i = 0; i < count; i += step) {
                 const V3 v = pos(i);
                 va[0].push_back(skin(i, v, nullptr, 0, false));
                 va[2].push_back(skin(i, v, nullptr, 0, true));
+                va[4].push_back(Xf(geo->world).Apply(v));   // E: no skinning, just the shape's own transform
+                {   // F: the skin transform inverted
+                    const std::uint8_t* q = d + static_cast<size_t>(i) * stride;
+                    std::uint16_t hw[4]; std::memcpy(hw, q + oS, 8);
+                    std::uint8_t bb[4]; std::memcpy(bb, q + oS + 8, 4);
+                    V3 out; float sum = 0.0f;
+                    for (int k = 0; k < 4; ++k) {
+                        if (bb[k] >= nb) continue;
+                        const float w = std::max(0.0f, Half(hw[k]));
+                        if (w <= 0.0f) continue;
+                        out += Mi[bb[k]].Apply(v) * w; sum += w;
+                    }
+                    va[5].push_back(sum > 1e-4f ? out / sum : V3());
+                }
                 if (dyn && dynStride >= 3) va[3].push_back(skin(i, V3(dyn[i * dynStride], dyn[i * dynStride + 1], dyn[i * dynStride + 2]), nullptr, 0, false));
             }
             for (std::uint32_t p = 0; p < sp->numPartitions; ++p) {   // B: bone indices as partition-local
@@ -2589,18 +2634,23 @@ namespace Fluid {
                     va[1].push_back(skin(g, pos(g), pt.bones, pt.numBones, false));
                 }
             }
-            static const char* kV[4] = {"A as read now", "B partition bones", "C rootParentToSkin", "D dynamic data"};
-            for (int k = 0; k < 4; ++k) {
+            static const char* kV[6] = {"A as read now", "B partition bones", "C rootParentToSkin", "D dynamic data", "E no skinning", "F skin inverted"};
+            for (int k = 0; k < 6; ++k) {
                 if (va[k].empty()) { R.lines.push_back(std::format("    {}: -", kV[k])); continue; }
                 std::vector<float> dl;
-                int hole = 0;
+                int hole = 0, bad = 0, n = 0;
                 V3 cen;
-                for (const auto& p : va[k]) { dl.push_back(distLine(p) / sc); if (inHole(p)) ++hole; cen += p; }
-                cen = cen / static_cast<float>(va[k].size());
+                for (const auto& p : va[k]) {
+                    if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) || std::abs(p.x) > 1e6f || std::abs(p.y) > 1e6f || std::abs(p.z) > 1e6f) { ++bad; continue; }
+                    dl.push_back(distLine(p) / sc); if (inHole(p)) ++hole; cen += p; ++n;
+                }
+                if (dl.empty()) { R.lines.push_back(std::format("    {}: all {} points garbage", kV[k], bad)); continue; }
+                cen = cen / static_cast<float>(n);
                 std::sort(dl.begin(), dl.end());
                 const V3 cd = cen - o;
-                R.lines.push_back(std::format("    {}: from his bone line median {:.1f} / max {:.1f} units | in the hole {}/{} | centre {:.1f} units from the hole",
-                    kV[k], dl[dl.size() / 2], dl.back(), hole, va[k].size(), Len(cd) / sc));
+                R.lines.push_back(std::format("    {}: from his bone line median {:.1f} / max {:.1f} units | in the hole {}/{} | garbage {} | centre {:.0f},{:.0f},{:.0f} = {:.1f} units from the hole",
+                    kV[k], dl[dl.size() / 2], dl.back(), hole, va[k].size(), bad, cen.x, cen.y, cen.z, Len(cd) / sc));
+                if (k >= 4) continue;   // E / F: numbers only
                 if (geo == picked) {
                     const size_t st = std::max<size_t>(1, va[k].size() / 70);
                     for (size_t j = 0; j < va[k].size(); j += st) R.samples[k].push_back({va[k][j].x, va[k][j].y, va[k][j].z});
