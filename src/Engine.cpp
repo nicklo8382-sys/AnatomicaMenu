@@ -266,7 +266,15 @@ namespace {
         const float decay = std::max(Glob(0x804, 30.0f), 0.5f), during = Glob(0x805, 0.5f), multi = std::max(Glob(0x807, 2.0f), 1.0f);
         const float rad = Glob(0x808, 3.0f), duringHold = Glob(0x80C, 2.0f);
         const Virgin::Mods vm = Virgin::For(act->GetFormID());   // his virginity / experience (Virginity page)
-        const Canal c = CanalOf(act);
+        Canal c = CanalOf(act);
+        if (c.ok) {   // the hole where his rim's bones really carry it (PPA drags it to the shaft), not where the pelvis alone puts it
+            RE::NiPoint3 hc, hd;
+            if (Fluid::HoleFrame(act, hc, hd)) {
+                V a = V(hd) - V(hc);
+                const float la = Len(a);
+                if (la > 0.5f * c.sc) { c.h = V(hc); c.a = a * (1.0f / la); }
+            }
+        }
         RE::Actor* partner = nullptr;
         RE::Actor* atMan = nullptr;   // the man whose tip is at his entrance
         bool atEntrance = false;   // his tip is right at the hole (an almost-full pull-out): no left-over gape yet

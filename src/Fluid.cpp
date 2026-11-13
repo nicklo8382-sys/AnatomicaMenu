@@ -2728,6 +2728,55 @@ namespace Fluid {
         }
         return cnt;
     }
+    namespace {
+        struct RimCache { RE::NiPointer<RE::BSGeometry> geo; double at = 0.0; std::vector<std::pair<std::uint32_t, float>> w; bool ok = false; };
+        std::unordered_map<RE::FormID, RimCache> g_rim;
+        std::mutex g_rimMx;
+        const V3 kHoleO{0.0f, -4.64f, 62.645f}, kHoleAx{0.0f, 0.7675f, 0.641f};   // bind pose (BodySlide units): the hole and its canal
+    }
+    bool HoleFrame(RE::Actor* a, RE::NiPoint3& centre, RE::NiPoint3& deep) {
+        if (!a) return false;
+        auto* root = a->Get3D(false);
+        if (!root) return false;
+        RE::BSGeometry* rim = nullptr;
+        RE::BSVisit::TraverseScenegraphGeometries(root, [&](RE::BSGeometry* g) {
+            if (g->name == "3BA_AnusRim") { rim = g; return RE::BSVisit::BSVisitControl::kStop; }
+            return RE::BSVisit::BSVisitControl::kContinue;
+        });
+        if (!rim) return false;
+        auto* si = rim->GetGeometryRuntimeData().skinInstance.get();
+        if (!si || !si->skinData || !si->bones) return false;
+        const std::uint32_t nb = si->skinData->GetBoneCount();
+        std::lock_guard lk(g_rimMx);
+        RimCache& C = g_rim[a->GetFormID()];
+        const double now = Now();
+        if (C.geo.get() != rim || now - C.at > 10.0) {   // the rim's average bone weights round the hole (they never change)
+            C.geo = RE::NiPointer<RE::BSGeometry>(rim); C.at = now; C.ok = false; C.w.clear();
+            Surface S;
+            if (S.Read(rim, [](const V3& p) { return Len(p - kHoleO) < 2.5f; }, 1)) {
+                std::vector<float> acc(nb, 0.0f);
+                for (size_t i = 0; i < S.v.size(); ++i)
+                    for (int k = 0; k < 4; ++k) if (S.bi[i][k] < nb) acc[S.bi[i][k]] += S.bw[i][k];
+                float tot = 0.0f;
+                for (float x : acc) tot += x;
+                if (tot > 0.0f)
+                    for (std::uint32_t b = 0; b < nb; ++b) if (acc[b] > 0.0f) C.w.push_back({b, acc[b] / tot});
+                C.ok = !C.w.empty();
+            }
+        }
+        if (!C.ok) return false;
+        V3 pc, pd;
+        for (const auto& [b, w] : C.w) {
+            auto* bone = si->bones[b];
+            if (!bone) return false;
+            const Xf m = Mul(Xf(bone->world), Xf(si->skinData->GetBoneDataSkinToBone(b)));
+            pc += m.Apply(kHoleO) * w;
+            pd += m.Apply(kHoleO + kHoleAx * 4.0f) * w;
+        }
+        centre = {pc.x, pc.y, pc.z};
+        deep = {pd.x, pd.y, pd.z};
+        return true;
+    }
     std::vector<Slice> SlicesAt(RE::Actor* giver, const RE::NiPoint3& origin, const RE::NiPoint3& axis, const RE::NiPoint3& right,
                                 const RE::NiPoint3& up, const std::vector<float>& depths, int nDirs, float maxSide, const std::vector<RE::NiPoint3>* hints, bool outline) {
         std::vector<Slice> out(depths.size());
