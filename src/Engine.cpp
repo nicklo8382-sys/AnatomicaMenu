@@ -513,15 +513,15 @@ namespace {
                                                        "NPC Genitals04 [Gen04]", "NPC Genitals05 [Gen05]", "NPC Genitals06 [Gen06]"})
                                     if (Node(gr, nm)) ++ob;
                             const auto smp = Fluid::SchlongSample(o, 60);
-                            float near = 1e9f;
+                            float meshNear = 1e9f;
                             for (const auto& q : smp) {
                                 const V v = V(q) - c.h;
                                 const float t = Dot(v, c.a);
-                                near = std::min(near, Len(v - c.a * t) / c.sc + (t < 0.0f ? -t / c.sc : 0.0f));
+                                meshNear = std::min(meshNear, Len(v - c.a * t) / c.sc + (t < 0.0f ? -t / c.sc : 0.0f));
                             }
                             fd.lines.push_back(std::format("  {} {:08X}: {:.0f} away | schlong {} | gen bones {}/6 | bone check {} | mesh pts in hole {} | mesh nearest the hole {:.1f} units",
                                 o->GetName(), o->GetFormID(), dist, Fluid::SchlongDesc(o), ob, Inside(c, o, rad),
-                                Fluid::InTube(o, c.h.ni(), c.a.ni(), 3.2f * c.sc, -0.3f * c.sc, 9.0f * c.sc), smp.empty() ? -1.0f : near));
+                                Fluid::InTube(o, c.h.ni(), c.a.ni(), 3.2f * c.sc, -0.3f * c.sc, 9.0f * c.sc), smp.empty() ? -1.0f : meshNear));
                         }
                         fd.lines.push_back("  his schlong mesh is skinned to " + Fluid::SchlongBones(in));
                         {
