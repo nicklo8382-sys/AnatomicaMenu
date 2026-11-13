@@ -41,6 +41,10 @@ namespace Fluid {
     // left, down): an oval or off-centre shaft opens each side to its own extent. -1 = no schlong at that depth.
     // how many of giver's schlong vertices (as the mesh is actually posed - PPA bends the mesh, not his bones) lie inside
     // a tube round his canal: radius, from depth d0 to d1 (world units along axis)
+    // where his hole really is: the resting hole centre and a point 4 units down his canal, carried by the bones his anus
+    // rim is weighted to (PPA pulls those bones over to the shaft - the pelvis alone missed it by up to 7 units). Our own
+    // morphs are not in it. false = no Anatomica rim found on him
+    bool HoleFrame(RE::Actor* a, RE::NiPoint3& centre, RE::NiPoint3& deep);
     std::string SchlongDesc(RE::Actor* giver);
     std::string SchlongBones(RE::Actor* giver);   // testing: the bones his schlong mesh is skinned to
     std::vector<RE::NiPoint3> SchlongSample(RE::Actor* giver, int n);   // testing: n points of his schlong mesh as posed
