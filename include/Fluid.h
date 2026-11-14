@@ -45,6 +45,12 @@ namespace Fluid {
     // rim is weighted to (PPA pulls those bones over to the shaft - the pelvis alone missed it by up to 7 units). Our own
     // morphs are not in it. false = no Anatomica rim found on him
     bool HoleFrame(RE::Actor* a, RE::NiPoint3& centre, RE::NiPoint3& deep);
+    // where his hole's edge really is right now (his canal mesh as posed, with every morph and PPA's pull in it): for each
+    // ring depth (world units along the axis from origin) and each of n directions, how far the edge reaches that way
+    // from origin (has = seen). pts: the edge points (for the fit outline)
+    struct RimRead { bool ok = false; float q[3][16]{}; bool has[3][16]{}; std::vector<RE::NiPoint3> pts; };
+    RimRead RimEdge(RE::Actor* a, const RE::NiPoint3& origin, const RE::NiPoint3& axis, const RE::NiPoint3& right, const RE::NiPoint3& up,
+                    const std::vector<float>& ringDepths, int n, float band, bool wantPts);   // band: how thick each ring is (world units)
     std::string SchlongDesc(RE::Actor* giver);
     std::string SchlongBones(RE::Actor* giver);   // testing: the bones his schlong mesh is skinned to
     std::vector<RE::NiPoint3> SchlongSample(RE::Actor* giver, int n);   // testing: n points of his schlong mesh as posed

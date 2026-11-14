@@ -151,6 +151,7 @@ namespace {
     struct FitDbg {
         std::vector<std::vector<RE::NiPoint3>> green, yellow;
         std::vector<RE::NiPoint3> red, blue, tick;   // tick: his schlong bones where this tick read them
+        std::vector<RE::NiPoint3> rim;               // WHITE: his hole's edge as read for the grip
         RE::FormID giver = 0;
         std::string label;
         std::vector<std::string> lines;          // everyone near him
@@ -214,6 +215,8 @@ namespace {
         // the hole following the schlong, per detail level (Normal / Fine / Super fine): the entrance rings (directions x
         // rings) then the inside depths. All three are kept so a switch eases the old set closed.
         float hv[3][64]{}, hs[3][64]{};
+        float corr[3][64]{};                     // the grip: learned correction per slider (read rim edge vs shaft)
+        float gripErr = 0.0f; int gripSeen = 0;  // for the log: mean gap (+) / clip (-) in units, directions seen
         bool hsInit = false;
         double inLast = -100.0;                  // last time a schlong was found in him by the bones
         float off = -1.0f;                       // the shaft's centre off his canal centre at the entrance (units)
@@ -432,6 +435,7 @@ namespace {
             float want[3][64]{};
             const HoleSet& hset = HoleSetOf(lvl);
             s.off = -1.0f;
+            std::vector<RE::NiPoint3> rimPts;
             if (in && c.ok && dw.holeFollow) {
                 V upw = c.u - c.a * Dot(c.u, c.a);
                 const float lu = Len(upw);
@@ -469,8 +473,33 @@ namespace {
                         // how far the shaft reaches this way from the (moved) centre; a ring the shaft does not reach stays shut
                         float e = sl[r].r > 0.0f ? sl[r].q[q] / c.sc - (mx * std::cos(ang) + my * std::sin(ang)) : (r == 0 ? fallback : 0.0f);
                         if (r > 0 && sl[r].r <= 0.0f && sl[0].r <= 0.0f) e = fallback;   // mesh unreadable: every ring by his size
-                        want[lvl][i] = std::clamp((e * dw.holeSize - 0.08f) / 1.35f, 0.0f, 3.0f);
+                        want[lvl][i] = std::clamp((e * dw.holeSize - 0.04f) / 1.28f, 0.0f, 3.0f);   // the mesh: 100% = 1.28 units round
                     }
+                }
+                // the grip: read where his hole's edge really is (his canal as posed - our morphs, PPA's pull, his bones all in
+                // it) and close any gap to the shaft, or open where it clips through. The scale above is only the starting point.
+                {
+                    std::vector<float> rd;
+                    for (int r = 0; r < hset.rings; ++r) rd.push_back(hset.ringD[r] * c.sc);
+                    const auto rim = Fluid::RimEdge(act, c.h.ni(), c.a.ni(), c.x.ni(), upw.ni(), rd, hset.n, 0.45f * c.sc, dw.fitOutline);
+                    if (dw.fitOutline) rimPts = rim.pts;
+                    float errSum = 0.0f; int seen = 0;
+                    const float k = std::min(1.0f, dt / 0.25f);
+                    for (int r = 0; r < hset.rings; ++r)
+                        for (int q = 0; q < hset.n; ++q) {
+                            const int j = r * hset.n + q;
+                            float& cr = s.corr[lvl][j];
+                            if (rim.ok && rim.has[r][q] && sl[r].r > 0.0f) {
+                                const float err = (rim.q[r][q] - sl[r].q[q] * dw.holeSize) / c.sc;   // + = a gap, - = clipping
+                                cr -= err / 1.28f * k;
+                                errSum += err; ++seen;
+                            }
+                            cr = std::clamp(cr, -0.3f - want[lvl][j], 3.3f - want[lvl][j]);   // no wind-up past what the slider can do
+                            cr = std::clamp(cr, -2.0f, 2.0f);
+                            want[lvl][j] = std::clamp(want[lvl][j] + cr, 0.0f, 3.0f);
+                        }
+                    s.gripErr = seen ? errSum / static_cast<float>(seen) : 0.0f;
+                    s.gripSeen = seen;
                 }
                 if (dw.canal > 0.0f)
                     for (size_t k = 0; k < hset.inD.size(); ++k, ++i) {
@@ -499,6 +528,7 @@ namespace {
                     FitDbg fd;
                     fd.at = std::chrono::steady_clock::now();
                     fd.red.push_back(c.h.ni());
+                    fd.rim = rimPts;
                     // the diagnostics go to the log only (once a second): Documents\My Games\Skyrim Special Edition\SKSE\AnatomicaMenu.log, [fit]
                     static std::chrono::steady_clock::time_point lastLog{};
                     const auto tnow = std::chrono::steady_clock::now();
@@ -512,9 +542,9 @@ namespace {
                         int ok = 0;
                         for (const auto& x : sl) if (x.r > 0.0f) ++ok;
                         const int inTube = Fluid::InTube(in, c.h.ni(), c.a.ni(), 3.2f * c.sc, -0.3f * c.sc, 9.0f * c.sc);
-                        logger::info("[fit] {} taken by {} | found by {} | schlong mesh: {} | bones {}/6 | mesh pts in hole {} | measured {}/{} | tip {:.1f} | hole {:.0f}% | shift {:+.2f},{:+.2f} deep {:+.2f},{:+.2f} | off {:.2f}",
+                        logger::info("[fit] {} taken by {} | found by {} | schlong mesh: {} | bones {}/6 | mesh pts in hole {} | measured {}/{} | tip {:.1f} | hole {:.0f}% | shift {:+.2f},{:+.2f} deep {:+.2f},{:+.2f} | off {:.2f} | grip gap {:+.2f} ({} seen)",
                                      act->GetName(), in->GetName(), s.held ? "mesh" : "bones", Fluid::SchlongDesc(in), nb, inTube, ok, depths.size(),
-                                     tip.ok ? tip.depth : -99.0f, s.hole * 100.0f, s.shE[0], s.shE[1], s.shD[0], s.shD[1], s.off);
+                                     tip.ok ? tip.depth : -99.0f, s.hole * 100.0f, s.shE[0], s.shE[1], s.shD[0], s.shD[1], s.off, s.gripErr, s.gripSeen);
                         {
                             std::string vals;
                             for (size_t k = 0; k < sl.size(); ++k) vals += std::format(" d{:.1f}:r{:.2f}", depths[k] / c.sc, sl[k].r / c.sc);
@@ -575,6 +605,8 @@ namespace {
             } else {
                 for (int j = 0; j < 2; ++j) { ease(s.shE[j], 0.0f, 0.08f, 0.25f); ease(s.shD[j], 0.0f, 0.1f, 0.25f); }
             }
+            for (int l = 0; l < 3; ++l)   // the grip is learned per scene: it fades when he is not taken (and on the other levels)
+                if (l != lvl || !in) for (auto& x : s.corr[l]) x *= std::max(0.0f, 1.0f - dt / 0.6f);
             for (int l = 0; l < 3; ++l) {
                 const size_t cnt = HoleSetOf(l).names.size();
                 for (size_t i = 0; i < cnt; ++i) ease(s.hv[l][i], want[l][i], 0.12f, want[l][i] > 0.0f ? 0.15f : (in ? 0.2f : 0.35f));   // (full open in 0.12 s: one bad reading cannot jump it)
@@ -1214,6 +1246,7 @@ namespace Engine {
             for (const auto& y : d.yellow) loop(y, 0xFF30E0FFu, 1.5f);   // yellow
             for (const auto& p : d.red) { ImGuiMCP::ImVec2 o; if (proj(p, o)) ImGuiMCP::ImDrawListManager::AddCircleFilled(dl, o, 4.0f, 0xFF3030FFu, 12); }
             for (const auto& p : d.blue) { ImGuiMCP::ImVec2 o; if (proj(p, o)) ImGuiMCP::ImDrawListManager::AddCircleFilled(dl, o, 3.0f, 0xFFFF9030u, 12); }
+            for (const auto& p : d.rim) { ImGuiMCP::ImVec2 o; if (proj(p, o)) ImGuiMCP::ImDrawListManager::AddCircleFilled(dl, o, 1.8f, 0xFFFFFFFFu, 6); }
             ++it;
         }
     }

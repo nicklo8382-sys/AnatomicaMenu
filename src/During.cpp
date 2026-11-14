@@ -303,8 +303,9 @@ namespace During {
             if (g_w.holeFollow) {
                 float pct = g_w.holeSize * 100.0f;
                 if (ImGuiMCP::SliderFloat("How snug", &pct, 50.0f, 160.0f, "%.0f%%")) { g_w.holeSize = pct / 100.0f; ch = true; }
-                Help("100% = the hole is exactly as wide as the schlong. Lower = he grips it tighter (the rim squeezes it); "
-                     "higher = he is opened a little wider than the shaft.");
+                Help("The hole grips the shaft: it reads where his rim really is and closes any gap to the schlong (or opens "
+                     "where it would clip). 100% = the rim just touches the shaft all round. Lower = he squeezes it; higher = "
+                     "a little loose. The fit outline's white dots show the rim edge it reads.");
             }
             ch |= ImGuiMCP::Checkbox("The rim follows the shaft", &g_w.ring);
             Help("The whole anus - the rim, the skin round it and the first part of the inside - moves with the shaft: drawn into "

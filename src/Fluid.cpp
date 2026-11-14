@@ -2777,6 +2777,65 @@ namespace Fluid {
         deep = {pd.x, pd.y, pd.z};
         return true;
     }
+    namespace {
+        struct EdgeCache { RE::NiPointer<RE::BSGeometry> geo; std::vector<std::uint32_t> idx; Surface S; };
+        std::unordered_map<RE::FormID, EdgeCache> g_edge;
+        std::mutex g_edgeMx;
+    }
+    RimRead RimEdge(RE::Actor* a, const RE::NiPoint3& origin, const RE::NiPoint3& axis, const RE::NiPoint3& right, const RE::NiPoint3& up,
+                    const std::vector<float>& ringDepths, int n, float band, bool wantPts) {
+        RimRead R;
+        n = std::clamp(n, 1, 16);
+        if (!a || ringDepths.empty()) return R;
+        auto* root = a->Get3D(false);
+        if (!root) return R;
+        RE::BSGeometry* canal = nullptr;
+        RE::BSVisit::TraverseScenegraphGeometries(root, [&](RE::BSGeometry* g) {
+            if (g->name == "3BA_Anus") { canal = g; return RE::BSVisit::BSVisitControl::kStop; }
+            return RE::BSVisit::BSVisitControl::kContinue;
+        });
+        if (!canal) return R;
+        std::lock_guard lk(g_edgeMx);
+        EdgeCache& C = g_edge[a->GetFormID()];
+        if (C.geo.get() != canal || C.idx.empty()) {   // the canal's first stretch: its mouth and the rings just inside (by depth, so it is found open or shut)
+            C.geo = RE::NiPointer<RE::BSGeometry>(canal);
+            C.idx.clear();
+            Surface S;
+            if (S.Read(canal, [](const V3& p) {
+                    const V3 d = p - kHoleO; const float t = Dot(d, kHoleAx);
+                    return t > -0.4f && t < 3.2f && Len(d - kHoleAx * t) < 5.0f;
+                }, 1))
+                C.idx = S.idx;
+            if (C.idx.empty()) return R;
+        }
+        // re-read those vertices now (the morphs are written into them) and pose them with his bones as they are now
+        if (!C.S.Read(canal, [](const V3&) { return true; }, 1, &C.idx) || !C.S.Pose()) return R;
+        const V3 o(origin), nax = Norm(V3(axis)), rt = Norm(V3(right)), upv = Norm(V3(up));
+        const float wN = 6.2831853f / static_cast<float>(n);
+        float sum[3][16]{}; int cnt[3][16]{};
+        const size_t nr = std::min<size_t>(3, ringDepths.size());
+        for (const auto& w : C.S.wp) {
+            const V3 d = w - o;
+            const float t = Dot(d, nax);
+            const V3 lat = d - nax * t;
+            const float lx = Dot(lat, rt), ly = Dot(lat, upv);
+            for (size_t r = 0; r < nr; ++r) {
+                if (std::abs(t - ringDepths[r]) > band) continue;
+                float ang = std::atan2(ly, lx);
+                if (ang < 0.0f) ang += 6.2831853f;
+                const int k = static_cast<int>(std::floor(ang / wN + 0.5f)) % n;
+                const float dk = wN * static_cast<float>(k);
+                sum[r][k] += lx * std::cos(dk) + ly * std::sin(dk);   // how far the edge reaches that way
+                ++cnt[r][k];
+                if (wantPts && r == 0) R.pts.push_back({w.x, w.y, w.z});
+                break;
+            }
+        }
+        for (size_t r = 0; r < nr; ++r)
+            for (int k = 0; k < n; ++k)
+                if (cnt[r][k] >= 2) { R.q[r][k] = sum[r][k] / static_cast<float>(cnt[r][k]); R.has[r][k] = true; R.ok = true; }
+        return R;
+    }
     std::vector<Slice> SlicesAt(RE::Actor* giver, const RE::NiPoint3& origin, const RE::NiPoint3& axis, const RE::NiPoint3& right,
                                 const RE::NiPoint3& up, const std::vector<float>& depths, int nDirs, float maxSide, const std::vector<RE::NiPoint3>* hints, bool outline) {
         std::vector<Slice> out(depths.size());
