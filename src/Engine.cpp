@@ -440,6 +440,12 @@ namespace {
                 V upw = c.u - c.a * Dot(c.u, c.a);
                 const float lu = Len(upw);
                 upw = lu > 1e-4f ? upw * (1.0f / lu) : c.u;
+                // the hole's real centre: the middle of its edge as he is drawn (the bone estimate leaned a hole-width to one side)
+                bool rimCen = false;
+                {
+                    const auto r0 = Fluid::RimEdge(act, c.h.ni(), c.a.ni(), c.x.ni(), upw.ni(), std::vector<float>{0.0f}, 16, 0.45f * c.sc, false);
+                    if (r0.hasCen[0]) { c.h = c.h + c.x * r0.cx[0] + upw * r0.cy[0]; rimCen = true; }
+                }
                 std::vector<float> depths;
                 for (float d : hset.ringD) depths.push_back(d * c.sc);
                 for (float d : hset.inD) depths.push_back(d * c.sc);
@@ -449,7 +455,15 @@ namespace {
                 // the hole moved with the shaft: the entrance to where the shaft's centre is at the mouth, the inside to where
                 // it is about 5 units in (the canal bends with an angled shaft)
                 float wantE[2]{}, wantD[2]{};
-                if (dw.shift && sl[0].r > 0.0f) {
+                if (dw.shift && sl[0].r > 0.0f && rimCen) {
+                    // the hole's centre is read from the mesh (it already carries the shift): move on by what is left to the shaft
+                    wantE[0] = s.shE[0] + sl[0].cx / c.sc; wantE[1] = s.shE[1] + sl[0].cy / c.sc;
+                    wantD[0] = wantE[0]; wantD[1] = wantE[1];
+                    for (float* w : {wantE, wantD}) {
+                        const float l = std::sqrt(w[0] * w[0] + w[1] * w[1]);
+                        if (l > dw.shiftMax && l > 1e-4f) { w[0] *= dw.shiftMax / l; w[1] *= dw.shiftMax / l; }
+                    }
+                } else if (dw.shift && sl[0].r > 0.0f) {
                     wantE[0] = sl[0].cx / c.sc; wantE[1] = sl[0].cy / c.sc;
                     size_t best = 0; float bd = 1e9f;
                     for (size_t k = 0; k < depths.size(); ++k)
@@ -461,7 +475,8 @@ namespace {
                         if (l > dw.shiftMax && l > 1e-4f) { w[0] *= dw.shiftMax / l; w[1] *= dw.shiftMax / l; }
                     }
                 }
-                for (int j = 0; j < 2; ++j) { ease(s.shE[j], wantE[j], 0.08f, 0.08f); ease(s.shD[j], wantD[j], 0.1f, 0.1f); }
+                const float shT = rimCen ? 0.3f : 0.08f;   // closed loop: a little slower, no overshoot
+                for (int j = 0; j < 2; ++j) { ease(s.shE[j], wantE[j], shT, shT); ease(s.shD[j], wantD[j], shT, shT); }
                 auto ss = [](float a0, float a1, float x) { const float t = std::clamp((x - a0) / (a1 - a0), 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t); };
                 int i = 0;
                 for (int r = 0; r < hset.rings; ++r) {
@@ -493,7 +508,9 @@ namespace {
                             const int j = r * hset.n + q;
                             float& cr = s.corr[lvl][j];
                             if (rim.ok && rim.has[r][q] && sl[r].r > 0.0f) {
-                                const float err = (rim.q[r][q] - sl[r].q[q] * dw.holeSize) / c.sc;   // + = a gap, - = clipping
+                                const float ang = 6.2831853f * static_cast<float>(q) / static_cast<float>(hset.n);
+                                const float ext = sl[r].q[q] - (sl[r].cx * std::cos(ang) + sl[r].cy * std::sin(ang));   // the shaft's own size that way
+                                const float err = (rim.q[r][q] - ext * dw.holeSize) / c.sc;   // + = a gap, - = clipping (both about their own centres)
                                 cr -= err / 1.28f * k;
                                 errSum += err; ++seen;
                             }
@@ -575,13 +592,17 @@ namespace {
                         const V ck = c.h + c.a * depths[k];
                         if (sl[k].hasQd && sl[k].r > 0.0f) {
                             std::vector<RE::NiPoint3> g;
-                            for (int q = 0; q < 24; ++q) g.push_back((ck + dirAt(6.2831853f * q / 24.0f) * sl[k].qd[q]).ni());
+                            const V sc0 = ck + rt * sl[k].cx + upv * sl[k].cy;   // the shaft's own centre at this depth
+                            for (int q = 0; q < 24; ++q) {
+                                const float t = 6.2831853f * q / 24.0f;
+                                g.push_back((sc0 + dirAt(t) * (sl[k].qd[q] - (sl[k].cx * std::cos(t) + sl[k].cy * std::sin(t)))).ni());
+                            }
                             fd.green.push_back(std::move(g));
                         }
                         // yellow: from the values actually sent (eased, capped), back through the same calibration
                         const float dm = depths[k] / c.sc;
                         const float wd = ss(1.5f, 3.5f, dm);
-                        const V cen = ck + (rt * (s.shE[0] * (1.0f - wd) + s.shD[0] * wd) + upv * (s.shE[1] * (1.0f - wd) + s.shD[1] * wd)) * c.sc;
+                        const V cen = rimCen ? ck : ck + (rt * (s.shE[0] * (1.0f - wd) + s.shD[0] * wd) + upv * (s.shE[1] * (1.0f - wd) + s.shD[1] * wd)) * c.sc;
                         std::vector<RE::NiPoint3> y;
                         if (static_cast<int>(k) < hset.rings) {
                             const float* v = &s.hv[lvl][k * hset.n];

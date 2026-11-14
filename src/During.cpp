@@ -281,7 +281,8 @@ namespace During {
                      "shape. On: it also reads where the rim is and corrects the size - but the rim as the game hands it over does "
                      "not always include the opening itself, so it can make the hole lopsided.");
                 ch |= ImGuiMCP::Checkbox("The hole moves with the shaft", &g_w.shift);
-                Help("Off (recommended): PPA moves the hole to the shaft. On: Anatomica also drags the hole sideways to the shaft - only for bodies without PPA; with PPA it pulls the opening off to one side. When the shaft is pulled down, up or to a side, the whole hole - "
+                Help("On: Anatomica reads where the hole really is and moves it onto the shaft until they line up (the rest of the way, "
+                     "if PPA has not already). Off: the hole stays where PPA puts it. When the shaft is pulled down, up or to a side, the whole hole - "
                      "the rim, the skin round it and the inside - "
                      "moves with it and stays tight all round, instead of only stretching towards it. The inside bends with "
                      "an angled shaft. Uses the Anatomica Shift sliders.");

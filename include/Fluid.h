@@ -48,7 +48,7 @@ namespace Fluid {
     // where his hole's edge really is right now (his canal mesh as posed, with every morph and PPA's pull in it): for each
     // ring depth (world units along the axis from origin) and each of n directions, how far the edge reaches that way
     // from origin (has = seen). pts: the edge points (for the fit outline)
-    struct RimRead { bool ok = false; float q[3][16]{}; bool has[3][16]{}; std::vector<RE::NiPoint3> pts; };
+    struct RimRead { bool ok = false; float q[3][16]{}; bool has[3][16]{}; std::vector<RE::NiPoint3> pts; float cx[3]{}, cy[3]{}; bool hasCen[3]{}; };   // cx/cy: the middle of each ring (right / up of origin)
     RimRead RimEdge(RE::Actor* a, const RE::NiPoint3& origin, const RE::NiPoint3& axis, const RE::NiPoint3& right, const RE::NiPoint3& up,
                     const std::vector<float>& ringDepths, int n, float band, bool wantPts);   // band: how thick each ring is (world units)
     std::string SchlongDesc(RE::Actor* giver);

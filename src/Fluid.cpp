@@ -2813,6 +2813,7 @@ namespace Fluid {
         const V3 o(origin), nax = Norm(V3(axis)), rt = Norm(V3(right)), upv = Norm(V3(up));
         const float wN = 6.2831853f / static_cast<float>(n);
         float sum[3][16]{}; int cnt[3][16]{};
+        float sx[3]{}, sy[3]{}; int sn[3]{};
         const size_t nr = std::min<size_t>(3, ringDepths.size());
         for (const auto& w : C.S.wp) {
             const V3 d = w - o;
@@ -2827,6 +2828,7 @@ namespace Fluid {
                 const float dk = wN * static_cast<float>(k);
                 sum[r][k] += lx * std::cos(dk) + ly * std::sin(dk);   // how far the edge reaches that way
                 ++cnt[r][k];
+                sx[r] += lx; sy[r] += ly; ++sn[r];
                 if (wantPts && r == 0) R.pts.push_back({w.x, w.y, w.z});
                 break;
             }
@@ -2834,6 +2836,8 @@ namespace Fluid {
         for (size_t r = 0; r < nr; ++r)
             for (int k = 0; k < n; ++k)
                 if (cnt[r][k] >= 2) { R.q[r][k] = sum[r][k] / static_cast<float>(cnt[r][k]); R.has[r][k] = true; R.ok = true; }
+        for (size_t r = 0; r < nr; ++r)
+            if (sn[r] >= 8) { R.cx[r] = sx[r] / static_cast<float>(sn[r]); R.cy[r] = sy[r] / static_cast<float>(sn[r]); R.hasCen[r] = true; }
         return R;
     }
     std::vector<Slice> SlicesAt(RE::Actor* giver, const RE::NiPoint3& origin, const RE::NiPoint3& axis, const RE::NiPoint3& right,
