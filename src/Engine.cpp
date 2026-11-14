@@ -491,7 +491,7 @@ namespace {
                         (void)mx; (void)my;
                         float e = sl[r].r > 0.0f ? (sl[r].q[q] - (sl[r].cx * std::cos(ang) + sl[r].cy * std::sin(ang))) / c.sc : (r == 0 ? fallback : 0.0f);
                         if (r > 0 && sl[r].r <= 0.0f && sl[0].r <= 0.0f) e = fallback;   // mesh unreadable: every ring by his size
-                        want[lvl][i] = std::clamp((e * dw.holeSize - 0.04f) / 1.28f, 0.0f, 3.0f);   // the mesh: 100% = 1.28 units round
+                        want[lvl][i] = dw.rimRead ? 0.0f : std::clamp((e * dw.holeSize - 0.04f) / 1.28f, 0.0f, 3.0f);   // snug: from PPA's own opening; else the mesh: 100% = 1.28 units round
                     }
                 }
                 // the grip: read where his hole's edge really is (his canal as posed - our morphs, PPA's pull, his bones all in
@@ -514,9 +514,9 @@ namespace {
                                 cr -= err / 1.28f * k;
                                 errSum += err; ++seen;
                             }
-                            cr = std::clamp(cr, -0.3f - want[lvl][j], 3.3f - want[lvl][j]);   // no wind-up past what the slider can do
-                            cr = std::clamp(cr, -2.0f, 2.0f);
-                            want[lvl][j] = std::clamp(want[lvl][j] + cr, 0.0f, 3.0f);
+                            cr = std::clamp(cr, -1.2f - want[lvl][j], 3.2f - want[lvl][j]);   // no wind-up past what the slider can do
+                            cr = std::clamp(cr, -1.2f, 3.0f);
+                            want[lvl][j] = std::clamp(want[lvl][j] + cr, -1.0f, 3.0f);   // negative: tighter than PPA opened him
                         }
                     s.gripErr = seen ? errSum / static_cast<float>(seen) : 0.0f;
                     s.gripSeen = seen;

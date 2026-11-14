@@ -19,7 +19,7 @@ namespace During {
         bool holeFollow = true;   // the hole opens to the schlong's own thickness where it passes (Anatomica Gape)
         float holeSize = 1.0f;    // how snug: 1 = exactly his thickness, more = a little wider
         bool shift = false;       // the hole moves sideways with the shaft (Anatomica Shift / Shift Deep) - off: PPA places it
-        bool rimRead = false;     // experimental: correct the size by reading the rim (the rim as read misses our morphs)
+        bool rimRead = true;      // snug: PPA opens and places the hole, Anatomica reads the rim and tightens / widens it onto the shaft
         float shiftMax = 4.0f;    // the most it moves (units)
         bool fitOutline = false;  // testing: draw what was measured round the shaft and what the hole is asked to be
         int holeDetail = 1;       // 0 Normal (4 directions, 3 depths), 1 Fine (8 x 2 rings, 6 depths), 2 Super fine (16 x 3, 10)

@@ -148,7 +148,7 @@ namespace During {
         };
         B("OpenInside", g_canalOn); F("OpenInsideAmount", g_w.canal, 0.0f, 1.5f);
         B("HoleFollows", g_w.holeFollow); F("HoleSize", g_w.holeSize, 0.5f, 1.6f);
-        B("HoleMovesV2", g_w.shift); B("HoleGrip", g_w.rimRead); F("HoleMoveMax", g_w.shiftMax, 0.0f, 8.0f);
+        B("HoleMovesV2", g_w.shift); B("HoleSnugV3", g_w.rimRead); F("HoleMoveMax", g_w.shiftMax, 0.0f, 8.0f);
         if (save) ini.SetLongValue(S, "HoleDetail", g_w.holeDetail);
         else g_w.holeDetail = std::clamp(static_cast<int>(ini.GetLongValue(S, "HoleDetail", g_w.holeDetail)), 0, 2);
         B("RingFollows", g_w.ring); F("RingGrip", g_w.grip, 0.0f, 1.5f); F("RingMaxOut", g_w.maxOut, 0.0f, 3.0f);
@@ -185,10 +185,14 @@ namespace During {
         bool follow;
         { std::lock_guard lk(g_wmx); follow = g_w.holeFollow; }
         ReadToml();
-        if (!follow || !g_found || (g_t.scale <= 0.05f && g_t.scaleMax <= 0.1f)) return;
-        g_t.scale = 0.02f;
-        g_t.scaleMax = 0.05f;
-        if (WriteToml()) logger::info("Anatomica: the hole follows the schlong - PPA's own opening set to almost none (Scale 0.02)");
+        // PPA opens and places the hole (it does that well); Anatomica only snugs it. Earlier test builds turned PPA's opening
+        // down to almost none while following - put the defaults back.
+        (void)follow;
+        if (!g_found || g_t.scale > 0.05f || g_t.scaleMax > 0.1f) return;
+        const Tight d{};
+        g_t.scale = d.scale;
+        g_t.scaleMax = d.scaleMax;
+        if (WriteToml()) logger::info("Anatomica: PPA's own opening restored (Scale {:.2f} / ScaleMax {:.2f}) - PPA opens, Anatomica snugs", d.scale, d.scaleMax);
     }
 
     void __stdcall RenderPage() {
@@ -211,8 +215,8 @@ namespace During {
             { std::lock_guard lk(g_wmx); follow = g_w.holeFollow; }
             if (follow)
                 ImGuiMCP::TextColored(ImGuiMCP::ImVec4{0.55f, 0.85f, 1.0f, 1.0f},
-                                      "\"The hole follows the schlong\" is on (below): Anatomica sizes the hole, so PPA's own opening is kept at "
-                                      "almost none (its Scale / ScaleMax are set for you). The grip settings still apply.");
+                                      "\"The hole follows the schlong\" is on (below): PPA opens and places the hole with these settings, and Anatomica "
+                                      "snugs it to the shaft on top.");
             static const char* presets[] = {"Choose a preset...", "Very tight", "Tight", "Anatomica default", "Loose", "Very loose"};
             static int pick = 0;
             if (ImGuiMCP::Combo("Preset", &pick, presets, 6) && pick > 0) {
@@ -276,10 +280,10 @@ namespace During {
                  "saving to PPA); the rim's pull in and out still works. Uses the Anatomica Hole / Inside sliders. Off = PPA "
                  "opens him to one fixed size (How tight he is, above).");
             if (g_w.holeFollow) {
-                ch |= ImGuiMCP::Checkbox("Read the rim to fine-tune (experimental)", &g_w.rimRead);
-                Help("Off (recommended): PPA puts the hole where the shaft is and Anatomica opens it to the shaft's own size and "
-                     "shape. On: it also reads where the rim is and corrects the size - but the rim as the game hands it over does "
-                     "not always include the opening itself, so it can make the hole lopsided.");
+                ch |= ImGuiMCP::Checkbox("Snug it to the shaft (recommended)", &g_w.rimRead);
+                Help("On: PPA opens the hole and keeps it on the shaft as usual; Anatomica reads where the rim really is and tightens "
+                     "or widens it, direction by direction, until it touches the shaft all round (How snug, above). Off: Anatomica "
+                     "opens it from its own estimate of the shaft's size on top of PPA (older behaviour).");
                 ch |= ImGuiMCP::Checkbox("The hole moves with the shaft", &g_w.shift);
                 Help("On: Anatomica reads where the hole really is and moves it onto the shaft until they line up (the rest of the way, "
                      "if PPA has not already). Off: the hole stays where PPA puts it. When the shaft is pulled down, up or to a side, the whole hole - "
