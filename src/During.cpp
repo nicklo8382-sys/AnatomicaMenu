@@ -148,7 +148,7 @@ namespace During {
         };
         B("OpenInside", g_canalOn); F("OpenInsideAmount", g_w.canal, 0.0f, 1.5f);
         B("HoleFollows", g_w.holeFollow); F("HoleSize", g_w.holeSize, 0.5f, 1.6f);
-        B("HoleMoves", g_w.shift); F("HoleMoveMax", g_w.shiftMax, 0.0f, 8.0f);
+        B("HoleMovesV2", g_w.shift); B("HoleGrip", g_w.rimRead); F("HoleMoveMax", g_w.shiftMax, 0.0f, 8.0f);
         if (save) ini.SetLongValue(S, "HoleDetail", g_w.holeDetail);
         else g_w.holeDetail = std::clamp(static_cast<int>(ini.GetLongValue(S, "HoleDetail", g_w.holeDetail)), 0, 2);
         B("RingFollows", g_w.ring); F("RingGrip", g_w.grip, 0.0f, 1.5f); F("RingMaxOut", g_w.maxOut, 0.0f, 3.0f);
@@ -276,8 +276,13 @@ namespace During {
                  "saving to PPA); the rim's pull in and out still works. Uses the Anatomica Hole / Inside sliders. Off = PPA "
                  "opens him to one fixed size (How tight he is, above).");
             if (g_w.holeFollow) {
+                ch |= ImGuiMCP::Checkbox("Read the rim to fine-tune (experimental)", &g_w.rimRead);
+                Help("Off (recommended): PPA puts the hole where the shaft is and Anatomica opens it to the shaft's own size and "
+                     "shape. On: it also reads where the rim is and corrects the size - but the rim as the game hands it over does "
+                     "not always include the opening itself, so it can make the hole lopsided.");
                 ch |= ImGuiMCP::Checkbox("The hole moves with the shaft", &g_w.shift);
-                Help("When the shaft is pulled down, up or to a side, the whole hole - the rim, the skin round it and the inside - "
+                Help("Off (recommended): PPA moves the hole to the shaft. On: Anatomica also drags the hole sideways to the shaft - only for bodies without PPA; with PPA it pulls the opening off to one side. When the shaft is pulled down, up or to a side, the whole hole - "
+                     "the rim, the skin round it and the inside - "
                      "moves with it and stays tight all round, instead of only stretching towards it. The inside bends with "
                      "an angled shaft. Uses the Anatomica Shift sliders.");
                 if (g_w.shift) {

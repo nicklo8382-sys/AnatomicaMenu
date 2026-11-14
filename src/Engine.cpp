@@ -471,14 +471,17 @@ namespace {
                     for (int q = 0; q < hset.n; ++q, ++i) {
                         const float ang = 6.2831853f * static_cast<float>(q) / static_cast<float>(hset.n);
                         // how far the shaft reaches this way from the (moved) centre; a ring the shaft does not reach stays shut
-                        float e = sl[r].r > 0.0f ? sl[r].q[q] / c.sc - (mx * std::cos(ang) + my * std::sin(ang)) : (r == 0 ? fallback : 0.0f);
+                        // the shaft's own size that way, measured from ITS centre (PPA puts the hole on the shaft; measured from
+                        // a hole centre that was off, one side opened into an empty pocket)
+                        (void)mx; (void)my;
+                        float e = sl[r].r > 0.0f ? (sl[r].q[q] - (sl[r].cx * std::cos(ang) + sl[r].cy * std::sin(ang))) / c.sc : (r == 0 ? fallback : 0.0f);
                         if (r > 0 && sl[r].r <= 0.0f && sl[0].r <= 0.0f) e = fallback;   // mesh unreadable: every ring by his size
                         want[lvl][i] = std::clamp((e * dw.holeSize - 0.04f) / 1.28f, 0.0f, 3.0f);   // the mesh: 100% = 1.28 units round
                     }
                 }
                 // the grip: read where his hole's edge really is (his canal as posed - our morphs, PPA's pull, his bones all in
                 // it) and close any gap to the shaft, or open where it clips through. The scale above is only the starting point.
-                {
+                if (dw.rimRead) {
                     std::vector<float> rd;
                     for (int r = 0; r < hset.rings; ++r) rd.push_back(hset.ringD[r] * c.sc);
                     const auto rim = Fluid::RimEdge(act, c.h.ni(), c.a.ni(), c.x.ni(), upw.ni(), rd, hset.n, 0.45f * c.sc, dw.fitOutline);
@@ -606,7 +609,7 @@ namespace {
                 for (int j = 0; j < 2; ++j) { ease(s.shE[j], 0.0f, 0.08f, 0.25f); ease(s.shD[j], 0.0f, 0.1f, 0.25f); }
             }
             for (int l = 0; l < 3; ++l)   // the grip is learned per scene: it fades when he is not taken (and on the other levels)
-                if (l != lvl || !in) for (auto& x : s.corr[l]) x *= std::max(0.0f, 1.0f - dt / 0.6f);
+                if (l != lvl || !in || !dw.rimRead) for (auto& x : s.corr[l]) x *= std::max(0.0f, 1.0f - dt / 0.6f);
             for (int l = 0; l < 3; ++l) {
                 const size_t cnt = HoleSetOf(l).names.size();
                 for (size_t i = 0; i < cnt; ++i) ease(s.hv[l][i], want[l][i], 0.12f, want[l][i] > 0.0f ? 0.15f : (in ? 0.2f : 0.35f));   // (full open in 0.12 s: one bad reading cannot jump it)
