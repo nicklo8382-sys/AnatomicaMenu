@@ -10,6 +10,11 @@
 //  * Shape: a puffy, swollen rim ("donut") that builds while he is penetrated (the Anatomica Swell body morph, its own
 //    key, so the after-sex swelling still adds to it) and settles a few seconds after.
 namespace During {
+    // the belly-bulge shapes (2.5: Ridged .. Beaded tentacle added at the end; numbers are saved in the ini)
+    enum BulgeShape { kAuto = 0, kTip, kShaft, kHorse, kKnot, kTentacle, kRidged, kSegmented, kColossal, kHooked, kDoubleKnot,
+                      kBeaded, kShapeCount };
+    const char* ShapeName(int shape);        // menu name ("From his schlong" for 0)
+    int AutoShape(RE::Actor* partner);       // "From his schlong": creature (More Nasty Critters), his TNG type, his size
     void Ini(CSimpleIniA& ini, bool save);   // [DuringSex] in AnatomicaMenu.ini (loaded / saved with the colour settings)
     float Donut();                           // 0 = off, else the most the ring swells while he is taken (Anatomica Ring)
     void SyncPPA();                          // puts PPA's own opening back if a 2.4 test build had turned it to (almost) none
@@ -24,7 +29,13 @@ namespace During {
         float bulge = 0.4f;       // belly bulge strength (the sliders are built extreme: 100% = the full shape)
         float bulgeStart = 6.0f;  // how deep the tip has to be before it shows (units along his canal)
         bool bulgeBig = false;    // only from big partners (TNG L / XL, creatures)
-        int bulgeShape = 0;       // 0 from his schlong's shape, 1 bump at the tip, 2 long shaft, 3 big head, 4 knot, 5 tentacle
+        int bulgeShape = 0;       // BulgeShape (0 = from his schlong)
+        float shaftK = 1.0f, headK = 1.0f, knotK = 1.0f;   // 2.5: strength of the shaft / the head / the knots (x Bulge strength)
+        bool travel[kShapeCount]{}, twitch[kShapeCount]{}, build[kShapeCount]{};   // 2.5 movement, per shape
+        float buildTime = 12.0f;  // 2.5 build-up: seconds to the full shape (1-60)
+        bool holdFull = true;     // 2.5 build-up: once full the shaft stays, only the head moves
+        bool imprint = false;     // 2.5 after sex: a faint copy of the last shape lingers
+        float imprintAmt = 0.15f, imprintMin = 3.0f;   // how strong (of the full shape), minutes until it is gone
         float bulgeRandom = 0.3f; // how much each stroke varies (height / size)
         float outline = 0.6f;     // the shaft behind the tip shows too (0 = only the tip)
         float pulse = 0.35f;      // a quick extra bump on each fast push

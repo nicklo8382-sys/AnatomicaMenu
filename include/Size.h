@@ -1,6 +1,8 @@
 #pragma once
 #include <SimpleIni.h>
 #include <string>
+#include <utility>
+#include <vector>
 
 // How big the man (or creature) giving it is, from The New Gentleman (TNG_PapyrusUtil.GetActorSize, asked in the
 // background and remembered for a few minutes). Bigger partners open him further and faster, loosen him more and leave
@@ -20,6 +22,9 @@ namespace Size {
     constexpr int kShapeUnknown = 0;
     int Shape(RE::Actor* partner);           // index into that table (0 = not known)
     std::string ShapeWord(int shape);        // "uncut", "knotted"...; "" when not known
+    std::string ShapeKey(int shape);         // its table key ("cut", "knotted"...); "" when not known
+    std::vector<std::pair<std::string, std::string>> ShapeList();   // every type in the table: key, menu name (2.5: bulge per type)
+    bool IsCreatureActor(RE::Actor* a);      // by race (not an NPC race; werewolves / vampire lords count)
     std::string Describe(RE::Actor* partner);   // "huge, knotted" / "uncut" / "" (for memories and reactions)
 
     struct K { float open = 1.0f, build = 1.0f, loose = 1.0f, tender = 1.0f; };

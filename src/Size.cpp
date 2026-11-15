@@ -376,6 +376,18 @@ namespace Size {
         std::lock_guard lk(g_mx);
         return (s > 0 && s < static_cast<int>(g_defs.size())) ? g_defs[s].word : std::string{};
     }
+    std::string ShapeKey(int s) {
+        std::lock_guard lk(g_mx);
+        return (s > 0 && s < static_cast<int>(g_defs.size())) ? g_defs[s].key : std::string{};
+    }
+    std::vector<std::pair<std::string, std::string>> ShapeList() {
+        std::lock_guard lk(g_mx);
+        if (g_defs.empty()) Builtins();
+        std::vector<std::pair<std::string, std::string>> out;
+        for (size_t i = 1; i < g_defs.size(); ++i) out.emplace_back(g_defs[i].key, g_defs[i].name);
+        return out;
+    }
+    bool IsCreatureActor(RE::Actor* a) { return IsCreature(a); }
     std::string Describe(RE::Actor* p) {
         if (!p) return {};
         const int c = Cat(p), sh = Shape(p);

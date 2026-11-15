@@ -3168,11 +3168,11 @@ namespace Colour {
         }
         if (Section("During sex")) {
         ImGuiMCP::TextDisabled("Shows the belly bulge on him for 8 s, moving up and down (During sex page sliders not needed).");
-        static const char* shp[] = {"Bulge: tip", "Bulge: whole shaft", "Bulge: big head", "Bulge: knot", "Bulge: tentacle"};
-        for (int i = 0; i < 5; ++i) {
-            if (i) ImGuiMCP::SameLine();
-            act(shp[i], [&] { return std::string(Engine::TestBulge(a, i + 1) ? "showing for 8 s (needs the body rebuilt with Build Morphs: Anatomica Bulge 1-5)"
-                                                                             : "not shown: RaceMenu's body morph interface is not available"); });
+        for (int i = 1; i < During::kShapeCount; ++i) {
+            if ((i - 1) % 4) ImGuiMCP::SameLine();
+            act(std::format("Bulge: {}", During::ShapeName(i)).c_str(),
+                [&] { return std::string(Engine::TestBulge(a, i) ? "showing for 8 s (needs the body rebuilt with Build Morphs: the Anatomica Bulge sliders)"
+                                                                 : "not shown: RaceMenu's body morph interface is not available"); });
         }
 
         }

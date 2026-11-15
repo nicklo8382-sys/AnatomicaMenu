@@ -1,6 +1,8 @@
 #include "During.h"
 #include "Colour.h"
 #include "SKSEMenuFramework.h"
+#include "Mnc.h"
+#include "Size.h"
 
 #include <algorithm>
 #include <atomic>
@@ -8,6 +10,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <format>
+#include <map>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -30,7 +33,30 @@ namespace {
     std::atomic<float> g_donutAmt{0.5f};
     std::mutex g_wmx;
     bool g_canalOn = true, g_bulgeOn = false;
-    During::Want g_w;          // the amounts (used when the tick box is on)
+    During::Want MakeW() {     // 2.5: the movement defaults per shape
+        During::Want w;
+        using namespace During;
+        w.travel[kTentacle] = w.travel[kBeaded] = w.travel[kSegmented] = true;
+        w.twitch[kSegmented] = true;
+        w.build[kKnot] = w.build[kDoubleKnot] = true;
+        return w;
+    }
+    During::Want g_w = MakeW();   // the amounts (used when the tick box is on)
+    // 2.5: the bulge shape for each schlong type (TNG / the shape table) and for his size; 0 = by size
+    std::map<std::string, int> g_typeShape;   // type key -> shape (only what was changed; else the default)
+    int g_sizeShape[3] = {During::kTip, During::kShaft, During::kColossal};   // smaller / not known, L, XL
+    int TypeDefault(const std::string& key) {
+        using namespace During;
+        if (key == "knotted") return kKnot;
+        if (key == "flared") return kHorse;
+        if (key == "ridged" || key == "barbed") return kRidged;
+        if (key == "tentacle") return kBeaded;
+        return kAuto;
+    }
+    int TypeShape(const std::string& key) {
+        if (auto it = g_typeShape.find(key); it != g_typeShape.end()) return it->second;
+        return TypeDefault(key);
+    }
     int g_bulgeWho = 0;        // 0 everyone, 1 you and your followers, 2 only you
 
     constexpr const char* kToml = "Data/SKSE/Plugins/ppa-override-configs/anatomica.toml";
@@ -152,7 +178,36 @@ namespace During {
         B("Bulge", g_bulgeOn); F("BulgeAmount", g_w.bulge, 0.0f, 3.0f); F("BulgeStart", g_w.bulgeStart, 2.0f, 30.0f);
         F("BulgeRandom", g_w.bulgeRandom, 0.0f, 1.0f);
         if (save) ini.SetLongValue(S, "BulgeShape", g_w.bulgeShape);
-        else g_w.bulgeShape = std::clamp(static_cast<int>(ini.GetLongValue(S, "BulgeShape", g_w.bulgeShape)), 0, 5);
+        else g_w.bulgeShape = std::clamp(static_cast<int>(ini.GetLongValue(S, "BulgeShape", g_w.bulgeShape)), 0, kShapeCount - 1);
+        F("BulgeShaftStrength", g_w.shaftK, 0.0f, 2.0f); F("BulgeHeadStrength", g_w.headK, 0.0f, 2.0f);
+        F("BulgeKnotStrength", g_w.knotK, 0.0f, 2.0f);
+        F("BulgeBuildTime", g_w.buildTime, 1.0f, 60.0f); B("BulgeHoldFull", g_w.holdFull);
+        B("BulgeImprint", g_w.imprint); F("BulgeImprintAmount", g_w.imprintAmt, 0.0f, 0.5f); F("BulgeImprintMinutes", g_w.imprintMin, 0.5f, 15.0f);
+        for (int i = 1; i < kShapeCount; ++i) {   // movement per shape: 1 travelling, 2 twitching, 4 build-up
+            const std::string k = std::format("BulgeMove{}", i);
+            if (save) ini.SetLongValue(S, k.c_str(), (g_w.travel[i] ? 1 : 0) | (g_w.twitch[i] ? 2 : 0) | (g_w.build[i] ? 4 : 0));
+            else {
+                const long f = ini.GetLongValue(S, k.c_str(), -1);
+                if (f >= 0) { g_w.travel[i] = f & 1; g_w.twitch[i] = f & 2; g_w.build[i] = f & 4; }
+            }
+        }
+        {   // the shape for each schlong type / size
+            constexpr const char* T = "BulgeByType";
+            static const char* sz[3] = {"(size) smaller", "(size) L", "(size) XL"};
+            if (save) {
+                for (auto& [k, v] : g_typeShape) ini.SetLongValue(T, k.c_str(), v);
+                for (int i = 0; i < 3; ++i) ini.SetLongValue(T, sz[i], g_sizeShape[i]);
+            } else {
+                CSimpleIniA::TNamesDepend keys;
+                ini.GetAllKeys(T, keys);
+                for (auto& k : keys) {
+                    const int v = std::clamp(static_cast<int>(ini.GetLongValue(T, k.pItem, 0)), 0, kShapeCount - 1);
+                    bool isSize = false;
+                    for (int i = 0; i < 3; ++i) if (std::string(k.pItem) == sz[i]) { g_sizeShape[i] = std::max(1, v); isSize = true; }
+                    if (!isSize) g_typeShape[k.pItem] = v;
+                }
+            }
+        }
         B("BulgeBigOnly", g_w.bulgeBig);
         F("BulgeOutline", g_w.outline, 0.0f, 1.0f); F("BulgePulse", g_w.pulse, 0.0f, 1.0f);
         F("BulgeLinger", g_w.linger, 0.5f, 30.0f);
@@ -160,6 +215,30 @@ namespace During {
         else g_w.bulgeThrough = std::clamp(static_cast<int>(ini.GetLongValue(S, "BulgeThrough", g_w.bulgeThrough)), 0, 2);
         if (save) ini.SetLongValue(S, "BulgeWho", g_bulgeWho);
         else g_bulgeWho = std::clamp(static_cast<int>(ini.GetLongValue(S, "BulgeWho", g_bulgeWho)), 0, 2);
+        Mnc::Ini(ini, save);
+    }
+    const char* ShapeName(int shape) {
+        static const char* n[kShapeCount] = {"From his schlong", "A bump at the tip", "The whole shaft", "Horse (flared head)",
+                                             "Knot", "Tentacle (wandering)", "Ridged", "Segmented (chain of bulbs)", "Colossal",
+                                             "Hooked", "Double knot", "Beaded tentacle"};
+        return (shape >= 0 && shape < kShapeCount) ? n[shape] : "";
+    }
+    int AutoShape(RE::Actor* p) {
+        if (!p) return kTip;
+        if (Size::IsCreatureActor(p) && Mnc::Active())
+            if (const int m = Mnc::ShapeFor(p); m > 0) return m;
+        const std::string key = Size::ShapeKey(Size::Shape(p));
+        int t = 0, sz[3];
+        {
+            std::lock_guard lk(g_wmx);
+            if (!key.empty()) t = TypeShape(key);
+            std::copy(std::begin(g_sizeShape), std::end(g_sizeShape), sz);
+        }
+        if (t > 0) return t;
+        const int cat = Size::Cat(p);
+        if (cat == 4) return sz[2];
+        if (cat >= 3) return sz[1];
+        return sz[0];
     }
     Want Get() {
         std::lock_guard lk(g_wmx);
@@ -281,23 +360,80 @@ namespace During {
                 if (ImGuiMCP::SliderFloat("Bulge strength", &pct, 0.0f, 200.0f, "%.0f%%")) { g_w.bulge = pct / 100.0f; ch = true; }
                 Help("The bulge shapes are built extreme, so 100% is the full, very obvious shape: 20-40% is a natural bump, "
                      "100% extreme, more than that exaggerated.");
-                static const char* shapes[] = {"From his schlong's shape (TNG)", "A bump at the tip", "The whole shaft (long)",
-                                               "Big head (horse / flared)", "Knot (big round lump low down)", "Tentacle (wandering)"};
-                ch |= ImGuiMCP::Combo("Bulge shape", &g_w.bulgeShape, shapes, 6);
-                Help("From his schlong's shape: knotted -> knot, flared -> big head, tentacle -> tentacle, L / XL and creatures -> the "
-                     "whole shaft, anything else -> a bump at the tip.\n"
-                     "The others pick one shape for everyone. It is built from six sections up his belly that fill one after "
-                     "another (Anatomica Bulge Seg 1-6), a head that rolls along at the front (round: Head 1-6, flared horse head: "
-                     "Flare 1-6) and a knot low down (Knot).");
+                {
+                    float sk = g_w.shaftK * 100.0f, hk = g_w.headK * 100.0f, kk = g_w.knotK * 100.0f;
+                    if (ImGuiMCP::SliderFloat("Shaft strength", &sk, 0.0f, 200.0f, "%.0f%%")) { g_w.shaftK = sk / 100.0f; ch = true; }
+                    Help("Only the shaft part (and the whole Beaded tentacle), on top of Bulge strength. 100% = as built.");
+                    if (ImGuiMCP::SliderFloat("Head strength", &hk, 0.0f, 200.0f, "%.0f%%")) { g_w.headK = hk / 100.0f; ch = true; }
+                    Help("Only the head at the front (round, flared, colossal or hooked), on top of Bulge strength.");
+                    if (ImGuiMCP::SliderFloat("Knot strength", &kk, 0.0f, 200.0f, "%.0f%%")) { g_w.knotK = kk / 100.0f; ch = true; }
+                    Help("Only the knots (Knot and Double knot), on top of Bulge strength.");
+                }
+                const char* shapes[kShapeCount];
+                for (int i = 0; i < kShapeCount; ++i) shapes[i] = ShapeName(i);
+                ch |= ImGuiMCP::Combo("Bulge shape", &g_w.bulgeShape, shapes, kShapeCount);
+                Help("From his schlong: the shape set for his schlong's type below (or for his size), and for creatures with More "
+                     "Nasty Critters the shape for his kind. The others pick one shape for everyone.\n"
+                     "Every shape fills up his belly section by section from the bottom (six sections), the head at the front.");
+                if (ImGuiMCP::TreeNode("Shape for each schlong###bytype")) {
+                    ImGuiMCP::TextDisabled("Used by \"From his schlong\". Any schlong can have any shape.");
+                    const char* opts[kShapeCount];
+                    opts[0] = "By his size";
+                    for (int i = 1; i < kShapeCount; ++i) opts[i] = ShapeName(i);
+                    for (auto& [key, name] : Size::ShapeList()) {
+                        int v = TypeShape(key);
+                        if (ImGuiMCP::Combo(std::format("{}###ty_{}", name, key).c_str(), &v, opts, kShapeCount)) { g_typeShape[key] = v; ch = true; }
+                    }
+                    ImGuiMCP::SeparatorText("By his size (TNG)");
+                    static const char* szn[3] = {"Smaller, or not known###sz0", "L###sz1", "XL###sz2"};
+                    for (int i = 0; i < 3; ++i) {
+                        int v = g_sizeShape[i] - 1;
+                        if (ImGuiMCP::Combo(szn[i], &v, opts + 1, kShapeCount - 1)) { g_sizeShape[i] = v + 1; ch = true; }
+                    }
+                    if (Mnc::Active()) {
+                        ImGuiMCP::SeparatorText("Creatures (More Nasty Critters)");
+                        ImGuiMCP::TextDisabled("Werewolves and dragons follow their MNC style first (dog -> knot, horse -> horse, "
+                                               "dragon -> ridged).");
+                        opts[0] = "Automatic";
+                        for (auto& gr : Mnc::Groups()) {
+                            int v = gr.shape;
+                            const std::string label = gr.races ? std::format("{} ({} races)###mnc_{}", gr.name, gr.races, gr.name)
+                                                               : std::format("{} (by name)###mnc_{}", gr.name, gr.name);
+                            if (ImGuiMCP::Combo(label.c_str(), &v, opts, kShapeCount)) { Mnc::SetShape(gr.name, v); ch = true; }
+                        }
+                    }
+                    ImGuiMCP::TreePop();
+                }
+                if (ImGuiMCP::TreeNode("Movement for each shape###moves")) {
+                    ImGuiMCP::TextDisabled("Travelling: the head runs up and back down by itself, whatever his strokes do.");
+                    ImGuiMCP::TextDisabled("Twitching: small, sudden jumps now and then.");
+                    ImGuiMCP::TextDisabled("Build-up: grows to the full shape over time instead of at once.");
+                    if (ImGuiMCP::BeginTable("##mv", 4)) {
+                        for (int i = 1; i < kShapeCount; ++i) {
+                            ImGuiMCP::TableNextRow();
+                            ImGuiMCP::TableNextColumn(); ImGuiMCP::TextUnformatted(ShapeName(i));
+                            ImGuiMCP::TableNextColumn(); ch |= ImGuiMCP::Checkbox(std::format("Travelling##tr{}", i).c_str(), &g_w.travel[i]);
+                            ImGuiMCP::TableNextColumn(); ch |= ImGuiMCP::Checkbox(std::format("Twitching##tw{}", i).c_str(), &g_w.twitch[i]);
+                            ImGuiMCP::TableNextColumn(); ch |= ImGuiMCP::Checkbox(std::format("Build-up##bu{}", i).c_str(), &g_w.build[i]);
+                        }
+                        ImGuiMCP::EndTable();
+                    }
+                    ch |= ImGuiMCP::SliderFloat("Build-up time", &g_w.buildTime, 1.0f, 60.0f, "%.0f s");
+                    Help("How long the build-up takes to reach the full shape. It still moves in and out with his strokes while it grows.");
+                    ch |= ImGuiMCP::Checkbox("Hold the shape when full", &g_w.holdFull);
+                    Help("Build-up: once it is full the shaft stays where it got to and only the head keeps moving.");
+                    ImGuiMCP::TreePop();
+                }
                 float rnd = g_w.bulgeRandom * 100.0f;
                 if (ImGuiMCP::SliderFloat("Randomness", &rnd, 0.0f, 100.0f, "%.0f%%")) { g_w.bulgeRandom = rnd / 100.0f; ch = true; }
                 Help("Each stroke is a little different - how high it rises and how big it gets. 0% = the same every stroke.");
                 ch |= ImGuiMCP::SliderFloat("Shows from this deep", &g_w.bulgeStart, 2.0f, 30.0f, "%.0f units");
                 Help("How far in the tip has to be (game units, about 1.4 cm each) before the bulge starts. Then it fills up his "
-                     "belly over the next 10 units: section by section from the bottom, the head rolling up ahead of it. Lower = "
-                     "even average schlongs show; higher = only very long ones.");
-                ch |= ImGuiMCP::Checkbox("Only from big partners (L, XL and creatures)", &g_w.bulgeBig);
-                Help("Needs The New Gentleman for the size (creatures always count).");
+                     "belly over the rest of each stroke (as deep as his strokes have been reaching, at least 10 units): section by "
+                     "section from the bottom, the head running up ahead of it and back down as he pulls out. Lower = even average "
+                     "schlongs show; higher = only very long ones.");
+                ch |= ImGuiMCP::Checkbox("Only from big partners (L and XL)", &g_w.bulgeBig);
+                Help("Needs The New Gentleman for the size.");
                 {
                     float o = g_w.outline * 100.0f;
                     if (g_w.bulgeShape == 1) {
@@ -310,6 +446,15 @@ namespace During {
                     ch |= ImGuiMCP::SliderFloat("Goes down over", &g_w.linger, 0.5f, 30.0f, "%.1f s");
                     Help("After he pulls out the bump eases down over this long (up to half as long again after a long, hard "
                          "round) instead of vanishing at once.");
+                    ch |= ImGuiMCP::Checkbox("Imprint after sex", &g_w.imprint);
+                    Help("After it goes down a faint copy of the last shape stays on his belly for a while, so what he was with "
+                         "can still be seen, then fades away.");
+                    if (g_w.imprint) {
+                        float ia = g_w.imprintAmt * 100.0f;
+                        if (ImGuiMCP::SliderFloat("Imprint strength", &ia, 0.0f, 50.0f, "%.0f%%")) { g_w.imprintAmt = ia / 100.0f; ch = true; }
+                        Help("Of the full shape (at the bulge strength). 10-20% is a faint ghost.");
+                        ch |= ImGuiMCP::SliderFloat("Imprint lasts", &g_w.imprintMin, 0.5f, 15.0f, "%.1f min");
+                    }
                     static const char* thr[] = {"Nothing - only when he is bare", "Clothes, but not armour", "Clothes and armour"};
                     ch |= ImGuiMCP::Combo("Shows through", &g_w.bulgeThrough, thr, 3);
                     Help("What the bulge may show through. Nothing: only when nothing covers his body (revealing armour, "

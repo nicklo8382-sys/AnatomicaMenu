@@ -13,7 +13,7 @@ namespace Engine {
     float GapeOf(RE::FormID id);                  // the gape morph we last set (-1 = not ours)
     struct During { float depth = -100.0f, hole = 0.0f, ring = 0.0f, off = -1.0f; bool held = false; };   // while he is taken: how deep, hole size, rim pull, how far the shaft is off the hole's centre (-1 = not measured), kept in by the hold
     During DuringOf(RE::FormID id);
-    bool TestBulge(RE::Actor* a, int shape);      // Testing page: show the belly bulge on him for 8 s (shape 1-5)
+    bool TestBulge(RE::Actor* a, int shape);      // Testing page: show the belly bulge on him for 8 s (shape 1-11, During::BulgeShape)
     bool SetLooseNow(RE::Actor* a, float v);      // lasting looseness, right now (false = no RaceMenu interface)
     std::string Status();                         // one line: what is connected
     // RaceMenu node overrides (no Papyrus); false = not available, use the old way
