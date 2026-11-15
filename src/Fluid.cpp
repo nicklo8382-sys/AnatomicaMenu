@@ -625,8 +625,8 @@ namespace {
     }
 
     // ------------------------------------------------------------------------------------------- anchors
-    constexpr std::uint32_t kRimVerts = 17126;          // 3BA_AnusRim of Anatomica HD (HIMBO)
-    constexpr std::uint32_t kLipFirst = 15590, kLipCount = 192;   // its inner edge, in order around the hole
+    constexpr std::uint32_t kRimVerts = 4749;           // 3BA_AnusRim of Anatomica HD (HIMBO), 2.5: only its own vertices
+    constexpr std::uint32_t kLipFirst = 4557, kLipCount = 192;    // its inner edge, in order around the hole (was 17126 / 15590)
     constexpr int kLip = 32;
 
     RE::BSGeometry* FindGeo(RE::NiAVObject* root, const char* name) {

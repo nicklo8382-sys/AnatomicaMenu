@@ -12,17 +12,10 @@
 namespace During {
     void Ini(CSimpleIniA& ini, bool save);   // [DuringSex] in AnatomicaMenu.ini (loaded / saved with the colour settings)
     float Donut();                           // 0 = off, else the most the ring swells while he is taken (Anatomica Ring)
-    void SyncPPA();                          // the hole follows the schlong: keep PPA's own opening at (almost) none
+    void SyncPPA();                          // puts PPA's own opening back if a 2.4 test build had turned it to (almost) none
     // the rest of the page, read by the gape engine each tick (0 = off)
     struct Want {
         float canal = 1.0f;       // open the inside (Anatomica Canal) round the schlong while it is in him
-        bool holeFollow = true;   // the hole opens to the schlong's own thickness where it passes (Anatomica Gape)
-        float holeSize = 1.0f;    // how snug: 1 = exactly his thickness, more = a little wider
-        bool shift = false;       // the hole moves sideways with the shaft (Anatomica Shift / Shift Deep) - off: PPA places it
-        bool rimRead = true;      // snug: PPA opens and places the hole, Anatomica reads the rim and tightens / widens it onto the shaft
-        float shiftMax = 4.0f;    // the most it moves (units)
-        bool fitOutline = false;  // testing: draw what was measured round the shaft and what the hole is asked to be
-        int holeDetail = 1;       // 0 Normal (4 directions, 3 depths), 1 Fine (8 x 2 rings, 6 depths), 2 Super fine (16 x 3, 10)
         bool ring = true;         // the rim follows the shaft: drawn in on the push, pulled out on the withdraw (Anatomica Pout)
         float grip = 0.6f;        // how strongly it follows the shaft
         float maxOut = 0.5f;      // the most it is pulled out (units)

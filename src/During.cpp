@@ -147,10 +147,6 @@ namespace During {
             else v = std::clamp(static_cast<float>(ini.GetDoubleValue(S, k, v)), lo, hi);
         };
         B("OpenInside", g_canalOn); F("OpenInsideAmount", g_w.canal, 0.0f, 1.5f);
-        B("HoleFollows", g_w.holeFollow); F("HoleSize", g_w.holeSize, 0.5f, 1.6f);
-        B("HoleMovesV2", g_w.shift); B("HoleSnugV3", g_w.rimRead); F("HoleMoveMax", g_w.shiftMax, 0.0f, 8.0f);
-        if (save) ini.SetLongValue(S, "HoleDetail", g_w.holeDetail);
-        else g_w.holeDetail = std::clamp(static_cast<int>(ini.GetLongValue(S, "HoleDetail", g_w.holeDetail)), 0, 2);
         B("RingFollows", g_w.ring); F("RingGrip", g_w.grip, 0.0f, 1.5f); F("RingMaxOut", g_w.maxOut, 0.0f, 3.0f);
         F("RingMaxIn", g_w.maxIn, 0.0f, 3.0f); F("RingGrowExtra", g_w.grow, 0.0f, 2.0f);
         B("Bulge", g_bulgeOn); F("BulgeAmount", g_w.bulge, 0.0f, 3.0f); F("BulgeStart", g_w.bulgeStart, 2.0f, 30.0f);
@@ -182,17 +178,13 @@ namespace During {
     }
     float Donut() { return g_donutOn ? g_donutAmt.load() : 0.0f; }
     void SyncPPA() {
-        bool follow;
-        { std::lock_guard lk(g_wmx); follow = g_w.holeFollow; }
         ReadToml();
-        // PPA opens and places the hole (it does that well); Anatomica only snugs it. Earlier test builds turned PPA's opening
-        // down to almost none while following - put the defaults back.
-        (void)follow;
+        // PPA opens and places the hole. Earlier 2.4 test builds turned PPA's opening down to almost none - put the defaults back.
         if (!g_found || g_t.scale > 0.05f || g_t.scaleMax > 0.1f) return;
         const Tight d{};
         g_t.scale = d.scale;
         g_t.scaleMax = d.scaleMax;
-        if (WriteToml()) logger::info("Anatomica: PPA's own opening restored (Scale {:.2f} / ScaleMax {:.2f}) - PPA opens, Anatomica snugs", d.scale, d.scaleMax);
+        if (WriteToml()) logger::info("Anatomica: PPA's own opening restored (Scale {:.2f} / ScaleMax {:.2f})", d.scale, d.scaleMax);
     }
 
     void __stdcall RenderPage() {
@@ -211,12 +203,6 @@ namespace During {
             }
             ImGuiMCP::TextWrapped("PPA (Penetration Physics) places the schlong in him and grips it. These are PPA's settings for "
                                   "Anatomica's anus - every man with Anatomica's skeleton bones.");
-            bool follow;
-            { std::lock_guard lk(g_wmx); follow = g_w.holeFollow; }
-            if (follow)
-                ImGuiMCP::TextColored(ImGuiMCP::ImVec4{0.55f, 0.85f, 1.0f, 1.0f},
-                                      "\"The hole follows the schlong\" is on (below): PPA opens and places the hole with these settings, and Anatomica "
-                                      "snugs it to the shaft on top.");
             static const char* presets[] = {"Choose a preset...", "Very tight", "Tight", "Anatomica default", "Loose", "Very loose"};
             static int pick = 0;
             if (ImGuiMCP::Combo("Preset", &pick, presets, 6) && pick > 0) {
@@ -228,13 +214,11 @@ namespace During {
                 changed = true;
             }
             Help("Sets how far and how wide he opens. \"Anatomica default\" puts every setting below back to what the mod ships.");
-            if (follow) ImGuiMCP::BeginDisabled();
             changed |= ImGuiMCP::SliderFloat("How far he opens around the schlong", &g_t.scale, 0.0f, 1.5f, "%.2f");
             Help("PPA \"Scale\": how far the ring spreads for a schlong. Lower = tighter, he grips the shaft; higher = he opens "
                  "wider. Anatomica ships 0.40 (PPA's own default, 2.0, tears the cleft open on this mesh).");
             changed |= ImGuiMCP::SliderFloat("The widest he can open", &g_t.scaleMax, 0.3f, 3.0f, "%.2f");
             Help("PPA \"ScaleMax\": a cap for big schlongs. Lower = even a huge one only opens him so far.");
-            if (follow) ImGuiMCP::EndDisabled();
             changed |= ImGuiMCP::SliderFloat("Grip on the shaft (drag)", &g_t.grip, 0.0f, 2.0f, "%.2f");
             Help("PPA \"GripStrength\": how hard the rim holds onto the shaft - drawn in on the push, pulled out (a small pucker) "
                  "on the withdraw. 0 = no drag.");
@@ -247,7 +231,6 @@ namespace During {
             Help("PPA \"RubIntensity\": how much the rim moves with each stroke.");
             if (changed) g_note = "Not saved yet - press Save to PPA.";
             if (ImGuiMCP::Button("Save to PPA")) {
-                if (follow) { g_t.scale = 0.02f; g_t.scaleMax = 0.05f; }
                 g_note = WriteToml() ? "Saved. Press F5 in game (PPA's reload key) to use it now, or it applies at the next game start."
                                      : "Could not write anatomica.toml (is the PPA integration option installed?).";
                 if (g_note[0] == 'S') logger::info("Anatomica: PPA tightness saved (Scale {:.2f}, ScaleMax {:.2f}, Grip {:.2f})", g_t.scale, g_t.scaleMax, g_t.grip);
@@ -266,56 +249,10 @@ namespace During {
             std::lock_guard lk(g_wmx);
             ch |= ImGuiMCP::Checkbox("Open the inside round the schlong", &g_canalOn);
             Help("While a schlong is in him the canal opens along its length, so the shaft no longer pushes through the inside "
-                 "walls. With \"The hole follows the schlong\" on it follows the shaft's own thickness at each depth (the slider "
-                 "caps it); off, it opens by his size. Recommended on.");
+                 "walls, opened by his partner's size. Recommended on.");
             if (g_canalOn) {
                 float pct = g_w.canal * 100.0f;
                 if (ImGuiMCP::SliderFloat("How wide inside", &pct, 0.0f, 150.0f, "%.0f%%")) { g_w.canal = pct / 100.0f; ch = true; }
-            }
-            ch |= ImGuiMCP::Checkbox("The hole follows the schlong", &g_w.holeFollow);
-            Help("The hole follows the schlong as tightly as it can, all the time. The entrance opens in four directions to "
-                 "how far the shaft reaches each way (an oval or off-centre shaft opens it to its own shape), and the inside opens "
-                 "at three depths to its thickness there (a flared head or a knot widens the inside where it is and it closes "
-                 "behind it). This replaces the round opening and PPA's own opening (kept at almost none - F5 in game after "
-                 "saving to PPA); the rim's pull in and out still works. Uses the Anatomica Hole / Inside sliders. Off = PPA "
-                 "opens him to one fixed size (How tight he is, above).");
-            if (g_w.holeFollow) {
-                ch |= ImGuiMCP::Checkbox("Snug it to the shaft (recommended)", &g_w.rimRead);
-                Help("On: PPA opens the hole and keeps it on the shaft as usual; Anatomica reads where the rim really is and tightens "
-                     "or widens it, direction by direction, until it touches the shaft all round (How snug, above). Off: Anatomica "
-                     "opens it from its own estimate of the shaft's size on top of PPA (older behaviour).");
-                ch |= ImGuiMCP::Checkbox("The hole moves with the shaft", &g_w.shift);
-                Help("On: Anatomica reads where the hole really is and moves it onto the shaft until they line up (the rest of the way, "
-                     "if PPA has not already). Off: the hole stays where PPA puts it. When the shaft is pulled down, up or to a side, the whole hole - "
-                     "the rim, the skin round it and the inside - "
-                     "moves with it and stays tight all round, instead of only stretching towards it. The inside bends with "
-                     "an angled shaft. Uses the Anatomica Shift sliders.");
-                if (g_w.shift) {
-                    ch |= ImGuiMCP::SliderFloat("Most it moves", &g_w.shiftMax, 0.0f, 8.0f, "%.1f units");
-                    Help("How far the hole may be dragged from where it sits (game units, about 1.4 cm each). 4 is the default; "
-                         "past 5 the skin round it stretches a lot.");
-                }
-                ch |= ImGuiMCP::Checkbox("Show the fit outline (testing)", &g_w.fitOutline);
-                Help("Draws over the game, on everyone being taken: GREEN = the outline measured round his shaft (at the "
-                     "entrance and each depth inside), YELLOW = the shape the hole is asked to open to (where the mesh should "
-                     "be), RED dot = the hole's resting centre, BLUE dots = the shaft's centre as measured. "
-                     "Details go to the SKSE log once a second ([fit] lines in AnatomicaMenu.log).");
-                static const char* kDetail[3] = {"Normal (4 directions, 3 depths)", "Fine (8 directions x 2 rings, 6 depths)",
-                                                 "Super fine (16 directions x 3 rings, 10 depths) - testing"};
-                ch |= ImGuiMCP::Combo("Detail", &g_w.holeDetail, kDetail, 3);
-                Help("How finely the hole is fitted to the schlong. Normal = the entrance in four directions and the inside at "
-                     "three depths. Fine = eight directions in two rings at the entrance (the first part inside keeps the "
-                     "shaft's shape too) and six depths inside. Super fine = sixteen directions in three rings and ten depths: "
-                     "closest to the shaft, but more morph updates each moment and it can twitch on low-poly schlongs - mainly "
-                     "for testing. Each level has its own sliders in BodySlide (Anatomica Hole / Fine / XFine): rebuild with "
-                     "Build Morphs.");
-            }
-            if (g_w.holeFollow) {
-                float pct = g_w.holeSize * 100.0f;
-                if (ImGuiMCP::SliderFloat("How snug", &pct, 50.0f, 160.0f, "%.0f%%")) { g_w.holeSize = pct / 100.0f; ch = true; }
-                Help("The hole grips the shaft: it reads where his rim really is and closes any gap to the schlong (or opens "
-                     "where it would clip). 100% = the rim just touches the shaft all round. Lower = he squeezes it; higher = "
-                     "a little loose. The fit outline's white dots show the rim edge it reads.");
             }
             ch |= ImGuiMCP::Checkbox("The rim follows the shaft", &g_w.ring);
             Help("The whole anus - the rim, the skin round it and the first part of the inside - moves with the shaft: drawn into "

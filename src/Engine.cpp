@@ -41,33 +41,6 @@
 //  ~10 checks a second for a handful of men: a few bone positions and some vector maths each - microseconds.
 // ---------------------------------------------------------------------------------------------------------------
 namespace {
-    // the tight-follow slider sets (BodySlide: hole4.py = Normal, hole5.py = Fine / Super fine). Depths are mesh units along
-    // his canal (scaled by his size at run time): where each ring / inside piece is measured on the schlong.
-    struct HoleSet {
-        int n = 4, rings = 1;
-        std::vector<float> ringD, inD;
-        std::vector<std::string> names;   // rings * n hole pieces, then the inside pieces
-    };
-    std::array<HoleSet, 3> MakeHoleSets() {
-        std::array<HoleSet, 3> x;
-        x[0].n = 4; x[0].rings = 1; x[0].ringD = {0.0f}; x[0].inD = {2.9f, 5.1f, 6.8f};
-        x[0].names = {"Anatomica Hole Right", "Anatomica Hole Up", "Anatomica Hole Left", "Anatomica Hole Down",
-                      "Anatomica Inside 1", "Anatomica Inside 2", "Anatomica Inside 3"};
-        x[1].n = 8; x[1].rings = 2; x[1].ringD = {0.0f, 1.6f}; x[1].inD = {2.65f, 3.55f, 4.45f, 5.35f, 6.25f, 7.15f};
-        x[2].n = 16; x[2].rings = 3; x[2].ringD = {0.0f, 1.25f, 2.15f};
-        for (int i = 0; i < 10; ++i) x[2].inD.push_back(2.85f + 0.5f * static_cast<float>(i));
-        for (int l = 1; l < 3; ++l) {
-            const char* pre = l == 1 ? "Anatomica Fine" : "Anatomica XFine";
-            for (int r = 0; r < x[l].rings; ++r)
-                for (int q = 0; q < x[l].n; ++q) x[l].names.push_back(std::format("{} Hole {}{}", pre, "ABC"[r], q + 1));
-            for (size_t j = 0; j < x[l].inD.size(); ++j) x[l].names.push_back(std::format("{} Inside {}", pre, j + 1));
-        }
-        return x;
-    }
-    const HoleSet& HoleSetOf(int lvl) {
-        static const std::array<HoleSet, 3> sets = MakeHoleSets();
-        return sets[std::clamp(lvl, 0, 2)];
-    }
     using clk = std::chrono::steady_clock;
     double Now() { return std::chrono::duration<double>(clk::now().time_since_epoch()).count(); }
     std::mt19937 g_rng{std::random_device{}()};
@@ -147,20 +120,6 @@ namespace {
         return through >= 1 && body->IsClothing();
     }
     // how deep o's schlong is in him: the tip (past the last bone) measured along his canal axis, and where it is
-    // the fit outline (During sex page, testing): drawn over the game by a HUD element
-    struct FitDbg {
-        std::vector<std::vector<RE::NiPoint3>> green, yellow;
-        std::vector<RE::NiPoint3> red, blue, tick;   // tick: his schlong bones where this tick read them
-        std::vector<RE::NiPoint3> rim;               // WHITE: his hole's edge as read for the grip
-        RE::FormID giver = 0;
-        std::string label;
-        std::vector<std::string> lines;          // everyone near him
-        std::vector<RE::NiPoint3> cyan;          // his schlong mesh as the mod reads it
-        std::vector<RE::NiPoint3> var[3], others; // the same read other ways (B orange, C pink, D purple); his other schlong meshes (grey)
-        std::chrono::steady_clock::time_point at;
-    };
-    std::mutex g_dbgMx;
-    std::unordered_map<RE::FormID, FitDbg> g_dbg;
     struct Tip { bool ok = false; float depth = 0.0f; V p; };
     Tip TipIn(const Canal& c, RE::Actor* o) {
         Tip t;
@@ -212,17 +171,9 @@ namespace {
         float pout = 0.0f, canal = 0.0f, bulge[19]{};   // During sex page: rim, open inside, belly bulge (Seg 1-6, Head 1-6, Knot, Flare 1-6)
         float pulse = 0.0f, bulgeDil = 0.0f;     // thrust pulse; how worked he was while it bulged (lingering)
         float hole = 0.0f, holeSent = -100.0f;
-        // the hole following the schlong, per detail level (Normal / Fine / Super fine): the entrance rings (directions x
-        // rings) then the inside depths. All three are kept so a switch eases the old set closed.
-        float hv[3][64]{}, hs[3][64]{};
-        float corr[3][64]{};                     // the grip: learned correction per slider (read rim edge vs shaft)
-        float gripErr = 0.0f; int gripSeen = 0;  // for the log: mean gap (+) / clip (-) in units, directions seen
-        bool hsInit = false;
         double inLast = -100.0;                  // last time a schlong was found in him by the bones
-        float off = -1.0f;                       // the shaft's centre off his canal centre at the entrance (units)
         bool held = false;                       // kept in by the hold this tick
         float reachMax = 0.0f;                   // how deep the tip has been lately (the inside stays open behind it)
-        float shE[2]{}, shD[2]{}, shSent[4]{-100.0f, -100.0f, -100.0f, -100.0f};   // the hole moved with the shaft: entrance, inside (right, up)
         float ringPos = 0.0f;                    // the rim carried along by the shaft (units, + = out of him)
         float depthAvg = -100.0f;                // where the strokes are centred (slow average of the depth)
         float rndH = 0.0f, rndA = 0.0f;          // this stroke's bulge randomness
@@ -425,224 +376,8 @@ namespace {
             auto ease = [&](float& v, float want, float up, float down) {
                 v = want > v ? std::min(want, v + dt / up) : std::max(want, v - dt / down);
             };
-            // the hole follows the schlong as tightly as it can: the entrance opened in four directions to the shaft's own
-            // extent (an oval or off-centre shaft opens each side as far as it reaches) and the inside at three depths to its
-            // thickness there (a flared head or a knot widens the inside where it is, it closes again behind it). This replaces
-            // the round opening (Anatomica Gape / Canal) and PPA's own opening; the rim's pull in and out stays.
-            // detail: Normal = 4 directions + 3 depths, Fine = 8 x 2 rings + 6, Super fine = 16 x 3 rings + 10 (During page)
-            const int lvl = std::clamp(dw.holeDetail, 0, 2);
-            if (!s.hsInit) { for (auto& row : s.hs) for (auto& v : row) v = -100.0f; s.hsInit = true; }
-            float want[3][64]{};
-            const HoleSet& hset = HoleSetOf(lvl);
-            s.off = -1.0f;
-            std::vector<RE::NiPoint3> rimPts;
-            if (in && c.ok && dw.holeFollow) {
-                V upw = c.u - c.a * Dot(c.u, c.a);
-                const float lu = Len(upw);
-                upw = lu > 1e-4f ? upw * (1.0f / lu) : c.u;
-                // the hole's real centre: the middle of its edge as he is drawn (the bone estimate leaned a hole-width to one side)
-                bool rimCen = false;
-                {
-                    const auto r0 = Fluid::RimEdge(act, c.h.ni(), c.a.ni(), c.x.ni(), upw.ni(), std::vector<float>{0.0f}, 16, 0.45f * c.sc, false);
-                    if (r0.hasCen[0]) { c.h = c.h + c.x * r0.cx[0] + upw * r0.cy[0]; rimCen = true; }
-                }
-                std::vector<float> depths;
-                for (float d : hset.ringD) depths.push_back(d * c.sc);
-                for (float d : hset.inD) depths.push_back(d * c.sc);
-                const auto sl = Fluid::SlicesAt(in, c.h.ni(), c.a.ni(), c.x.ni(), upw.ni(), depths, hset.n, 3.8f * c.sc, nullptr, dw.fitOutline);
-                const float fallback = 0.95f * std::clamp(Size::For(in).open, 0.7f, 1.6f);   // his mesh could not be read: by his size
-                s.off = sl[0].r > 0.0f ? std::sqrt(sl[0].cx * sl[0].cx + sl[0].cy * sl[0].cy) / c.sc : -1.0f;
-                // the hole moved with the shaft: the entrance to where the shaft's centre is at the mouth, the inside to where
-                // it is about 5 units in (the canal bends with an angled shaft)
-                float wantE[2]{}, wantD[2]{};
-                if (dw.shift && sl[0].r > 0.0f && rimCen) {
-                    // the hole's centre is read from the mesh (it already carries the shift): move on by what is left to the shaft
-                    wantE[0] = s.shE[0] + sl[0].cx / c.sc; wantE[1] = s.shE[1] + sl[0].cy / c.sc;
-                    wantD[0] = wantE[0]; wantD[1] = wantE[1];
-                    for (float* w : {wantE, wantD}) {
-                        const float l = std::sqrt(w[0] * w[0] + w[1] * w[1]);
-                        if (l > dw.shiftMax && l > 1e-4f) { w[0] *= dw.shiftMax / l; w[1] *= dw.shiftMax / l; }
-                    }
-                } else if (dw.shift && sl[0].r > 0.0f) {
-                    wantE[0] = sl[0].cx / c.sc; wantE[1] = sl[0].cy / c.sc;
-                    size_t best = 0; float bd = 1e9f;
-                    for (size_t k = 0; k < depths.size(); ++k)
-                        if (sl[k].r > 0.0f && std::abs(depths[k] / c.sc - 5.0f) < bd) { bd = std::abs(depths[k] / c.sc - 5.0f); best = k; }
-                    if (bd < 3.0f) { wantD[0] = sl[best].cx / c.sc; wantD[1] = sl[best].cy / c.sc; }
-                    else { wantD[0] = wantE[0]; wantD[1] = wantE[1]; }
-                    for (float* w : {wantE, wantD}) {
-                        const float l = std::sqrt(w[0] * w[0] + w[1] * w[1]);
-                        if (l > dw.shiftMax && l > 1e-4f) { w[0] *= dw.shiftMax / l; w[1] *= dw.shiftMax / l; }
-                    }
-                }
-                const float shT = rimCen ? 0.3f : 0.08f;   // closed loop: a little slower, no overshoot
-                for (int j = 0; j < 2; ++j) { ease(s.shE[j], wantE[j], shT, shT); ease(s.shD[j], wantD[j], shT, shT); }
-                auto ss = [](float a0, float a1, float x) { const float t = std::clamp((x - a0) / (a1 - a0), 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t); };
-                int i = 0;
-                for (int r = 0; r < hset.rings; ++r) {
-                    // where the hole's centre now is at this ring's depth (the two shift zones blend from 1.5 to 3.5 units)
-                    const float wd = ss(1.5f, 3.5f, hset.ringD[r]);
-                    const float mx = s.shE[0] * (1.0f - wd) + s.shD[0] * wd, my = s.shE[1] * (1.0f - wd) + s.shD[1] * wd;
-                    for (int q = 0; q < hset.n; ++q, ++i) {
-                        const float ang = 6.2831853f * static_cast<float>(q) / static_cast<float>(hset.n);
-                        // how far the shaft reaches this way from the (moved) centre; a ring the shaft does not reach stays shut
-                        // the shaft's own size that way, measured from ITS centre (PPA puts the hole on the shaft; measured from
-                        // a hole centre that was off, one side opened into an empty pocket)
-                        (void)mx; (void)my;
-                        float e = sl[r].r > 0.0f ? (sl[r].q[q] - (sl[r].cx * std::cos(ang) + sl[r].cy * std::sin(ang))) / c.sc : (r == 0 ? fallback : 0.0f);
-                        if (r > 0 && sl[r].r <= 0.0f && sl[0].r <= 0.0f) e = fallback;   // mesh unreadable: every ring by his size
-                        want[lvl][i] = dw.rimRead ? 0.0f : std::clamp((e * dw.holeSize - 0.04f) / 1.28f, 0.0f, 3.0f);   // snug: from PPA's own opening; else the mesh: 100% = 1.28 units round
-                    }
-                }
-                // the grip: read where his hole's edge really is (his canal as posed - our morphs, PPA's pull, his bones all in
-                // it) and close any gap to the shaft, or open where it clips through. The scale above is only the starting point.
-                if (dw.rimRead) {
-                    std::vector<float> rd;
-                    for (int r = 0; r < hset.rings; ++r) rd.push_back(hset.ringD[r] * c.sc);
-                    const auto rim = Fluid::RimEdge(act, c.h.ni(), c.a.ni(), c.x.ni(), upw.ni(), rd, hset.n, 0.45f * c.sc, dw.fitOutline);
-                    if (dw.fitOutline) rimPts = rim.pts;
-                    float errSum = 0.0f; int seen = 0;
-                    const float k = std::min(1.0f, dt / 0.25f);
-                    for (int r = 0; r < hset.rings; ++r)
-                        for (int q = 0; q < hset.n; ++q) {
-                            const int j = r * hset.n + q;
-                            float& cr = s.corr[lvl][j];
-                            if (rim.ok && rim.has[r][q] && sl[r].r > 0.0f) {
-                                const float ang = 6.2831853f * static_cast<float>(q) / static_cast<float>(hset.n);
-                                const float ext = sl[r].q[q] - (sl[r].cx * std::cos(ang) + sl[r].cy * std::sin(ang));   // the shaft's own size that way
-                                const float err = (rim.q[r][q] - ext * dw.holeSize) / c.sc;   // + = a gap, - = clipping (both about their own centres)
-                                cr -= err / 1.28f * k;
-                                errSum += err; ++seen;
-                            }
-                            cr = std::clamp(cr, -1.2f - want[lvl][j], 3.2f - want[lvl][j]);   // no wind-up past what the slider can do
-                            cr = std::clamp(cr, -1.2f, 3.0f);
-                            want[lvl][j] = std::clamp(want[lvl][j] + cr, -1.0f, 3.0f);   // negative: tighter than PPA opened him
-                        }
-                    s.gripErr = seen ? errSum / static_cast<float>(seen) : 0.0f;
-                    s.gripSeen = seen;
-                }
-                if (dw.canal > 0.0f)
-                    for (size_t k = 0; k < hset.inD.size(); ++k, ++i) {
-                        const auto& x = sl[hset.rings + k];
-                        if (x.r > 0.0f) want[lvl][i] = std::min(dw.canal, 1.0f) * std::clamp((x.r / c.sc * dw.holeSize - 0.1f) / 1.4f, 0.0f, 3.0f);
-                    }
-                // no funnel: behind the entrance the inside never closes tighter than a gentle taper of the entrance's
-                // opening, as far in as the tip has been (a ring or depth the shaft is not measured at clamped shut
-                // and pinched the walls into a star); past the tip it closes over a couple of units
-                {
-                    float entr = 0.0f;
-                    for (int q = 0; q < hset.n; ++q) entr += want[lvl][q];
-                    entr /= static_cast<float>(hset.n);
-                    const float reach = std::max(tip.ok ? tip.depth : 0.0f, s.reachMax);
-                    auto floorAt = [&](float d) {
-                        return entr * (1.0f - 0.04f * d) * (1.0f - ss(reach, reach + 2.5f, d));
-                    };
-                    int j = hset.n;   // ring A sets the floor; rings B / C keep their own direction, at least that
-                    for (int r = 1; r < hset.rings; ++r)
-                        for (int q = 0; q < hset.n; ++q, ++j)
-                            want[lvl][j] = std::max(want[lvl][j], want[lvl][q] * (1.0f - 0.04f * hset.ringD[r]) * (1.0f - ss(reach, reach + 2.5f, hset.ringD[r])));
-                    for (size_t k = 0; k < hset.inD.size(); ++k, ++j)
-                        want[lvl][j] = std::max(want[lvl][j], std::min(dw.canal, 1.0f) * floorAt(hset.inD[k]));
-                }
-                if (dw.fitOutline) {   // the fit outline: what was measured (green) and what the hole is asked to be (yellow)
-                    FitDbg fd;
-                    fd.at = std::chrono::steady_clock::now();
-                    fd.red.push_back(c.h.ni());
-                    fd.rim = rimPts;
-                    // the diagnostics go to the log only (once a second): Documents\My Games\Skyrim Special Edition\SKSE\AnatomicaMenu.log, [fit]
-                    static std::chrono::steady_clock::time_point lastLog{};
-                    const auto tnow = std::chrono::steady_clock::now();
-                    if (tnow - lastLog > std::chrono::seconds(1)) {
-                        lastLog = tnow;
-                        int nb = 0;
-                        if (auto* gr = in->Get3D(false))
-                            for (const char* nm : {"NPC Genitals01 [Gen01]", "NPC Genitals02 [Gen02]", "NPC Genitals03 [Gen03]",
-                                                   "NPC Genitals04 [Gen04]", "NPC Genitals05 [Gen05]", "NPC Genitals06 [Gen06]"})
-                                if (Node(gr, nm)) ++nb;
-                        int ok = 0;
-                        for (const auto& x : sl) if (x.r > 0.0f) ++ok;
-                        const int inTube = Fluid::InTube(in, c.h.ni(), c.a.ni(), 3.2f * c.sc, -0.3f * c.sc, 9.0f * c.sc);
-                        logger::info("[fit] {} taken by {} | found by {} | schlong mesh: {} | bones {}/6 | mesh pts in hole {} | measured {}/{} | tip {:.1f} | hole {:.0f}% | shift {:+.2f},{:+.2f} deep {:+.2f},{:+.2f} | off {:.2f} | grip gap {:+.2f} ({} seen)",
-                                     act->GetName(), in->GetName(), s.held ? "mesh" : "bones", Fluid::SchlongDesc(in), nb, inTube, ok, depths.size(),
-                                     tip.ok ? tip.depth : -99.0f, s.hole * 100.0f, s.shE[0], s.shE[1], s.shD[0], s.shD[1], s.off, s.gripErr, s.gripSeen);
-                        {
-                            std::string vals;
-                            for (size_t k = 0; k < sl.size(); ++k) vals += std::format(" d{:.1f}:r{:.2f}", depths[k] / c.sc, sl[k].r / c.sc);
-                            logger::info("[fit]  measured radius per depth:{}", vals);
-                            std::string sent;
-                            for (size_t k = 0; k < hset.names.size(); ++k) sent += std::format(" {:.2f}", s.hv[lvl][k]);
-                            logger::info("[fit]  sent (detail {}):{}", lvl, sent);
-                        }
-                        for (auto* o : others) {
-                            if (o == act) continue;
-                            const float dist = act->GetPosition().GetDistance(o->GetPosition());
-                            if (dist > 90.0f) continue;
-                            logger::info("[fit]  {} {:08X}: {:.0f} away | schlong {} | bone check {} | mesh pts in hole {}", o->GetName(), o->GetFormID(), dist,
-                                         Fluid::SchlongDesc(o), Inside(c, o, rad), Fluid::InTube(o, c.h.ni(), c.a.ni(), 3.2f * c.sc, -0.3f * c.sc, 9.0f * c.sc));
-                        }
-                        for (const auto& l : Fluid::ReportSchlong(in, c.h.ni(), c.a.ni(), c.sc).lines) logger::info("[fit]{}", l);
-                        logger::info("[fit]  canal: scale {:.2f} | entrance {:.0f},{:.0f},{:.0f} | axis {:.2f},{:.2f},{:.2f}", c.sc, c.h.x, c.h.y, c.h.z, c.a.x, c.a.y, c.a.z);
-                    }
-                    for (size_t k = 0; k < depths.size(); ++k)   // blue: the shaft's centre at each depth, from the mesh
-                        if (sl[k].r > 0.0f) fd.blue.push_back((c.h + c.a * depths[k] + c.x * sl[k].cx + upw * sl[k].cy).ni());
-                    const V rt = c.x, upv = upw;
-                    auto dirAt = [&](float t) { return rt * std::cos(t) + upv * std::sin(t); };
-                    const float wN = 6.2831853f / static_cast<float>(hset.n);
-                    for (size_t k = 0; k < depths.size(); ++k) {
-                        const V ck = c.h + c.a * depths[k];
-                        if (sl[k].hasQd && sl[k].r > 0.0f) {
-                            std::vector<RE::NiPoint3> g;
-                            const V sc0 = ck + rt * sl[k].cx + upv * sl[k].cy;   // the shaft's own centre at this depth
-                            for (int q = 0; q < 24; ++q) {
-                                const float t = 6.2831853f * q / 24.0f;
-                                g.push_back((sc0 + dirAt(t) * (sl[k].qd[q] - (sl[k].cx * std::cos(t) + sl[k].cy * std::sin(t)))).ni());
-                            }
-                            fd.green.push_back(std::move(g));
-                        }
-                        // yellow: from the values actually sent (eased, capped), back through the same calibration
-                        const float dm = depths[k] / c.sc;
-                        const float wd = ss(1.5f, 3.5f, dm);
-                        const V cen = rimCen ? ck : ck + (rt * (s.shE[0] * (1.0f - wd) + s.shD[0] * wd) + upv * (s.shE[1] * (1.0f - wd) + s.shD[1] * wd)) * c.sc;
-                        std::vector<RE::NiPoint3> y;
-                        if (static_cast<int>(k) < hset.rings) {
-                            const float* v = &s.hv[lvl][k * hset.n];
-                            for (int q = 0; q < 24; ++q) {
-                                const float t = 6.2831853f * q / 24.0f;
-                                float val = 0.0f;
-                                for (int j = 0; j < hset.n; ++j) {
-                                    float d = t - wN * static_cast<float>(j);
-                                    d = std::atan2(std::sin(d), std::cos(d));
-                                    if (std::abs(d) < wN) { const float cw = std::cos(d * static_cast<float>(hset.n) / 4.0f); val += cw * cw * v[j]; }
-                                }
-                                y.push_back((cen + dirAt(t) * ((val * 1.35f + 0.08f) * c.sc)).ni());
-                            }
-                        } else {
-                            const float val = s.hv[lvl][hset.rings * hset.n + (k - hset.rings)];
-                            if (val <= 0.001f) continue;
-                            for (int q = 0; q < 24; ++q) y.push_back((cen + dirAt(6.2831853f * q / 24.0f) * ((val * 1.4f + 0.1f) * c.sc)).ni());
-                        }
-                        fd.yellow.push_back(std::move(y));
-                    }
-                    std::lock_guard dl(g_dbgMx);
-                    g_dbg[act->GetFormID()] = std::move(fd);
-                }
-            } else {
-                for (int j = 0; j < 2; ++j) { ease(s.shE[j], 0.0f, 0.08f, 0.25f); ease(s.shD[j], 0.0f, 0.1f, 0.25f); }
-            }
-            for (int l = 0; l < 3; ++l)   // the grip is learned per scene: it fades when he is not taken (and on the other levels)
-                if (l != lvl || !in || !dw.rimRead) for (auto& x : s.corr[l]) x *= std::max(0.0f, 1.0f - dt / 0.6f);
-            for (int l = 0; l < 3; ++l) {
-                const size_t cnt = HoleSetOf(l).names.size();
-                for (size_t i = 0; i < cnt; ++i) ease(s.hv[l][i], want[l][i], 0.12f, want[l][i] > 0.0f ? 0.15f : (in ? 0.2f : 0.35f));   // (full open in 0.12 s: one bad reading cannot jump it)
-            }
-            {   // for the status window: the entrance ring, on average
-                float sum = 0.0f;
-                for (int q = 0; q < hset.n; ++q) sum += s.hv[lvl][q];
-                s.hole = sum / static_cast<float>(hset.n);
-            }
-            // without it: the inside opened round the schlong by his size (the round Anatomica Canal)
-            if (dw.holeFollow) s.canal = 0.0f;
-            else ease(s.canal, (partner && dw.canal > 0.0f) ? dw.canal * std::clamp(Size::For(partner).open, 0.7f, 1.4f) : 0.0f, 0.25f, 0.8f);
+            // the inside opened round the schlong by his size (the round Anatomica Canal); PPA opens and places the entrance
+            ease(s.canal, (partner && dw.canal > 0.0f) ? dw.canal * std::clamp(Size::For(partner).open, 0.7f, 1.4f) : 0.0f, 0.25f, 0.8f);
             // the rim carried along by the shaft: in on the push, out on the withdraw, springing back to rest
             if (tip.ok && dw.ring) {
                 // follows the stroke itself: deeper than where the strokes are centred = drawn in, shallower = pulled out
@@ -723,14 +458,6 @@ namespace {
                 }
             };
             send("Anatomica Gape", 0.0f, s.holeSent);   // (2.4 test builds opened the hole with the gape shape: cleared)
-            send("Anatomica Shift Right", s.shE[0], s.shSent[0]);
-            send("Anatomica Shift Up", s.shE[1], s.shSent[1]);
-            send("Anatomica Shift Deep Right", s.shD[0], s.shSent[2]);
-            send("Anatomica Shift Deep Up", s.shD[1], s.shSent[3]);
-            for (int l = 0; l < 3; ++l) {
-                const auto& nm = HoleSetOf(l).names;
-                for (size_t i = 0; i < nm.size(); ++i) send(nm[i].c_str(), s.hv[l][i], s.hs[l][i]);
-            }
             send("Anatomica Canal", s.canal, s.canalSent);
             send("Anatomica Pout", s.ringPos, s.poutSent);
             static const char* kBulge[19] = {"Anatomica Bulge Seg 1", "Anatomica Bulge Seg 2", "Anatomica Bulge Seg 3",
@@ -741,7 +468,7 @@ namespace {
                                              "Anatomica Bulge Flare 1", "Anatomica Bulge Flare 2", "Anatomica Bulge Flare 3",
                                              "Anatomica Bulge Flare 4", "Anatomica Bulge Flare 5", "Anatomica Bulge Flare 6"};
             for (int i = 0; i < 19; ++i) send(kBulge[i], s.bulge[i], s.bulgeSent[i]);
-            { std::lock_guard gl(g_gapeMx); g_during[act->GetFormID()] = {tip.ok ? tip.depth : -100.0f, s.hole, s.ringPos, s.off, s.held}; }
+            { std::lock_guard gl(g_gapeMx); g_during[act->GetFormID()] = {tip.ok ? tip.depth : -100.0f, s.canal, s.ringPos, -1.0f, s.held}; }
         }
         if (update && g_morph) g_morph->UpdateModelWeight(act, false);
     }
@@ -1242,39 +969,6 @@ namespace {
 
 namespace Engine {
     // the fit outline over the game (During sex page > Show the fit outline)
-    void __stdcall DrawFitOutline() {
-        if (!::During::Get().fitOutline) return;
-        auto* cam = RE::Main::WorldRootCamera();
-        auto* io = ImGuiMCP::GetIO();
-        if (!cam || !io) return;
-        const float W = io->DisplaySize.x, H = io->DisplaySize.y;
-        auto* dl = ImGuiMCP::GetForegroundDrawList();
-        if (!dl) return;
-        auto proj = [&](const RE::NiPoint3& p, ImGuiMCP::ImVec2& out) {
-            float x = 0, y = 0, z = 0;
-            if (!cam->WorldPtToScreenPt3(p, x, y, z, 1e-5f) || z < 0.0f) return false;
-            out = ImGuiMCP::ImVec2{x * W, (1.0f - y) * H};
-            return true;
-        };
-        auto loop = [&](const std::vector<RE::NiPoint3>& pts, ImGuiMCP::ImU32 col, float th) {
-            std::vector<ImGuiMCP::ImVec2> v;
-            for (const auto& p : pts) { ImGuiMCP::ImVec2 o; if (!proj(p, o)) return; v.push_back(o); }
-            if (v.size() >= 2) ImGuiMCP::ImDrawListManager::AddPolyline(dl, v.data(), static_cast<int>(v.size()), col, ImGuiMCP::ImDrawFlags_Closed, th);
-        };
-        const auto now = std::chrono::steady_clock::now();
-        std::lock_guard lk(g_dbgMx);
-        for (auto it = g_dbg.begin(); it != g_dbg.end();) {
-            if (now - it->second.at > std::chrono::milliseconds(400)) { it = g_dbg.erase(it); continue; }
-            const auto& d = it->second;
-            for (const auto& g : d.green) loop(g, 0xFF40FF40u, 2.0f);    // ABGR: green
-            for (const auto& y : d.yellow) loop(y, 0xFF30E0FFu, 1.5f);   // yellow
-            for (const auto& p : d.red) { ImGuiMCP::ImVec2 o; if (proj(p, o)) ImGuiMCP::ImDrawListManager::AddCircleFilled(dl, o, 4.0f, 0xFF3030FFu, 12); }
-            for (const auto& p : d.blue) { ImGuiMCP::ImVec2 o; if (proj(p, o)) ImGuiMCP::ImDrawListManager::AddCircleFilled(dl, o, 3.0f, 0xFFFF9030u, 12); }
-            for (const auto& p : d.rim) { ImGuiMCP::ImVec2 o; if (proj(p, o)) ImGuiMCP::ImDrawListManager::AddCircleFilled(dl, o, 1.8f, 0xFFFFFFFFu, 6); }
-            ++it;
-        }
-    }
-    void RegisterHud() { SKSEMenuFramework::AddHudElement(DrawFitOutline); }
 
     void Install() { std::thread(Loop).detach(); }
 
