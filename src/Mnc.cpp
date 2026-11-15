@@ -17,7 +17,10 @@ namespace {
     std::map<std::string, int> g_groupRaces;                      // group -> how many races (menu)
     std::unordered_map<RE::FormID, int> g_styleArmor;             // style armour -> shape
     std::map<std::string, int> g_shape;                           // group -> shape (from the ini / menu; else the default)
-    struct Seen { int shape = 0; double at = -100.0; };
+    std::map<std::string, During::Knots> g_knots;                 // group -> its knots (which, how strong)
+    std::map<std::string, std::string> g_type;                    // group -> type key set in the menu ("auto" = automatic)
+    std::unordered_map<RE::FormID, std::string> g_styleType;      // style armour -> type key
+    struct Seen { int shape = 0; During::Knots knots; double at = -100.0; };
     std::unordered_map<RE::FormID, Seen> g_seen;                  // per creature, a few seconds
 
     double Now() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
@@ -34,6 +37,7 @@ namespace {
         {"Demons", {"dremora", "demon", "daedra", "xivilai", "devil"}},
         {"Thri-kreen", {"thrikreen", "thri_kreen", "thri-kreen", "kreen"}},
         {"Kwama", {"kwama"}},
+        {"Clannfear", {"clannfear"}},
     };
 
     int DefaultShape(const std::string& group) {
@@ -53,6 +57,29 @@ namespace {
         return 0;   // automatic (by its schlong / size)
     }
 
+    std::string DefaultType(const std::string& group) {   // 2.5f: the Size type a group counts as
+        const std::string g = Lower(group);
+        if (g == "daedroth" || g == "demons") return "ridged";
+        if (g == "thri-kreen" || g == "kwama") return "segmented";
+        if (g == "clannfear") return "twin";
+        if (Has(g, {"fox", "goat", "deer", "skeever", "rabbit", "elk"})) return "tapered";
+        if (Has(g, {"canine", "dog", "wolves", "wolf", "werewol", "hound"})) return "knotted";
+        if (Has(g, {"horse"})) return "flared";
+        if (Has(g, {"boar", "cow", "bull", "minotaur"})) return "pizzle";
+        if (Has(g, {"giant", "mammoth", "lurker", "troll", "bear", "gargoyle", "vampirelord", "ogre", "ogrim"})) return "colossal";
+        if (Has(g, {"dwarven", "centurion"})) return "piston";
+        if (Has(g, {"chaurus", "spider", "ashhopper", "scrib"})) return "segmented";
+        if (Has(g, {"draugr", "dragonpriest", "skeleton", "zombie"})) return "cold";
+        if (Has(g, {"atronach", "ash guardian", "ashguardian"})) return "elemental";
+        if (Has(g, {"dragon"})) return "ridged";
+        if (Has(g, {"sabre"})) return "barbed";
+        if (Has(g, {"lurker", "seeker", "netch", "spriggan", "icewraith", "wisp"})) return "tentacle";
+        return {};
+    }
+    std::string GroupType(const std::string& g) {
+        if (auto it = g_type.find(g); it != g_type.end()) return it->second == "auto" ? std::string{} : it->second;
+        return DefaultType(g);
+    }
     // a forgiving reader for these files: strings, ':' '[' ']' '{' '}' (missing / extra commas are fine)
     struct Tok { char t; std::string s; };   // t = 's' string, or the character
     std::vector<Tok> Lex(const std::string& txt) {
@@ -132,9 +159,10 @@ namespace {
             else if (Has(name, {"horse style", "dragshorse", "werehorse"})) shape = During::kHorse;
             else if (Has(name, {"dragon style", "dragsdrag"})) shape = During::kRidged;
             if (!shape) continue;
+            const char* type = shape == During::kKnot ? "knotted" : shape == During::kHorse ? "flared" : "ridged";
             for (size_t i = 0; i + 2 < T.size(); ++i)
                 if (T[i].t == 's' && (T[i].s == "arousedArmor" || T[i].s == "normalArmor") && T[i + 1].t == ':' && T[i + 2].t == 's')
-                    if (const auto id = FormOf(T[i + 2].s)) g_styleArmor[id] = shape;
+                    if (const auto id = FormOf(T[i + 2].s)) { g_styleArmor[id] = shape; g_styleType[id] = type; }
         }
         logger::info("Anatomica: More Nasty Critters - {} races in {} groups, {} style armours", g_raceGroup.size(), g_groupRaces.size(),
                      g_styleArmor.size());
@@ -152,36 +180,64 @@ namespace Mnc {
         Ensure();
         return g_active;
     }
-    int ShapeFor(RE::Actor* a) {
+    int ShapeFor(RE::Actor* a, During::Knots* knots) {
+        if (knots) *knots = {};
         if (!a) return 0;
         std::lock_guard lk(g_mx);
         Ensure();
         if (!g_active) return 0;
         auto& seen = g_seen[a->GetFormID()];
-        if (Now() - seen.at < 5.0) return seen.shape;
+        if (Now() - seen.at < 5.0) { if (knots) *knots = seen.knots; return seen.shape; }
         int shape = 0;
+        During::Knots kn;
+        std::string group;
         // the style he wears (werewolves, dragons)
         if (!g_styleArmor.empty())
             if (auto* inv = a->GetInventoryChanges(); inv && inv->entryList)
                 for (auto* e : *inv->entryList)
                     if (e && e->object && e->IsWorn())
                         if (auto it = g_styleArmor.find(e->object->GetFormID()); it != g_styleArmor.end()) { shape = it->second; break; }
-        if (!shape)
-            if (auto* race = a->GetRace()) {
+        if (auto* race = a->GetRace()) {
                 const std::string ed = race->formEditorID.c_str() ? Lower(race->formEditorID.c_str()) : std::string{};
-                if (auto it = g_raceGroup.find(ed); it != g_raceGroup.end()) shape = GroupShape(it->second);
+                if (auto it = g_raceGroup.find(ed); it != g_raceGroup.end()) group = it->second;
                 else
                     for (auto& w : kWordGroups)
-                        if (Has(ed, w.words)) { shape = GroupShape(w.name); break; }
+                        if (Has(ed, w.words)) { group = w.name; break; }
             }
-        seen = {shape, Now()};
+        if (!group.empty()) {
+            if (!shape) shape = GroupShape(group);
+            if (auto it = g_knots.find(group); it != g_knots.end()) kn = it->second;
+        }
+        seen = {shape, kn, Now()};
+        if (knots) *knots = kn;
         return shape;
+    }
+    std::string TypeFor(RE::Actor* a) {
+        if (!a) return {};
+        std::lock_guard lk(g_mx);
+        Ensure();
+        if (!g_active) return {};
+        if (!g_styleType.empty())
+            if (auto* inv = a->GetInventoryChanges(); inv && inv->entryList)
+                for (auto* e : *inv->entryList)
+                    if (e && e->object && e->IsWorn())
+                        if (auto it = g_styleType.find(e->object->GetFormID()); it != g_styleType.end()) return it->second;
+        if (auto* race = a->GetRace()) {
+            const std::string ed = race->formEditorID.c_str() ? Lower(race->formEditorID.c_str()) : std::string{};
+            if (auto it = g_raceGroup.find(ed); it != g_raceGroup.end()) return GroupType(it->second);
+            for (auto& w : kWordGroups) if (Has(ed, w.words)) return GroupType(w.name);
+        }
+        return {};
+    }
+    void SetType(const std::string& group, const std::string& typeKey) {
+        std::lock_guard lk(g_mx);
+        g_type[group] = typeKey.empty() ? std::string("auto") : typeKey;
     }
     std::vector<Group> Groups() {
         std::lock_guard lk(g_mx);
         Ensure();
         std::vector<Group> out;
-        for (auto& [g, n] : g_groupRaces) out.push_back({g, GroupShape(g), n});
+        for (auto& [g, n] : g_groupRaces) out.push_back({g, GroupShape(g), n, g_knots.count(g) ? g_knots[g] : During::Knots{}, GroupType(g)});
         return out;
     }
     void SetShape(const std::string& group, int shape) {
@@ -189,16 +245,30 @@ namespace Mnc {
         g_shape[group] = shape;
         g_seen.clear();
     }
+    void SetKnots(const std::string& group, const During::Knots& knots) {
+        std::lock_guard lk(g_mx);
+        g_knots[group] = knots;
+        g_seen.clear();
+    }
     void Ini(CSimpleIniA& ini, bool save) {
         constexpr const char* S = "CreatureBulge";
         std::lock_guard lk(g_mx);
+        constexpr const char* SK = "CreatureBulgeKnots";
         if (save) {
             for (auto& [g, v] : g_shape) ini.SetLongValue(S, g.c_str(), v);
+            for (auto& [g, v] : g_knots) ini.SetValue(SK, g.c_str(), v.Save().c_str());
+            for (auto& [g, v] : g_type) ini.SetValue("CreatureType", g.c_str(), v.c_str());
             return;
         }
         CSimpleIniA::TNamesDepend keys;
         ini.GetAllKeys(S, keys);
         for (auto& k : keys) g_shape[k.pItem] = std::clamp(static_cast<int>(ini.GetLongValue(S, k.pItem, 0)), 0, During::kShapeCount - 1);
+        CSimpleIniA::TNamesDepend kk;
+        ini.GetAllKeys(SK, kk);
+        for (auto& k : kk) g_knots[k.pItem] = During::Knots::Load(ini.GetValue(SK, k.pItem, "0"));
+        CSimpleIniA::TNamesDepend kt;
+        ini.GetAllKeys("CreatureType", kt);
+        for (auto& k : kt) g_type[k.pItem] = Lower(ini.GetValue("CreatureType", k.pItem, "auto"));
         g_seen.clear();
     }
 }

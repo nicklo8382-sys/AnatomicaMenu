@@ -24,6 +24,7 @@ namespace Size {
     std::string ShapeWord(int shape);        // "uncut", "knotted"...; "" when not known
     std::string ShapeKey(int shape);         // its table key ("cut", "knotted"...); "" when not known
     std::vector<std::pair<std::string, std::string>> ShapeList();   // every type in the table: key, menu name (2.5: bulge per type)
+    std::vector<std::pair<std::string, std::string>> CreatureTypeList();   // every type, creature types included (MNC section)
     bool IsCreatureActor(RE::Actor* a);      // by race (not an NPC race; werewolves / vampire lords count)
     std::string Describe(RE::Actor* partner);   // "huge, knotted" / "uncut" / "" (for memories and reactions)
 

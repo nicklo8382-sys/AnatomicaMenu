@@ -1,5 +1,6 @@
 #include "Size.h"
 #include "SKSEMenuFramework.h"
+#include "Mnc.h"
 
 #include <algorithm>
 #include <chrono>
@@ -92,7 +93,8 @@ namespace {
     // replaces the earlier one.
     // Which shape a man has: the menu's choice for him > [Actors] in a file > a keyword "Anatomica_Shape_<Key>" on his
     // schlong armour > [Forms] > [Names] > TNG's own types > a guess from the armour's name.
-    struct ShapeDef { std::string key, name, word, desc, source; float open = 1.0f, build = 1.0f, loose = 1.0f, tender = 1.0f; };
+    struct ShapeDef { std::string key, name, word, desc, source; float open = 1.0f, build = 1.0f, loose = 1.0f, tender = 1.0f;
+                      bool creature = false; };   // 2.5f: a creature type (More Nasty Critters section)
     std::vector<ShapeDef> g_defs;   // [0] = not known
     using Pairs = std::vector<std::pair<std::string, std::string>>;   // (shape key, target)
     Pairs g_namesRaw, g_formsRaw, g_actorsRaw, g_racesRaw, g_menuActors;
@@ -147,6 +149,20 @@ namespace {
         add("ridged",   "Ridged / shaped",   "ridged",      1.00f, 1.00f, 1.05f, 1.25f, "Ridges, plates and scales: sorer.");
         add("barbed",   "Barbed",            "barbed",      1.00f, 1.00f, 1.00f, 1.40f, "Barbs: much sorer.");
         add("tentacle", "Tentacle",          "tentacled",   0.90f, 0.80f, 1.00f, 0.95f, "Slides in quickly, opens him less.");
+        // 2.5f: creature types (shown and set in the More Nasty Critters section)
+        auto cr = [](const char* k, const char* n, const char* w, float o, float b, float l, float t, const char* d) {
+            ShapeDef sd{k, n, w, d, "built in", o, b, l, t};
+            sd.creature = true;
+            g_defs.push_back(sd);
+        };
+        cr("tapered",   "Tapered",   "tapered",          0.90f, 0.80f, 0.90f, 0.90f, "Thin and pointed: goat, deer, fox, skeever.");
+        cr("pizzle",    "Pizzle",    "long, tapering",   1.00f, 0.85f, 1.05f, 1.10f, "Long, thin and deep: bull, boar.");
+        cr("colossal",  "Colossal",  "enormous",         1.50f, 1.40f, 1.60f, 1.50f, "Beyond a man's build: giant, mammoth, troll, bear, lurker.");
+        cr("segmented", "Segmented", "jointed",          1.05f, 0.95f, 1.00f, 1.30f, "Chitin: chaurus, thri-kreen, kwama, spider, ash hopper.");
+        cr("twin",      "Twin",      "paired",           1.20f, 1.00f, 1.15f, 1.15f, "Lizard-style pair: clannfear.");
+        cr("cold",      "Cold",      "cold, unyielding", 1.00f, 1.10f, 0.90f, 1.35f, "No warmth or give: draugr, skeleton, dragon priest.");
+        cr("piston",    "Piston",    "mechanical",       1.10f, 0.70f, 1.20f, 1.40f, "Dwarven constructs.");
+        cr("elemental", "Elemental", "ice-hard",         1.10f, 1.00f, 1.00f, 1.40f, "Atronachs and ash creatures.");
     }
     // a guess from an armour / race name (when nothing tells us)
     bool HasW(const std::string& s, std::initializer_list<const char*> ws) { for (auto* w : ws) if (s.find(w) != std::string::npos) return true; return false; }
@@ -258,6 +274,8 @@ namespace {
         if (auto* race = a->GetRace(); race && IsCreature(a)) {   // creatures: by race
             const std::string ed = race->formEditorID.c_str() ? LowerS(race->formEditorID.c_str()) : "";
             const std::string from = std::string("creature: ") + (race->GetName() && *race->GetName() ? race->GetName() : ed);
+            if (Mnc::Active())   // 2.5f: More Nasty Critters - its style, or the type set for his group
+                if (const std::string mk = Mnc::TypeFor(a); !mk.empty() && DefIndex(mk)) return Pick(mk, from, "More Nasty Critters");
             for (auto& [k, part] : g_racesRaw) if (!part.empty() && ed.find(LowerS(part)) != std::string::npos) return Pick(k, from, "a compatibility file");
             std::string k = Guess(" " + ed + " ");
             if (k.empty() && HasW(ed, {"werewolf"})) k = "knotted";
@@ -384,7 +402,14 @@ namespace Size {
         std::lock_guard lk(g_mx);
         if (g_defs.empty()) Builtins();
         std::vector<std::pair<std::string, std::string>> out;
-        for (size_t i = 1; i < g_defs.size(); ++i) out.emplace_back(g_defs[i].key, g_defs[i].name);
+        for (size_t i = 1; i < g_defs.size(); ++i) if (!g_defs[i].creature) out.emplace_back(g_defs[i].key, g_defs[i].name);
+        return out;
+    }
+    std::vector<std::pair<std::string, std::string>> CreatureTypeList() {
+        std::lock_guard lk(g_mx);
+        if (g_defs.empty()) Builtins();
+        std::vector<std::pair<std::string, std::string>> out;
+        for (size_t i = 1; i < g_defs.size(); ++i) out.emplace_back(g_defs[i].key, g_defs[i].name);   // every type (creature ones first in use)
         return out;
     }
     bool IsCreatureActor(RE::Actor* a) { return IsCreature(a); }
@@ -436,7 +461,7 @@ namespace Size {
         return k;
     }
 
-    bool RenderSection() {
+    bool RenderTngSection() {
         const bool noTNG = !HasTNG();
         if (!Section(noTNG ? "Partner size and shape (The New Gentleman)  (not installed)###tng" : "Partner size and shape (The New Gentleman)###tng")) return false;
         bool ch = false;
@@ -456,15 +481,6 @@ namespace Size {
             ImGuiMCP::EndDisabled();
             Help("100% = an XL man opens him 30% further, loosens him 50% more and makes him 30% sorer; an XS man 25% less "
                  "open, 40% less loosening. 200% doubles those differences.");
-            ch |= ImGuiMCP::Checkbox("Creatures count too", &g.creatures);
-            Help("Horses, werewolves, trolls, dragons and other creatures (no TNG size of their own).");
-            if (g.creatures) {
-                ImGuiMCP::Indent();
-                static const char* items[] = {"Like an L man", "Like an XL man", "Bigger than any man"};
-                int sel = std::clamp(g.creatureCat - 3, 0, 2);
-                if (ImGuiMCP::Combo("A creature counts", &sel, items, 3)) { g.creatureCat = sel + 3; ch = true; }
-                ImGuiMCP::Unindent();
-            }
             ch |= ImGuiMCP::Checkbox("The shape of his schlong matters too", &g.shape);
             Help("Read from the schlong TNG gave him (TNG's own Circumcised / Muscular / Regular, add-ons by their name or "
                  "their mod's compatibility file). Each shape opens, loosens and makes him sore its own way - see Shapes below, "
@@ -533,6 +549,7 @@ namespace Size {
                 int remove = 0;
                 for (size_t i = 1; i < g_defs.size(); ++i) {
                     ShapeDef& d = g_defs[i];
+                    if (d.creature) continue;   // 2.5f: in the More Nasty Critters section
                     ImGuiMCP::PushID(static_cast<int>(i));
                     if (ImGuiMCP::TreeNode("shape", "%s  (%s)", d.name.c_str(), d.source.c_str())) {
                         bool e = false;
@@ -578,6 +595,75 @@ namespace Size {
             }
             ImGuiMCP::Unindent();
         }
+        return ch;
+    }
+    // 2.5f: More Nasty Critters - only there when it is installed
+    bool RenderMncSection() {
+        if (!Mnc::Active()) return false;
+        if (!Section("Creatures (More Nasty Critters)###mnc")) return false;
+        bool ch = false;
+        ch |= ImGuiMCP::Checkbox("Creatures count too", &g.creatures);
+        Help("Horses, werewolves, trolls, dragons and other creatures (no TNG size of their own) count as big partners.");
+        if (g.creatures) {
+            ImGuiMCP::Indent();
+            static const char* items[] = {"Like an L man", "Like an XL man", "Bigger than any man"};
+            int sel = std::clamp(g.creatureCat - 3, 0, 2);
+            if (ImGuiMCP::Combo("A creature counts", &sel, items, 3)) { g.creatureCat = sel + 3; ch = true; }
+            ImGuiMCP::Unindent();
+        }
+        if (ImGuiMCP::TreeNode("Creature types (change them)###crtypes")) {
+            std::lock_guard lk(g_mx);
+            ImGuiMCP::TextDisabled("x1.00 = no change. Open: how far he gapes. Build: time to open up (lower = faster). "
+                                   "Loose: lasting looseness. Sore: soreness and redness.");
+            for (size_t i = 1; i < g_defs.size(); ++i) {
+                ShapeDef& d = g_defs[i];
+                if (!d.creature) continue;
+                ImGuiMCP::PushID(static_cast<int>(1000 + i));
+                if (ImGuiMCP::TreeNode("ctype", "%s  (%s)", d.name.c_str(), d.source.c_str())) {
+                    bool e = false;
+                    char nb[64]; std::snprintf(nb, sizeof(nb), "%s", d.name.c_str());
+                    if (ImGuiMCP::InputText("Name", nb, sizeof(nb))) { d.name = nb; e = true; }
+                    char wb[48]; std::snprintf(wb, sizeof(wb), "%s", d.word.c_str());
+                    if (ImGuiMCP::InputText("Word (SkyrimNet: \"his huge ___ cock\")", wb, sizeof(wb))) { d.word = wb; e = true; }
+                    e |= ImGuiMCP::SliderFloat("Open", &d.open, 0.5f, 2.0f, "x%.2f");
+                    e |= ImGuiMCP::SliderFloat("Build", &d.build, 0.5f, 2.0f, "x%.2f");
+                    e |= ImGuiMCP::SliderFloat("Loose", &d.loose, 0.5f, 2.0f, "x%.2f");
+                    e |= ImGuiMCP::SliderFloat("Sore", &d.tender, 0.5f, 2.0f, "x%.2f");
+                    if (!d.desc.empty()) ImGuiMCP::TextDisabled("%s", d.desc.c_str());
+                    if (e) { d.source = "menu"; ch = true; }
+                    ImGuiMCP::TreePop();
+                }
+                ImGuiMCP::PopID();
+            }
+            ImGuiMCP::TreePop();
+        }
+        if (ImGuiMCP::TreeNode("Type for each kind of creature###crgroups")) {
+            ImGuiMCP::TextDisabled("Which type each MNC group counts as (how far it opens him, loosens him, how sore). Werewolves and "
+                                   "dragons follow the MNC style they wear first (dog -> knotted, horse -> flared, dragon -> ridged).");
+            const auto types = CreatureTypeList();
+            std::vector<std::string> names{"Automatic (by its name)"};
+            for (auto& t : types) names.push_back(t.second);
+            std::vector<const char*> opts;
+            for (auto& n : names) opts.push_back(n.c_str());
+            for (auto& gr : Mnc::Groups()) {
+                int v = 0;
+                for (size_t i = 0; i < types.size(); ++i) if (types[i].first == gr.type) v = static_cast<int>(i) + 1;
+                const std::string label = gr.races ? std::format("{} ({} races)###ct_{}", gr.name, gr.races, gr.name)
+                                                   : std::format("{} (by name)###ct_{}", gr.name, gr.name);
+                ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 14.0f);
+                if (ImGuiMCP::Combo(label.c_str(), &v, opts.data(), static_cast<int>(opts.size()))) {
+                    Mnc::SetType(gr.name, v > 0 ? types[v - 1].first : std::string{});
+                    { std::lock_guard lk(g_mx); g_shapes.clear(); }
+                    ch = true;
+                }
+            }
+            ImGuiMCP::TreePop();
+        }
+        return ch;
+    }
+    bool RenderSection() {
+        bool ch = RenderTngSection();
+        ch |= RenderMncSection();
         return ch;
     }
 }

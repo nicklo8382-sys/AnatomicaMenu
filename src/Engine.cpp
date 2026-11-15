@@ -160,14 +160,14 @@ namespace {
     // the belly-bulge sliders (2.5: 56): Seg 1-6, Head 1-6, Knot, Flare 1-6, Ridge 1-6, Bead 1-6, Big 1-6, Big Head 1-6,
     // Hook 1-6, Knot 2, Tentacle 1-6
     constexpr int kSeg = 0, kHead = 6, kKnot1 = 12, kFlare = 13, kRidge = 19, kBead = 25, kBig = 31, kBigHead = 37, kHook = 43,
-                  kKnot2 = 49, kTent = 50, kNB = 56;
+                  kKnot2 = 49, kTent = 50, kBelly = 56, kNB = 57;
     const std::vector<std::string>& BulgeNames() {
         static const std::vector<std::string> n = [] {
             std::vector<std::string> v(kNB);
             auto fam = [&](int at, const char* f) { for (int i = 0; i < 6; ++i) v[at + i] = std::format("Anatomica Bulge {} {}", f, i + 1); };
             fam(kSeg, "Seg"); fam(kHead, "Head"); fam(kFlare, "Flare"); fam(kRidge, "Ridge"); fam(kBead, "Bead"); fam(kBig, "Big");
             fam(kBigHead, "Big Head"); fam(kHook, "Hook"); fam(kTent, "Tentacle");
-            v[kKnot1] = "Anatomica Bulge Knot"; v[kKnot2] = "Anatomica Bulge Knot 2";
+            v[kKnot1] = "Anatomica Bulge Knot"; v[kKnot2] = "Anatomica Bulge Knot 2"; v[kBelly] = "Anatomica Bulge Belly";
             return v;
         }();
         return n;
@@ -189,6 +189,7 @@ namespace {
         float grow = 0.0f, fillHold = 0.0f;      // 2.5 build-up: how far grown (0-1), how far the held shaft reaches
         double moveT = 0.0;                      // 2.5 travelling: its clock
         float tw = 0.0f, twWant = 0.0f; double twNext = 0.0;   // 2.5 twitching
+        float bellyG = 0.0f, rndB = 0.0f;        // 2.5f stomach: how far risen (0-1), this stroke's variation
         float pulse = 0.0f, bulgeDil = 0.0f;     // thrust pulse; how worked he was while it bulged (lingering)
         float hole = 0.0f, holeSent = -100.0f;
         double inLast = -100.0;                  // last time a schlong was found in him by the bones
@@ -419,6 +420,7 @@ namespace {
             if (vel > 2.0f && s.lastVel <= 2.0f) {   // a new push: this stroke's randomness
                 s.rndH = Rand(-1.0f, 1.0f) * dw.bulgeRandom;
                 s.rndA = Rand(-1.0f, 1.0f) * dw.bulgeRandom;
+                s.rndB = Rand(-1.0f, 1.0f);
             }
             s.lastVel = vel;
             // 2.5: how deep his strokes reach (slowly forgotten): the head travels over the whole stroke, not a fixed 10 units
@@ -429,7 +431,9 @@ namespace {
                 const int cat = test ? 4 : Size::Cat(partner);
                 if (test || !dw.bulgeBig || cat >= 3) {
                     int shape = test ? s.testShape : dw.bulgeShape;
-                    if (shape <= 0 || shape >= During::kShapeCount) shape = During::AutoShape(partner);
+                    During::Knots kn;   // 2.5d/e: his schlong's knots (added to any shape, also a shape picked for everyone) and their strength
+                    const int autoShape = partner ? During::AutoShape(partner, &kn) : During::kTip;
+                    if (shape <= 0 || shape >= During::kShapeCount) shape = autoShape;
                     // how far in, past "shows from": 0 .. 1 = the whole path filled
                     const float range = std::max(10.0f, s.bulgeReach - dw.bulgeStart);
                     float p = test ? 0.55f + 0.45f * std::sin(static_cast<float>(now) * 1.6f)
@@ -461,11 +465,11 @@ namespace {
                         case During::kColossal: seg = kBig; head = kBigHead; headK = 1.0f; break;
                         case During::kHooked: head = kHook; headK = 1.0f; break;
                         case During::kDoubleKnot: knots = 2; break;
-                        case During::kBeaded: seg = -1; head = kTent; headK = 1.0f; break;
+                        case During::kBeaded: seg = kTent; head = -1; blend = false; break;   // 2.5c: sections, like the shaft
                         default: break;   // the whole shaft
                     }
                     segK *= dw.shaftK;
-                    headK *= (shape == During::kBeaded) ? dw.shaftK : dw.headK;
+                    headK *= dw.headK;
                     float filled = std::clamp(p * 6.0f + s.rndH * 0.6f, 0.0f, 6.0f);
                     if (wob > 0.0f) filled = std::clamp(filled + wob * std::sin(static_cast<float>(now) * 2.3f + static_cast<float>(act->GetFormID() % 7)), 0.0f, 6.0f);
                     // build-up, hold when full: once grown, the shaft stays as far as it got and only the head moves
@@ -489,13 +493,20 @@ namespace {
                         if (head >= 0) {
                             if (hi <= 0.0f) bw[head] = A * headK * std::clamp(filled / 0.6f, 0.0f, 1.0f);
                             else {
-                                bw[head + h0] = A * headK * (1.0f - fr);
-                                bw[head + h0 + 1] = A * headK * fr;
+                                // 2.5c hooked: the last position carries the hook - bring it in only over the end of the stroke
+                                const float fh = (shape == During::kHooked && h0 == 4) ? fr * fr * fr : fr;
+                                bw[head + h0] = A * headK * (1.0f - fh);
+                                bw[head + h0 + 1] = A * headK * fh;
                             }
                         }
-                        const float kA = A * dw.knotK;
-                        if (knots >= 1) bw[kKnot1] = kA * std::clamp((filled - 1.2f) / 0.8f, 0.0f, 1.0f);   // once it is in
-                        if (knots >= 2) bw[kKnot2] = kA * std::clamp((filled - 3.3f) / 0.8f, 0.0f, 1.0f);
+                        // knots: from the shape, or ticked for his schlong (2.5d); each its own strength
+                        if (knots >= 1 || (kn.mask & 1)) bw[kKnot1] = A * kn.k1 * std::clamp((filled - 1.2f) / 0.8f, 0.0f, 1.0f);   // once it is in
+                        if (knots >= 2 || (kn.mask & 2)) bw[kKnot2] = A * kn.k2 * std::clamp((filled - 3.3f) / 0.8f, 0.0f, 1.0f);
+                        // 2.5f stomach: the whole lower belly rises over the scene (its own time), varying stroke to stroke
+                        if (dw.belly > 0.0f) {
+                            s.bellyG = std::min(1.0f, s.bellyG + dt / std::max(1.0f, dw.bellyTime));
+                            bw[kBelly] = dw.bulge * dw.belly * Smooth(s.bellyG) * std::max(0.0f, 1.0f + 0.5f * dw.bellyRandom * s.rndB);
+                        }
                         bulging = true;
                     }
                 }
@@ -506,7 +517,8 @@ namespace {
             }
             const float linger = (now - s.bulgeLast < 30.0) ? std::max(0.8f, dw.linger * (0.5f + Smooth(s.bulgeDil))) : 0.8f;
             if (!bulging && now - s.bulgeLast > 30.0) s.bulgeDil = 0.0f;
-            if (!bulging && now - s.bulgeLast > 3.0) { s.grow = 0.0f; s.fillHold = 0.0f; }   // build-up starts again next time
+            if (!bulging && now - s.bulgeLast > 3.0) { s.grow = 0.0f; s.fillHold = 0.0f; }
+            if (!bulging) s.bellyG = std::max(0.0f, s.bellyG - dt / std::max(2.0f, 2.0f * dw.bellyTime));   // settles slowly   // build-up starts again next time
             if (!bulging && !(tip.ok && partner) && dw.imprint && dw.bulge > 0.0f) {   // 2.5 imprint: a faint copy that fades over the minutes set
                 const float age = static_cast<float>(now - s.bulgeLast) / (60.0f * std::max(0.5f, dw.imprintMin));
                 const float k = age < 1.0f ? dw.imprintAmt * (1.0f - Smooth(age)) : 0.0f;

@@ -45,6 +45,8 @@ namespace {
     // 2.5: the bulge shape for each schlong type (TNG / the shape table) and for his size; 0 = by size
     std::map<std::string, int> g_typeShape;   // type key -> shape (only what was changed; else the default)
     int g_sizeShape[3] = {During::kTip, During::kShaft, During::kColossal};   // smaller / not known, L, XL
+    std::map<std::string, During::Knots> g_typeKnots;   // 2.5d/e: type key -> its knots (which, how strong)
+    During::Knots g_sizeKnots[3];
     int TypeDefault(const std::string& key) {
         using namespace During;
         if (key == "knotted") return kKnot;
@@ -180,8 +182,8 @@ namespace During {
         if (save) ini.SetLongValue(S, "BulgeShape", g_w.bulgeShape);
         else g_w.bulgeShape = std::clamp(static_cast<int>(ini.GetLongValue(S, "BulgeShape", g_w.bulgeShape)), 0, kShapeCount - 1);
         F("BulgeShaftStrength", g_w.shaftK, 0.0f, 2.0f); F("BulgeHeadStrength", g_w.headK, 0.0f, 2.0f);
-        F("BulgeKnotStrength", g_w.knotK, 0.0f, 2.0f);
         F("BulgeBuildTime", g_w.buildTime, 1.0f, 60.0f); B("BulgeHoldFull", g_w.holdFull);
+        F("BulgeStomach", g_w.belly, 0.0f, 2.0f); F("BulgeStomachTime", g_w.bellyTime, 1.0f, 180.0f); F("BulgeStomachRandom", g_w.bellyRandom, 0.0f, 1.0f);
         B("BulgeImprint", g_w.imprint); F("BulgeImprintAmount", g_w.imprintAmt, 0.0f, 0.5f); F("BulgeImprintMinutes", g_w.imprintMin, 0.5f, 15.0f);
         for (int i = 1; i < kShapeCount; ++i) {   // movement per shape: 1 travelling, 2 twitching, 4 build-up
             const std::string k = std::format("BulgeMove{}", i);
@@ -194,10 +196,21 @@ namespace During {
         {   // the shape for each schlong type / size
             constexpr const char* T = "BulgeByType";
             static const char* sz[3] = {"(size) smaller", "(size) L", "(size) XL"};
+            constexpr const char* TK = "BulgeKnotsByType";   // 2.5d/e: "mask|k1|k2" (mask 1 knot 1, 2 knot 2, 3 both)
             if (save) {
                 for (auto& [k, v] : g_typeShape) ini.SetLongValue(T, k.c_str(), v);
                 for (int i = 0; i < 3; ++i) ini.SetLongValue(T, sz[i], g_sizeShape[i]);
+                for (auto& [k, v] : g_typeKnots) ini.SetValue(TK, k.c_str(), v.Save().c_str());
+                for (int i = 0; i < 3; ++i) ini.SetValue(TK, sz[i], g_sizeKnots[i].Save().c_str());
             } else {
+                CSimpleIniA::TNamesDepend kk;
+                ini.GetAllKeys(TK, kk);
+                for (auto& k : kk) {
+                    const Knots v = Knots::Load(ini.GetValue(TK, k.pItem, "0"));
+                    bool isSize = false;
+                    for (int i = 0; i < 3; ++i) if (std::string(k.pItem) == sz[i]) { g_sizeKnots[i] = v; isSize = true; }
+                    if (!isSize) g_typeKnots[k.pItem] = v;
+                }
                 CSimpleIniA::TNamesDepend keys;
                 ini.GetAllKeys(T, keys);
                 for (auto& k : keys) {
@@ -220,25 +233,54 @@ namespace During {
     const char* ShapeName(int shape) {
         static const char* n[kShapeCount] = {"From his schlong", "A bump at the tip", "The whole shaft", "Horse (flared head)",
                                              "Knot", "Tentacle (wandering)", "Ridged", "Segmented (chain of bulbs)", "Colossal",
-                                             "Hooked", "Double knot", "Beaded tentacle"};
+                                             "Hooked", "Double knot", "Long tentacle"};
         return (shape >= 0 && shape < kShapeCount) ? n[shape] : "";
     }
-    int AutoShape(RE::Actor* p) {
+    std::string Knots::Save() const { return std::format("{}|{:.2f}|{:.2f}", mask, k1, k2); }
+    Knots Knots::Load(const char* v) {
+        Knots k;
+        if (!v) return k;
+        float a = 1.0f, b = 1.0f;
+        int m = 0;
+        const int n = std::sscanf(v, "%d|%f|%f", &m, &a, &b);
+        if (n >= 1) k.mask = m & 3;
+        if (n >= 2) k.k1 = std::clamp(a, 0.0f, 2.0f);
+        if (n >= 3) k.k2 = std::clamp(b, 0.0f, 2.0f);
+        return k;
+    }
+    int AutoShape(RE::Actor* p, Knots* knots) {
+        if (knots) *knots = {};
         if (!p) return kTip;
-        if (Size::IsCreatureActor(p) && Mnc::Active())
-            if (const int m = Mnc::ShapeFor(p); m > 0) return m;
+        if (Size::IsCreatureActor(p) && Mnc::Active()) {
+            Knots kn;
+            const int m = Mnc::ShapeFor(p, &kn);
+            if (m > 0) { if (knots) *knots = kn; return m; }
+        }
         const std::string key = Size::ShapeKey(Size::Shape(p));
         int t = 0, sz[3];
+        Knots tk, szk[3];
         {
             std::lock_guard lk(g_wmx);
-            if (!key.empty()) t = TypeShape(key);
+            if (!key.empty()) {
+                t = TypeShape(key);
+                if (auto it = g_typeKnots.find(key); it != g_typeKnots.end()) tk = it->second;
+            }
             std::copy(std::begin(g_sizeShape), std::end(g_sizeShape), sz);
+            std::copy(std::begin(g_sizeKnots), std::end(g_sizeKnots), szk);
         }
-        if (t > 0) return t;
         const int cat = Size::Cat(p);
-        if (cat == 4) return sz[2];
-        if (cat >= 3) return sz[1];
-        return sz[0];
+        const int si = cat == 4 ? 2 : cat >= 3 ? 1 : 0;
+        if (knots) {
+            if (t > 0) *knots = tk;
+            else {   // his type goes by size: the size row's knots, plus any ticked for his type (its own strength wins)
+                Knots k = szk[si];
+                k.mask |= tk.mask;
+                if (tk.mask & 1) k.k1 = tk.k1;
+                if (tk.mask & 2) k.k2 = tk.k2;
+                *knots = k;
+            }
+        }
+        return t > 0 ? t : sz[si];
     }
     Want Get() {
         std::lock_guard lk(g_wmx);
@@ -361,13 +403,21 @@ namespace During {
                 Help("The bulge shapes are built extreme, so 100% is the full, very obvious shape: 20-40% is a natural bump, "
                      "100% extreme, more than that exaggerated.");
                 {
-                    float sk = g_w.shaftK * 100.0f, hk = g_w.headK * 100.0f, kk = g_w.knotK * 100.0f;
+                    float sk = g_w.shaftK * 100.0f, hk = g_w.headK * 100.0f;
                     if (ImGuiMCP::SliderFloat("Shaft strength", &sk, 0.0f, 200.0f, "%.0f%%")) { g_w.shaftK = sk / 100.0f; ch = true; }
-                    Help("Only the shaft part (and the whole Beaded tentacle), on top of Bulge strength. 100% = as built.");
+                    Help("Only the shaft part (the sections up his belly, the Long tentacle too), on top of Bulge strength. 100% = as built.");
                     if (ImGuiMCP::SliderFloat("Head strength", &hk, 0.0f, 200.0f, "%.0f%%")) { g_w.headK = hk / 100.0f; ch = true; }
                     Help("Only the head at the front (round, flared, colossal or hooked), on top of Bulge strength.");
-                    if (ImGuiMCP::SliderFloat("Knot strength", &kk, 0.0f, 200.0f, "%.0f%%")) { g_w.knotK = kk / 100.0f; ch = true; }
-                    Help("Only the knots (Knot and Double knot), on top of Bulge strength.");
+                }
+                if (ImGuiMCP::TreeNode("Stomach###stomach")) {
+                    float b = g_w.belly * 100.0f, r = g_w.bellyRandom * 100.0f;
+                    if (ImGuiMCP::SliderFloat("Stomach strength", &b, 0.0f, 200.0f, "%.0f%%")) { g_w.belly = b / 100.0f; ch = true; }
+                    Help("The whole lower belly rounds out around the shaft (Anatomica Bulge Belly), on top of Bulge strength. 0% = off.");
+                    ch |= ImGuiMCP::SliderFloat("Stomach rises over", &g_w.bellyTime, 1.0f, 180.0f, "%.0f s");
+                    Help("How long it takes to rise to its full size while he is taken. It goes back down after, more slowly.");
+                    if (ImGuiMCP::SliderFloat("Stomach randomness", &r, 0.0f, 100.0f, "%.0f%%")) { g_w.bellyRandom = r / 100.0f; ch = true; }
+                    Help("How much it swells and settles from stroke to stroke. 0% = it rises evenly.");
+                    ImGuiMCP::TreePop();
                 }
                 const char* shapes[kShapeCount];
                 for (int i = 0; i < kShapeCount; ++i) shapes[i] = ShapeName(i);
@@ -380,15 +430,46 @@ namespace During {
                     const char* opts[kShapeCount];
                     opts[0] = "By his size";
                     for (int i = 1; i < kShapeCount; ++i) opts[i] = ShapeName(i);
+                    // knot boxes after a row: 1 knot 1, 2 knot 2
+                    // knot boxes after a row, and the strength of each knot it has (ticked, or its shape's own knots)
+                    auto knotBoxes = [&](Knots& k, int shape, const std::string& id) {
+                        bool k1 = k.mask & 1, k2 = k.mask & 2, c = false;
+                        ImGuiMCP::SameLine(); c |= ImGuiMCP::Checkbox(std::format("Knot 1##k1_{}", id).c_str(), &k1);
+                        ImGuiMCP::SameLine(); c |= ImGuiMCP::Checkbox(std::format("Knot 2##k2_{}", id).c_str(), &k2);
+                        if (c) k.mask = (k1 ? 1 : 0) | (k2 ? 2 : 0);
+                        const bool show1 = k1 || shape == kKnot || shape == kDoubleKnot, show2 = k2 || shape == kDoubleKnot;
+                        if (show1 || show2) ImGuiMCP::Indent();
+                        if (show1) {
+                            float v = k.k1 * 100.0f;
+                            ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 10.0f);
+                            if (ImGuiMCP::SliderFloat(std::format("Knot 1 strength##s1_{}", id).c_str(), &v, 0.0f, 200.0f, "%.0f%%")) { k.k1 = v / 100.0f; c = true; }
+                        }
+                        if (show2) {
+                            float v = k.k2 * 100.0f;
+                            if (show1) ImGuiMCP::SameLine();
+                            ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 10.0f);
+                            if (ImGuiMCP::SliderFloat(std::format("Knot 2 strength##s2_{}", id).c_str(), &v, 0.0f, 200.0f, "%.0f%%")) { k.k2 = v / 100.0f; c = true; }
+                        }
+                        if (show1 || show2) ImGuiMCP::Unindent();
+                        return c;
+                    };
+                    const float w = ImGuiMCP::GetFontSize() * 13.0f;
+                    ImGuiMCP::TextDisabled("Knot 1 / Knot 2: add the low / higher knot to that schlong's shape (e.g. a horse with a knot), each with "
+                                           "its own strength (also for the Knot / Double knot shapes' knots).");
                     for (auto& [key, name] : Size::ShapeList()) {
                         int v = TypeShape(key);
+                        ImGuiMCP::SetNextItemWidth(w);
                         if (ImGuiMCP::Combo(std::format("{}###ty_{}", name, key).c_str(), &v, opts, kShapeCount)) { g_typeShape[key] = v; ch = true; }
+                        Knots kn = g_typeKnots.count(key) ? g_typeKnots[key] : Knots{};
+                        if (knotBoxes(kn, v, "ty_" + key)) { g_typeKnots[key] = kn; ch = true; }
                     }
                     ImGuiMCP::SeparatorText("By his size (TNG)");
                     static const char* szn[3] = {"Smaller, or not known###sz0", "L###sz1", "XL###sz2"};
                     for (int i = 0; i < 3; ++i) {
                         int v = g_sizeShape[i] - 1;
+                        ImGuiMCP::SetNextItemWidth(w);
                         if (ImGuiMCP::Combo(szn[i], &v, opts + 1, kShapeCount - 1)) { g_sizeShape[i] = v + 1; ch = true; }
+                        ch |= knotBoxes(g_sizeKnots[i], g_sizeShape[i], std::format("sz{}", i));
                     }
                     if (Mnc::Active()) {
                         ImGuiMCP::SeparatorText("Creatures (More Nasty Critters)");
@@ -399,7 +480,10 @@ namespace During {
                             int v = gr.shape;
                             const std::string label = gr.races ? std::format("{} ({} races)###mnc_{}", gr.name, gr.races, gr.name)
                                                                : std::format("{} (by name)###mnc_{}", gr.name, gr.name);
+                            ImGuiMCP::SetNextItemWidth(w);
                             if (ImGuiMCP::Combo(label.c_str(), &v, opts, kShapeCount)) { Mnc::SetShape(gr.name, v); ch = true; }
+                            Knots kn = gr.knots;
+                            if (knotBoxes(kn, v, "mnc_" + gr.name)) { Mnc::SetKnots(gr.name, kn); ch = true; }
                         }
                     }
                     ImGuiMCP::TreePop();

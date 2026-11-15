@@ -1,5 +1,6 @@
 #pragma once
 #include <SimpleIni.h>
+#include "During.h"
 #include <string>
 #include <vector>
 
@@ -12,9 +13,13 @@
 // Races in no group are tried by name for a few extra groups (Daedroth, Demons, Thri-kreen, Kwama).
 namespace Mnc {
     bool Active();                                  // MoreNastyCritters.esp is loaded (reads the files the first time)
-    int ShapeFor(RE::Actor* creature);              // the bulge shape (During shape number), 0 = not decided here
-    struct Group { std::string name; int shape; int races; };
+    int ShapeFor(RE::Actor* creature, During::Knots* knots = nullptr);   // the bulge shape (During shape number), 0 = not
+                                                    // decided here; knots: his group's knots (which, how strong)
+    std::string TypeFor(RE::Actor* creature);       // 2.5f: his schlong type key for Size (open / loose / sore), "" = not decided
+    struct Group { std::string name; int shape; int races; During::Knots knots; std::string type; };
     std::vector<Group> Groups();                    // for the menu (sorted by name)
     void SetShape(const std::string& group, int shape);
-    void Ini(CSimpleIniA& ini, bool save);          // [CreatureBulge] group = shape
+    void SetKnots(const std::string& group, const During::Knots& knots);
+    void SetType(const std::string& group, const std::string& typeKey);   // "" = automatic
+    void Ini(CSimpleIniA& ini, bool save);          // [CreatureBulge] group = shape, [CreatureBulgeKnots] group = knots, [CreatureType] group = type
 }
