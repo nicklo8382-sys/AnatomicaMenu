@@ -229,7 +229,7 @@ namespace {
         if (g.looseFrom && (s.loose > 0.25f || s.gape > 0.15f)) {   // 2.5o: what stretched him
             const Kinds::Info k = Kinds::Get(man->GetFormID(), g.madeForTimes, g.madeForForget);
             if (k.lastDays >= 0.0f && k.lastDays < 2.0f && (k.lastCreature || !k.lastKind.empty()))
-                out += (out.empty() ? "" : " ") + std::format("It looks stretched by something big - {}.", k.lastCreature ? "an animal's cock" : k.lastKind);
+                out += (out.empty() ? "" : " ") + std::format("It looks stretched by something big - {}.", k.lastCreature && Mnc::Active() ? "an animal's cock" : k.lastKind);
         }
         if (!bulge.empty()) out += (out.empty() ? "" : " ") + bulge;
         return out;
@@ -261,7 +261,7 @@ namespace {
             {   // the biggest who has had him (partner size, as far as it is known)
                 RE::FormID big = 0; int bc = -1;
                 for (auto& [pid, c] : v.partners) { const int sc = Size::CatOf(pid); if (sc > bc) { bc = sc; big = pid; } }
-                if (big && bc >= 3) out.push_back(std::format("The biggest to have had him is {}, {} - he felt every inch.", NameOf(big), bc == Size::kCreature ? "a monstrous creature" : (bc == 4 ? "who is huge" : "who is big")));
+                if (big && bc >= 3) out.push_back(std::format("The biggest to have had him is {}, {} - he felt every inch.", NameOf(big), bc == Size::kCreature ? (Mnc::Active() ? "a monstrous creature" : "who is enormous") : (bc == 4 ? "who is huge" : "who is big")));
             }
         }
         {   // 2.5o: what kinds he takes, how deep it has gone, what stretched him, what he feels right now
@@ -528,13 +528,13 @@ namespace Bridge {
         if (g.arousal) Exposure(manId, first ? g.exposureFirst : g.exposureEach);
         // 2.5o: what kind took him (made for it, rumours, what stretched him) and his firsts
         const std::uint32_t fresh = Kinds::OnTaken(man, partner);
-        if (g.slsfBeast && g.fame && HasSLSF() && man->IsPlayerRef() && partner && Size::IsCreatureActor(partner))
+        if (g.slsfBeast && g.fame && HasSLSF() && man->IsPlayerRef() && partner && Size::IsCreatureActor(partner) && Mnc::Active())
             Static("AnatomicaNative", "SendFame", RE::BSFixedString("Bestiality"), static_cast<std::int32_t>(g.fameLo), static_cast<std::int32_t>(std::max(g.fameLo + 1, g.fameHi)));
         if (fresh && g.firsts && SN() && partner) {
             const std::string M = Name(man), P = Name(partner);
             const Kinds::Kind k = Kinds::KindOf(partner);
             std::vector<std::string> what;
-            if (fresh & Kinds::kFirstCreature) what.push_back(k.key.starts_with("creature:") ? std::format("his first time with an animal - a {}", k.key.substr(9)) : "his first time with a creature");
+            if (fresh & Kinds::kFirstCreature) what.push_back(k.key.starts_with("creature:") ? std::format("his first time with an animal - a {}", k.key.substr(9)) : "his first time with an animal");
             if (fresh & Kinds::kFirstKnot) what.push_back("the first time a knot was pushed into him");
             if (fresh & Kinds::kFirstFlare) what.push_back("the first flared cock he has taken");
             if (fresh & Kinds::kFirstColossal) what.push_back("the biggest thing he has ever taken");
@@ -551,7 +551,7 @@ namespace Bridge {
         std::string with;   // the partner's size, when it stands out (TNG)
         if (partner) {   // "with his huge, knotted cock" / "with his uncut cock"
             const std::string d = Size::Describe(partner);
-            if (!d.empty()) with = std::format(" with {} {} cock", Size::Cat(partner) == Size::kCreature ? "its" : "his", d);
+            if (!d.empty()) with = std::format(" with {} {} cock", Size::Cat(partner) == Size::kCreature && Mnc::Active() ? "its" : "his", d);
         }
         std::string mem, react;
         const Extras::How how = Extras::HowNow(man, partner);   // with the extras: taken as a captive / for money
@@ -777,9 +777,12 @@ namespace Bridge {
                  "chest...), and he feels it. Shown whenever the bulge itself shows (its \"Shows through\" setting, During sex "
                  "page), and the imprint after.");
             ch |= ImGuiMCP::Checkbox("\"Made for it\"", &g.madeFor);
-            Help("After he has taken one kind often enough - knotted, flared... or, with More Nasty Critters, one kind of "
-                 "creature - he, and the men who have had him, know he takes them like he was made for them. It fades if he "
-                 "goes long enough without.");
+            Help(Mnc::Active() ? "After he has taken one kind often enough - knotted, flared... or one kind of creature (wolves, "
+                                 "horses...) - he, and the men who have had him, know he takes them like he was made for them. It "
+                                 "fades if he goes long enough without."
+                               : "After he has taken one kind of schlong often enough - knotted, flared, ridged... - he, and the "
+                                 "men who have had him, know he takes them like he was made for them. It fades if he goes long "
+                                 "enough without.");
             if (g.madeFor) {
                 ImGuiMCP::Indent();
                 ch |= ImGuiMCP::SliderInt("After this many times", &g.madeForTimes, 2, 100);
@@ -787,19 +790,25 @@ namespace Bridge {
                 ImGuiMCP::Unindent();
             }
             ch |= ImGuiMCP::Checkbox("What stretched him", &g.looseFrom);
-            Help("While he is still loose or gaping, he knows (and it can be seen) what did it - \"still loose from the wolves "
-                 "last night\".");
+            Help(Mnc::Active() ? "While he is still loose or gaping, he knows (and it can be seen) what did it - \"still loose from "
+                                 "the wolves last night\"."
+                               : "While he is still loose or gaping, he knows (and it can be seen) who did it - \"still loose from "
+                                 "Farkas last night\".");
             ch |= ImGuiMCP::Checkbox("Partners remember the bulge", &g.bulgeMem);
             Help("After a round where the bulge went past his lower belly, the one who gave it to him remembers how far it went.");
             ch |= ImGuiMCP::Checkbox("Firsts", &g.firsts);
-            Help("His first creature, first knot, first flared cock, the biggest he has taken and his first super deep: each "
-                 "becomes a memory, and the partner says something after.");
+            Help(Mnc::Active() ? "His first creature, first knot, first flared cock, the biggest he has taken and his first super "
+                                 "deep: each becomes a memory, and the partner says something after."
+                               : "His first knot, first flared cock, the biggest he has taken and his first super deep: each "
+                                 "becomes a memory, and the partner says something after.");
             ch |= ImGuiMCP::Checkbox("People watching react to the bulge", &g.watchBulge);
             Help("When it goes past his navel (or super deep), someone watching may say something - uses \"People comment on "
                  "it\" and its chance.");
             ch |= ImGuiMCP::Checkbox("Rumours", &g.rumours);
-            Help("Where it keeps happening, people talk: \"Around Whiterun people whisper that he lets wolves have him.\" "
-                 "Heard by anyone talking to him in that hold. Needs the Anatomica prompt pack.");
+            Help(Mnc::Active() ? "Where it keeps happening, people talk: \"Around Whiterun people whisper that he lets wolves have "
+                                 "him.\" Heard by anyone talking to him in that hold. Needs the Anatomica prompt pack."
+                               : "Where it keeps happening, people talk: \"Around Whiterun it is said that he has a taste for "
+                                 "knotted cocks.\" Heard by anyone talking to him in that hold. Needs the Anatomica prompt pack.");
             if (g.rumours) {
                 ImGuiMCP::Indent();
                 ch |= ImGuiMCP::SliderInt("After this many times there", &g.rumourMin, 1, 50);
@@ -825,7 +834,7 @@ namespace Bridge {
             if (g.fameHi < g.fameLo) g.fameHi = g.fameLo;
             ch |= ImGuiMCP::SliderFloat("Your first time counts", &g.fameFirst, 1.0f, 10.0f, "x%.1f");
             ch |= ImGuiMCP::Checkbox("Several men in a row: Group fame too", &g.fameGroup);
-            ch |= ImGuiMCP::Checkbox("Creatures: Bestiality fame too", &g.slsfBeast);   // 2.5o
+            if (Mnc::Active()) ch |= ImGuiMCP::Checkbox("Creatures: Bestiality fame too", &g.slsfBeast);   // 2.5o (More Nasty Critters only)
             ImGuiMCP::Unindent();
         }
         ImGuiMCP::EndDisabled();

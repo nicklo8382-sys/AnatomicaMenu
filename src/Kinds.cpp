@@ -64,7 +64,7 @@ namespace Kinds {
         if (key.empty() || key == "cut" || key == "uncut") return k;   // nothing stands out
         std::string w = Size::ShapeWord(Size::Shape(p));
         if (w.empty()) w = key;
-        k = {key, w + " cock", w + " cocks", Size::IsCreatureActor(p)};
+        k = {key, w + " cock", w + " cocks", false};   // 2.5u: creatures are only named / treated as such with More Nasty Critters
         return k;
     }
     std::string HoldOf(RE::Actor* a) {
@@ -85,7 +85,7 @@ namespace Kinds {
         const std::string hold = HoldOf(man);
         const float day = Day();
         std::uint32_t now = 0;
-        if (partner && Size::IsCreatureActor(partner)) now |= kFirstCreature;
+        if (partner && Size::IsCreatureActor(partner) && Mnc::Active()) now |= kFirstCreature;   // 2.5u: only with More Nasty Critters
         if (shape == During::kKnot || shape == During::kDoubleKnot || (kn.mask & 3) || k.key == "knotted") now |= kFirstKnot;
         if (shape == During::kHorse || k.key == "flared") now |= kFirstFlare;
         if (shape == During::kColossal || k.key == "colossal") now |= kFirstColossal;
