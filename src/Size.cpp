@@ -565,8 +565,9 @@ namespace Size {
             if (ImGuiMCP::TreeNode("Shapes (change them, or add your own)")) {
                 std::lock_guard lk(g_mx);
                 ImGuiMCP::TextDisabled("x1.00 = no change. Open: how far he gapes. Build: time to open up (lower = faster). "
-                                       "Loose: lasting looseness. Sore: soreness and redness. Bulge shape: his belly bulge during "
-                                       "sex (with \"From his schlong\"); Knot 1 / 2 add knots to it.");
+                                       "Loose: lasting looseness. Sore: soreness and redness. Bulge shape: his partner's belly bulge "
+                                       "during sex; Knot 1 / 2 add knots to it; Shaft / Head: this schlong's own bulge strength, x the "
+                                       "Shaft / Head strength on the During sex page (that page sets it for everyone, 100% here = no change).");
                 if (!g_fileList.empty()) {
                     std::string fl;
                     for (auto& f : g_fileList) fl += (fl.empty() ? "" : ", ") + f;
@@ -663,7 +664,8 @@ namespace Size {
             std::lock_guard lk(g_mx);
             int cremove = 0;
             ImGuiMCP::TextDisabled("x1.00 = no change. Open: how far he gapes. Build: time to open up (lower = faster). "
-                                   "Loose: lasting looseness. Sore: soreness and redness.");
+                                   "Loose: lasting looseness. Sore: soreness and redness. Bulge shape, knots and Shaft / Head: "
+                                   "the belly bulge it gives (Shaft / Head x the During sex page's).");
             for (size_t i = 1; i < g_defs.size(); ++i) {
                 ShapeDef& d = g_defs[i];
                 if (!d.creature) continue;

@@ -190,15 +190,16 @@ namespace Mnc {
     Override Override::Load(const char* v) {
         Override o;
         if (!v) return o;
-        int on = 0, sh = 0, m = 0;
-        float a = 1, b = 1, c = 1, d = 1, k1 = 1, k2 = 1;
-        const int n = std::sscanf(v, "%d|%f|%f|%f|%f|%d|%d|%f|%f", &on, &a, &b, &c, &d, &sh, &m, &k1, &k2);
+        int on = 0, sh = 0;
+        float a = 1, b = 1, c = 1, d = 1;
+        const int n = std::sscanf(v, "%d|%f|%f|%f|%f|%d", &on, &a, &b, &c, &d, &sh);
         if (n >= 1) o.on = on != 0;
         if (n >= 5) { o.open = std::clamp(a, 0.5f, 2.0f); o.build = std::clamp(b, 0.5f, 2.0f); o.loose = std::clamp(c, 0.5f, 2.0f); o.tender = std::clamp(d, 0.5f, 2.0f); }
         if (n >= 6) o.shape = std::clamp(sh, 0, During::kShapeCount - 1);
-        if (n >= 7) o.knots.mask = m & 3;
-        if (n >= 8) o.knots.k1 = std::clamp(k1, 0.0f, 2.0f);
-        if (n >= 9) o.knots.k2 = std::clamp(k2, 0.0f, 2.0f);
+        // the rest is its knots and shaft / head strength (Knots' own format)
+        const char* p = v;
+        for (int bars = 0; *p && bars < 6; ++p) if (*p == '|') ++bars;
+        if (n >= 6 && *p) o.knots = During::Knots::Load(p);
         return o;
     }
     bool OverrideFor(RE::Actor* a, Override* out) {

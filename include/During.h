@@ -17,9 +17,10 @@ namespace During {
     const char* ShapeName(int shape);        // menu name ("From his schlong" for 0)
     // 2.5e: the knots for one schlong (type / size / creature group): which are added to his shape (1 knot 1, 2 knot 2) and how
     // strong each is (also for the Knot / Double knot shapes' own knots). Saved as "mask|k1|k2".
-    struct Knots {
+    struct Knots {   // (2.5s: also this schlong's own shaft / head strength, x the During sex page's)
         int mask = 0;
         float k1 = 1.0f, k2 = 1.0f;
+        float shaftK = 1.0f, headK = 1.0f;
         std::string Save() const;
         static Knots Load(const char* v);
     };

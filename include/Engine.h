@@ -18,6 +18,7 @@ namespace Engine {
     struct Bulge { bool on = false; int shape = 0; float reach = 0.0f, roundMax = 0.0f; bool deep = false, roundDeep = false;
                    float amount = 0.0f, belly = 0.0f, imprint = 0.0f; RE::FormID partner = 0; double since = 0.0; };
     Bulge BulgeOf(RE::FormID id);
+    std::string LastDeepRoll();                   // 2.5s: "X's scene went super deep (30% chance)" - the last roll
     bool TestBulge(RE::Actor* a, int shape);      // Testing page: show the belly bulge on him for 8 s (shape 1-11, During::BulgeShape)
     bool SetLooseNow(RE::Actor* a, float v);      // lasting looseness, right now (false = no RaceMenu interface)
     std::string Status();                         // one line: what is connected

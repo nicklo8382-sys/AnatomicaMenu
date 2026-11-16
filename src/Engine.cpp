@@ -161,7 +161,8 @@ namespace {
     // Hook 1-6, Knot 2, Tentacle 1-6
     constexpr int kSeg = 0, kHead = 6, kKnot1 = 12, kFlare = 13, kRidge = 19, kBead = 25, kBig = 31, kBigHead = 37, kHook = 43,
                   kKnot2 = 49, kTent = 50, kBelly = 56, kDeepSeg = 57, kDeepHead = 59, kDeepFlare = 61,
-                  kDeepBig = 63, kDeepBigHead = 65, kDeepTent = 67, kNB = 69;
+                  kDeepBig = 63, kDeepBigHead = 65, kDeepTent = 67,
+                  kDeepRidge = 69, kDeepBead = 71, kDeepHook = 73, kNB = 75;
     const std::vector<std::string>& BulgeNames() {
         static const std::vector<std::string> n = [] {
             std::vector<std::string> v(kNB);
@@ -176,6 +177,9 @@ namespace {
                 v[kDeepBig + i] = std::format("Anatomica Bulge Deep Big {}", i + 1);          // 2.5l: Colossal
                 v[kDeepBigHead + i] = std::format("Anatomica Bulge Deep Big Head {}", i + 1);
                 v[kDeepTent + i] = std::format("Anatomica Bulge Deep Tentacle {}", i + 1);    // 2.5l: Long tentacle
+                v[kDeepRidge + i] = std::format("Anatomica Bulge Deep Ridge {}", i + 1);      // 2.5s: Ridged, Segmented, Hooked
+                v[kDeepBead + i] = std::format("Anatomica Bulge Deep Bead {}", i + 1);
+                v[kDeepHook + i] = std::format("Anatomica Bulge Deep Hook {}", i + 1);
             }
             return v;
         }();
@@ -202,6 +206,7 @@ namespace {
         float tw = 0.0f, twWant = 0.0f; double twNext = 0.0;   // 2.5 twitching
         float bellyG = 0.0f, rndB = 0.0f;        // 2.5f stomach: how far risen (0-1), this stroke's variation
         bool deep = false;                       // 2.5k: this scene goes super deep (rolled when a scene's bulge starts)
+        float deepRolledAt = -2.0f;              // 2.5t: the setting it was rolled with (-1 = off): rolled again when it changes
         float pulse = 0.0f, bulgeDil = 0.0f;     // thrust pulse; how worked he was while it bulged (lingering)
         float hole = 0.0f, holeSent = -100.0f;
         double inLast = -100.0;                  // last time a schlong was found in him by the bones
@@ -224,6 +229,7 @@ namespace {
     struct DuringNow { float depth = -100.0f, hole = 0.0f, ring = 0.0f, off = -1.0f; bool held = false; };
     std::unordered_map<RE::FormID, DuringNow> g_during;   // for the status window
     std::unordered_map<RE::FormID, Engine::Bulge> g_bulgeNow;   // 2.5o: for SkyrimNet (under g_gapeMx)
+    std::string g_lastDeep;                                      // 2.5s: the last super deep roll (During sex page)
     std::atomic<bool> g_queued{false};
     double g_last = 0.0, g_lastCol = 0.0;
 
@@ -475,7 +481,16 @@ namespace {
                         s.grow = std::min(1.0f, s.grow + dt / std::max(1.0f, dw.buildTime));
                         A *= 0.08f + 0.92f * Smooth(s.grow);
                     }
-                    if (now - s.bulgeLast > 30.0) s.deep = dw.deep && Rand(0.0f, 1.0f) < dw.deepChance;   // a new scene: super deep?
+                    const float deepSet = dw.deep ? dw.deepChance : -1.0f;
+                    if (now - s.bulgeLast > 30.0 || deepSet != s.deepRolledAt) {   // a new scene (or the setting changed mid-scene): super deep?
+                        s.deepRolledAt = deepSet;
+                        s.deep = dw.deep && Rand(0.0f, 1.0f) < dw.deepChance;
+                        if (dw.deep) {
+                            const char* nm = act->GetDisplayFullName();
+                            std::lock_guard gl(g_gapeMx);
+                            g_lastDeep = std::format("{}'s scene {} super deep ({:.0f}% chance).", nm ? nm : "?", s.deep ? "went" : "did not go", dw.deepChance * 100.0f);
+                        }
+                    }
                     int seg = kSeg, head = kHead, knots = 0;
                     float segK = 1.0f, headK = 0.6f, wob = 0.0f;
                     bool blend = true;   // shaft and head mixed as one (the head keeps its size as it slides)
@@ -492,17 +507,19 @@ namespace {
                         case During::kBeaded: seg = kTent; head = -1; blend = false; break;   // 2.5c: sections, like the shaft
                         default: break;   // the whole shaft
                     }
-                    segK *= dw.shaftK;
-                    headK *= dw.headK;
+                    segK *= dw.shaftK * kn.shaftK;   // 2.5s: the During sex page's strength x this schlong's own
+                    headK *= dw.headK * kn.headK;
                     // 2.5k super deep: two more sections towards his chest (shapes built on the plain shaft, round or flared head)
                     // (2.5l: Colossal and Long tentacle too, on their own longer paths)
-                    const bool deepOk = (test ? dw.deep : s.deep) &&
-                                        ((seg == kSeg && (head == kHead || head == kFlare)) || seg == kBig || seg == kTent);
+                    // (2.5s: every shape - Ridged, Segmented and Hooked have their own deep sections too)
+                    const bool deepOk = test ? dw.deep : s.deep;
                     const int NS = deepOk ? 8 : 6;
-                    const int deepSeg = seg == kBig ? kDeepBig : seg == kTent ? kDeepTent : kDeepSeg;
-                    const int deepHead = head == kFlare ? kDeepFlare : head == kBigHead ? kDeepBigHead : kDeepHead;
+                    const int deepSeg = seg == kBig ? kDeepBig : seg == kTent ? kDeepTent : seg == kRidge ? kDeepRidge : seg == kBead ? kDeepBead : kDeepSeg;
+                    const int deepHead = head == kFlare ? kDeepFlare : head == kBigHead ? kDeepBigHead : head == kHook ? kDeepHook : kDeepHead;
                     auto segAt = [&](int k) { return k < 6 ? seg + k : deepSeg + (k - 6); };
-                    auto headAt = [&](int h) { return h < 6 ? head + h : deepHead + (h - 6); };
+                    // hooked, super deep: its normal end (Hook 6, with the hook) becomes the plain round head - the hook is at the deep end
+                    auto headAt = [&](int h) { return (head == kHook && deepOk && h == 5) ? kHead + 5 : h < 6 ? head + h : deepHead + (h - 6); };
+                    auto headF = [&](int h) { return (head == kHook && deepOk && h == 5) ? 0.6f : 1.0f; };
                     const float NSf = static_cast<float>(NS);
                     float filled = std::clamp(p * NSf + s.rndH * 0.6f, 0.0f, NSf);
                     if (wob > 0.0f) filled = std::clamp(filled + wob * std::sin(static_cast<float>(now) * 2.3f + static_cast<float>(act->GetFormID() % 7)), 0.0f, NSf);
@@ -528,9 +545,9 @@ namespace {
                             if (hi <= 0.0f) bw[head] = A * headK * std::clamp(filled / 0.6f, 0.0f, 1.0f);
                             else {
                                 // 2.5c hooked: the last position carries the hook - bring it in only over the end of the stroke
-                                const float fh = (shape == During::kHooked && h0 == 4) ? fr * fr * fr : fr;
-                                bw[headAt(h0)] = A * headK * (1.0f - fh);
-                                bw[headAt(h0 + 1)] = A * headK * fh;
+                                const float fh = (shape == During::kHooked && h0 == NS - 2) ? fr * fr * fr : fr;
+                                bw[headAt(h0)] = A * headK * headF(h0) * (1.0f - fh);
+                                bw[headAt(h0 + 1)] = A * headK * headF(h0 + 1) * fh;
                             }
                         }
                         // knots: from the shape, or ticked for his schlong (2.5d); each its own strength
@@ -1158,6 +1175,7 @@ namespace Engine {
         g_morph->UpdateModelWeight(a, false);
         return true;
     }
+    std::string LastDeepRoll() { std::lock_guard gl(g_gapeMx); return g_lastDeep; }
     Engine::Bulge BulgeOf(RE::FormID id) {
         std::lock_guard gl(g_gapeMx);
         auto it = g_bulgeNow.find(id);

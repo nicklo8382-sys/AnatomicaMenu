@@ -2,6 +2,7 @@
 #include "Colour.h"
 #include "SKSEMenuFramework.h"
 #include "Mnc.h"
+#include "Engine.h"
 #include "Size.h"
 
 #include <algorithm>
@@ -273,6 +274,16 @@ namespace During {
             ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 10.0f);
             if (ImGuiMCP::SliderFloat(std::format("Knot 2 strength##s2_{}", id).c_str(), &v, 0.0f, 200.0f, "%.0f%%")) { k.k2 = v / 100.0f; c = true; }
         }
+        {   // 2.5s: this schlong's own shaft / head strength (on top of the During sex page's)
+            float sv = k.shaftK * 100.0f, hv = k.headK * 100.0f;
+            ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 10.0f);
+            if (ImGuiMCP::SliderFloat(std::format("Shaft##sk_{}", id).c_str(), &sv, 0.0f, 200.0f, "%.0f%%")) { k.shaftK = sv / 100.0f; c = true; }
+            ImGuiMCP::SameLine();
+            ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 10.0f);
+            if (ImGuiMCP::SliderFloat(std::format("Head##hk_{}", id).c_str(), &hv, 0.0f, 200.0f, "%.0f%%")) { k.headK = hv / 100.0f; c = true; }
+            Help("This schlong's own bulge strength: the shaft (the sections up his belly) and the head at the front. 100% = no "
+                 "change; they multiply the Shaft / Head strength on the During sex page, which set it for everyone.");
+        }
         return c;
     }
     bool RenderTypeBulge(const std::string& key) {
@@ -295,16 +306,18 @@ namespace During {
         }
         return ch;
     }
-    std::string Knots::Save() const { return std::format("{}|{:.2f}|{:.2f}", mask, k1, k2); }
+    std::string Knots::Save() const { return std::format("{}|{:.2f}|{:.2f}|{:.2f}|{:.2f}", mask, k1, k2, shaftK, headK); }
     Knots Knots::Load(const char* v) {
         Knots k;
         if (!v) return k;
-        float a = 1.0f, b = 1.0f;
+        float a = 1.0f, b = 1.0f, c = 1.0f, d = 1.0f;
         int m = 0;
-        const int n = std::sscanf(v, "%d|%f|%f", &m, &a, &b);
+        const int n = std::sscanf(v, "%d|%f|%f|%f|%f", &m, &a, &b, &c, &d);
         if (n >= 1) k.mask = m & 3;
         if (n >= 2) k.k1 = std::clamp(a, 0.0f, 2.0f);
         if (n >= 3) k.k2 = std::clamp(b, 0.0f, 2.0f);
+        if (n >= 4) k.shaftK = std::clamp(c, 0.0f, 2.0f);
+        if (n >= 5) k.headK = std::clamp(d, 0.0f, 2.0f);
         return k;
     }
     int AutoShape(RE::Actor* p, Knots* knots, std::string* why) {
@@ -336,6 +349,7 @@ namespace During {
             if (t > 0) *knots = tk;
             else {   // his type goes by size: the size row's knots, plus any ticked for his type (its own strength wins)
                 Knots k = szk[si];
+                k.shaftK *= tk.shaftK; k.headK *= tk.headK;   // 2.5s: his type's strength on top of his size's
                 k.mask |= tk.mask;
                 if (tk.mask & 1) k.k1 = tk.k1;
                 if (tk.mask & 2) k.k2 = tk.k2;
@@ -478,18 +492,26 @@ namespace During {
                 {
                     float sk = g_w.shaftK * 100.0f, hk = g_w.headK * 100.0f;
                     if (ImGuiMCP::SliderFloat("Shaft strength", &sk, 0.0f, 200.0f, "%.0f%%")) { g_w.shaftK = sk / 100.0f; ch = true; }
-                    Help("Only the shaft part (the sections up his belly, the Long tentacle too), on top of Bulge strength. 100% = as built.");
+                    Help("Only the shaft part (the sections up his belly, the Long tentacle too), on top of Bulge strength. 100% = as built. "
+                         "For everyone: each schlong type can add its own on top (Integrations page).");
                     if (ImGuiMCP::SliderFloat("Head strength", &hk, 0.0f, 200.0f, "%.0f%%")) { g_w.headK = hk / 100.0f; ch = true; }
-                    Help("Only the head at the front (round, flared, colossal or hooked), on top of Bulge strength.");
+                    Help("Only the head at the front (round, flared, colossal or hooked), on top of Bulge strength. For everyone: each "
+                         "schlong type can add its own on top (Integrations page).");
+                    ImGuiMCP::TextDisabled("How strong it ends up: Bulge strength x Shaft / Head strength here x that schlong's own Shaft / "
+                                           "Head (Integrations page, 100%% = no change). Knots: that schlong's Knot 1 / 2 strength.");
                 }
                 ch |= ImGuiMCP::Checkbox("Super deep", &g_w.deep);
                 Help("Some scenes go further: two more sections up his belly, almost to his chest, with the head at the end. "
-                     "Rolled at the start of each scene. Works with a bump at the tip, the whole shaft, horse, knot, double "
-                     "knot, the wandering tentacle, Colossal and Long tentacle (Ridged, Segmented and Hooked keep their length).");
+                     "Rolled at the start of each scene. Works with every shape (rebuild the body with Build Morphs: the "
+                     "Anatomica Bulge Deep sliders). The head travels the whole longer path, so it reaches the top only at "
+                     "his deepest strokes.");
                 if (g_w.deep) {
                     float dc = g_w.deepChance * 100.0f;
                     ImGuiMCP::Indent();
                     if (ImGuiMCP::SliderFloat("Chance per scene", &dc, 0.0f, 100.0f, "%.0f%%")) { g_w.deepChance = dc / 100.0f; ch = true; }
+                    Help("Rolled once when a scene's bulge first shows (after half a minute without one). 100% = every scene.");
+                    const std::string last = Engine::LastDeepRoll();
+                    ImGuiMCP::TextDisabled("%s", last.empty() ? "No scene rolled yet this session." : last.c_str());
                     ImGuiMCP::Unindent();
                 }
                 if (ImGuiMCP::TreeNode("Stomach###stomach")) {
