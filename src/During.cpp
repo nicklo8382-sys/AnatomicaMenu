@@ -192,8 +192,7 @@ namespace During {
         F("RingMaxIn", g_w.maxIn, 0.0f, 3.0f); F("RingGrowExtra", g_w.grow, 0.0f, 2.0f);
         B("Bulge", g_bulgeOn); F("BulgeAmount", g_w.bulge, 0.0f, 3.0f); F("BulgeStart", g_w.bulgeStart, 2.0f, 30.0f);
         F("BulgeRandom", g_w.bulgeRandom, 0.0f, 1.0f);
-        if (save) ini.SetLongValue(S, "BulgeShape", g_w.bulgeShape);
-        else g_w.bulgeShape = std::clamp(static_cast<int>(ini.GetLongValue(S, "BulgeShape", g_w.bulgeShape)), 0, kShapeCount - 1);
+        g_w.bulgeShape = 0;   // 2.5p: always from his schlong (the one-shape-for-everyone choice is gone)
         F("BulgeShaftStrength", g_w.shaftK, 0.0f, 2.0f); F("BulgeHeadStrength", g_w.headK, 0.0f, 2.0f);
         F("BulgeBuildTime", g_w.buildTime, 1.0f, 60.0f); F("BulgeTravelSpeed", g_w.travelSpeed, 0.1f, 2.0f); B("BulgeHoldFull", g_w.holdFull);
         F("BulgeStomach", g_w.belly, 0.0f, 2.0f); F("BulgeStomachTime", g_w.bellyTime, 1.0f, 180.0f); F("BulgeStomachRandom", g_w.bellyRandom, 0.0f, 1.0f);
@@ -308,12 +307,16 @@ namespace During {
         if (n >= 3) k.k2 = std::clamp(b, 0.0f, 2.0f);
         return k;
     }
-    int AutoShape(RE::Actor* p, Knots* knots) {
+    int AutoShape(RE::Actor* p, Knots* knots, std::string* why) {
         if (knots) *knots = {};
         if (!p) return kTip;
         Mnc::Override ov;   // 2.5k: a More Nasty Critters group's own settings win
         const bool hasOv = Size::IsCreatureActor(p) && Mnc::Active() && Mnc::OverrideFor(p, &ov);
-        if (hasOv && ov.shape > 0) { if (knots) *knots = ov.knots; return ov.shape; }
+        if (hasOv && ov.shape > 0) {
+            if (knots) *knots = ov.knots;
+            if (why) *why = std::format("{} - its group's own settings ({})", ShapeName(ov.shape), Mnc::GroupName(p));
+            return ov.shape;
+        }
         const std::string key = Size::ShapeKey(Size::Shape(p));
         int t = 0, sz[3];
         Knots tk, szk[3];
@@ -338,6 +341,15 @@ namespace During {
                 if (tk.mask & 2) k.k2 = tk.k2;
                 *knots = k;
             }
+        }
+        if (why) {
+            static const char* szn[3] = {"XS / S / M or not known", "L", "XL"};
+            std::string from = key.empty() ? std::string("his schlong type not found") : std::format("schlong type \"{}\"", key);
+            if (Size::IsCreatureActor(p) && Mnc::Active()) {
+                const std::string g = Mnc::GroupName(p);
+                from += g.empty() ? " (creature in no More Nasty Critters group)" : std::format(" (More Nasty Critters group \"{}\"{})", g, hasOv ? ", own settings for its knots" : "");
+            }
+            *why = t > 0 ? std::format("{} - set on {}", ShapeName(t), from) : std::format("{} - {} goes by size: {}", ShapeName(sz[si]), from, szn[si]);
         }
         return t > 0 ? t : sz[si];
     }
@@ -490,19 +502,8 @@ namespace During {
                     Help("How much it swells and settles from stroke to stroke. 0% = it rises evenly.");
                     ImGuiMCP::TreePop();
                 }
-                const char* shapes[kShapeCount];
-                for (int i = 0; i < kShapeCount; ++i) shapes[i] = ShapeName(i);
-                ch |= ImGuiMCP::Combo("Bulge shape", &g_w.bulgeShape, shapes, kShapeCount);
-                {
-                    std::string h = "From his schlong: the shape set for his schlong's type in \"Shape for each schlong\" below (or for "
-                                    "his size, when his type is set to that or not known)";
-                    if (Mnc::Active()) h += ", and for creatures the shape set for their kind";
-                    h += ". The others pick one shape for everyone.\nEvery shape fills up his belly section by section from the "
-                         "bottom (six sections), the head at the front.";
-                    Help(h.c_str());
-                }
-                ImGuiMCP::TextDisabled("The shape (and knots) for each schlong type and size are set on the Integrations page, "
-                                       "under Partner size and shape.");
+                ImGuiMCP::TextDisabled("The bulge's shape (and knots) comes from his partner's schlong: set for each schlong type and "
+                                       "size on the Integrations page, under Partner size and shape%s.", Mnc::Active() ? " (creatures: More Nasty Critters)" : "");
                 if (ImGuiMCP::TreeNode("Movement for each shape###moves")) {
                     ImGuiMCP::TextDisabled("Travelling: the head runs up and back down by itself, at its own pace (speed below).");
                     ImGuiMCP::TextDisabled("Twitching: small, sudden jumps now and then.");
@@ -541,9 +542,9 @@ namespace During {
                 Help("Needs The New Gentleman for the size.");
                 {
                     float o = g_w.outline * 100.0f;
-                    if (g_w.bulgeShape == 1) {
+                    {
                         if (ImGuiMCP::SliderFloat("Trail under the bump", &o, 0.0f, 100.0f, "%.0f%%")) { g_w.outline = o / 100.0f; ch = true; }
-                        Help("With \"A bump at the tip\": a fainter trail below it, where the shaft is. 0% = only the bump.");
+                        Help("For schlongs whose shape is \"A bump at the tip\": a fainter trail below it, where the shaft is. 0% = only the bump.");
                     }
                     float pu = g_w.pulse * 100.0f;
                     if (ImGuiMCP::SliderFloat("Thrust pulse", &pu, 0.0f, 100.0f, "%.0f%%")) { g_w.pulse = pu / 100.0f; ch = true; }

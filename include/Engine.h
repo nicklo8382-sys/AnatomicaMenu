@@ -13,6 +13,11 @@ namespace Engine {
     float GapeOf(RE::FormID id);                  // the gape morph we last set (-1 = not ours)
     struct During { float depth = -100.0f, hole = 0.0f, ring = 0.0f, off = -1.0f; bool held = false; };   // while he is taken: how deep, hole size, rim pull, how far the shaft is off the hole's centre (-1 = not measured), kept in by the hold
     During DuringOf(RE::FormID id);
+    // 2.5o: his belly bulge right now (SkyrimNet / Bridge): showing, which shape, how far up (sections, 0-8), the most this
+    // round, super deep, how strong, the stomach, the partner, an imprint lingering afterwards
+    struct Bulge { bool on = false; int shape = 0; float reach = 0.0f, roundMax = 0.0f; bool deep = false, roundDeep = false;
+                   float amount = 0.0f, belly = 0.0f, imprint = 0.0f; RE::FormID partner = 0; double since = 0.0; };
+    Bulge BulgeOf(RE::FormID id);
     bool TestBulge(RE::Actor* a, int shape);      // Testing page: show the belly bulge on him for 8 s (shape 1-11, During::BulgeShape)
     bool SetLooseNow(RE::Actor* a, float v);      // lasting looseness, right now (false = no RaceMenu interface)
     std::string Status();                         // one line: what is connected

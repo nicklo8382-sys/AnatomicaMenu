@@ -5,6 +5,9 @@
 #include "Size.h"
 #include "Extras.h"
 #include "Wink.h"
+#include "During.h"
+#include "Kinds.h"
+#include "Mnc.h"
 #include "SKSEMenuFramework.h"
 
 #include <algorithm>
@@ -33,6 +36,18 @@ namespace {
         bool snRemarks = true;     // someone nearby comments on it now and then
         float remarkMinutes = 5.0f;
         float remarkChance = 0.35f;
+        // 2.5o: the belly bulge and what kinds of partner he takes
+        bool snBulge = true;       // the bulge in what is seen / what he feels
+        bool madeFor = true;       // "made for it": after enough times with one kind
+        int madeForTimes = 8;
+        float madeForForget = 30.0f;   // game days without it and it fades
+        bool looseFrom = true;     // what last stretched him
+        bool bulgeMem = true;      // partners remember the bulge they gave him
+        bool rumours = true;       // people where it happened talk about it
+        int rumourMin = 3;
+        bool slsfBeast = true;     // SLSF: creatures add Bestiality fame (the player)
+        bool firsts = true;        // first knot / creature / horse / colossal / super deep: memories + a reaction
+        bool watchBulge = true;    // people watching react to the bulge
         // SLSF Reloaded
         bool fame = true;
         int fameLo = 2, fameHi = 10;   // per time he is taken (the player only: SLSF fame is his)
@@ -146,9 +161,52 @@ namespace {
     }
 
     // ---- what he is like, in words
+    // 2.5o: the belly bulge
+    const char* BulgeShapeWords(int shape) {
+        switch (shape) {
+            case During::kTip: return "a hard bump";
+            case During::kHorse: return "a broad, flared head with a ring along the shaft behind it";
+            case During::kKnot: return "a cock and a fat knot";
+            case During::kTentacle: return "something that writhes and wanders under the skin";
+            case During::kRidged: return "a ridged shaft";
+            case During::kSegmented: return "a knobbly, segmented shaft";
+            case During::kColossal: return "an enormous, thick shaft";
+            case During::kHooked: return "a cock that hooks off to one side at its end";
+            case During::kDoubleKnot: return "a cock with two fat knots";
+            case During::kBeaded: return "a long tentacle curling inside him";
+            default: return "the outline of a cock";
+        }
+    }
+    const char* ReachWords(float r, bool deep) {
+        if (deep && r > 6.2f) return "almost up to his chest";
+        if (r > 4.2f) return "well past his navel";
+        if (r > 2.4f) return "up to his navel";
+        return "low in his belly";
+    }
+    std::string BulgeSeen(RE::Actor* man) {
+        if (!g.snBulge || !man) return {};
+        const Engine::Bulge b = Engine::BulgeOf(man->GetFormID());
+        const std::string M = Name(man);
+        if (b.on) {
+            const char* how = b.amount > 0.7f ? "huge, stretched" : b.amount > 0.3f ? "clear" : "faint";
+            std::string who;
+            if (auto* p = RE::TESForm::LookupByID<RE::Actor>(b.partner)) {
+                const Kinds::Kind k = Kinds::KindOf(p);
+                who = k.key.starts_with("creature:") ? std::format(" - the {}'s cock moving inside him", k.key.substr(9))
+                                                      : std::format(" - {}'s cock moving inside him", Name(p));
+            }
+            std::string t = std::format("{}'s belly shows a {} bulge of {}, {}{}.", M, how, BulgeShapeWords(b.shape), ReachWords(b.reach, b.deep), who);
+            if (b.belly > 0.3f) t += " His whole stomach is rounded out with it.";
+            return t;
+        }
+        if (b.imprint > 0.03f) return std::format("{}'s belly still shows a faint outline of {} where it was.", M, BulgeShapeWords(b.shape));
+        return {};
+    }
     // what anyone looking at his naked backside can see
     std::string Seen(RE::Actor* man, bool needNaked) {
-        if (!IsMan(man) || (needNaked && !Naked(man))) return {};
+        if (!IsMan(man)) return {};
+        const std::string bulge = BulgeSeen(man);   // 2.5o: shows when the bulge itself is allowed to (its own "shows through")
+        if (needNaked && !Naked(man)) return bulge;
         const Colour::Snapshot s = Colour::SnapshotOf(man);
         const Virgin::Info v = Virgin::Get(man->GetFormID());
         std::vector<std::string> p;
@@ -168,6 +226,12 @@ namespace {
         std::string out;
         if (!p.empty()) out = std::format("{}'s hole is {}.", Name(man), Join(p));
         if (s.schlong > 0.15f) out += (out.empty() ? "" : " ") + std::format("{}'s cock is still wet and glossy from fucking someone.", Name(man));
+        if (g.looseFrom && (s.loose > 0.25f || s.gape > 0.15f)) {   // 2.5o: what stretched him
+            const Kinds::Info k = Kinds::Get(man->GetFormID(), g.madeForTimes, g.madeForForget);
+            if (k.lastDays >= 0.0f && k.lastDays < 2.0f && (k.lastCreature || !k.lastKind.empty()))
+                out += (out.empty() ? "" : " ") + std::format("It looks stretched by something big - {}.", k.lastCreature ? "an animal's cock" : k.lastKind);
+        }
+        if (!bulge.empty()) out += (out.empty() ? "" : " ") + bulge;
         return out;
     }
     // what he himself knows
@@ -200,6 +264,20 @@ namespace {
                 if (big && bc >= 3) out.push_back(std::format("The biggest to have had him is {}, {} - he felt every inch.", NameOf(big), bc == Size::kCreature ? "a monstrous creature" : (bc == 4 ? "who is huge" : "who is big")));
             }
         }
+        {   // 2.5o: what kinds he takes, how deep it has gone, what stretched him, what he feels right now
+            const Kinds::Info k = Kinds::Get(man->GetFormID(), g.madeForTimes, g.madeForForget);
+            if (g.madeFor && !k.madeFor.empty())
+                out.push_back(k.madeForCreature ? std::format("His body seems made for {} - he takes them easily and well.", k.madeForMany)
+                                                : std::format("He takes {} like he was made for them.", k.madeForMany));
+            if (g.snBulge && k.everDeep) out.push_back("He has been taken so deep that it bulged almost up to his chest.");
+            else if (g.snBulge && k.deepest > 4.2f) out.push_back("He has been taken deep enough to see it bulge past his navel.");
+            if (g.looseFrom && k.lastDays >= 0.0f && k.lastDays < 2.0f && (s.loose > 0.25f || s.gape > 0.15f)) {
+                if (k.lastCreature && !k.lastKindMany.empty()) out.push_back(std::format("He is still loose from the {} {}.", k.lastKindMany, Days(k.lastDays)));
+                else if (k.lastPartner) out.push_back(std::format("He is still loose from {} {}.", NameOf(k.lastPartner), Days(k.lastDays)));
+            }
+            const Engine::Bulge b = Engine::BulgeOf(man->GetFormID());
+            if (g.snBulge && b.on) out.push_back(std::format("Right now he can feel it reaching {} inside him.", ReachWords(b.reach, b.deep)));
+        }
         const std::string seen = Seen(man, false);
         if (!seen.empty() && (s.gape > 0.15f || s.tender > 0.25f || s.wet > 0.2f || s.swell > 0.25f || s.schlong > 0.15f)) out.push_back("Right now: " + seen);
         std::string o;
@@ -216,6 +294,10 @@ namespace {
             if (h.tookFirst) t += std::format(" and took his virginity");
             else if (h.tookIt) t += std::format(" and took his virginity again after he had tightened back up");
             if (h.daysSince >= 0.0f) t += std::format(" (last {})", Days(h.daysSince));
+            if (g.madeFor) {   // 2.5o
+                const Kinds::Info k = Kinds::Get(h.man, g.madeForTimes, g.madeForForget);
+                if (!k.madeFor.empty()) t += std::format("; {} takes {} like he was made for them", him, k.madeForMany);
+            }
             out.push_back(t + ".");
             if (out.size() >= 4) break;
         }
@@ -235,6 +317,7 @@ namespace {
     std::string SNSelf(RE::StaticFunctionTag*, RE::Actor* a) { ++g_callsSelf; return g.snStatus ? Self(a) : std::string{}; }
     std::string SNSeen(RE::StaticFunctionTag*, RE::Actor* a) { ++g_callsSeen; return g.snStatus ? Seen(a, true) : std::string{}; }
     std::string SNKnows(RE::StaticFunctionTag*, RE::Actor* a) { ++g_callsKnows; return g.snStatus ? Knows(a) : std::string{}; }
+    std::string SNRumour(RE::StaticFunctionTag*, RE::Actor* a) { return (g.snStatus && g.rumours && IsMan(a)) ? Kinds::Rumour(a, g.rumourMin) : std::string{}; }
 
     // a man near the speaker who fits (naked when it needs to be)
     RE::Actor* ManNear(RE::Actor* speaker, bool naked) {
@@ -308,6 +391,7 @@ namespace {
             dec("anatomica_self", "SNSelf");
             dec("anatomica_seen", "SNSeen");
             dec("anatomica_knows", "SNKnows");
+            dec("anatomica_rumour", "SNRumour");   // 2.5o
             auto act = [&](const char* name, const char* desc, const char* elig, const char* exec, const char* schema) {
                 auto c = RE::make_smart<CountOk>(); c->ok = &g_actOk;
                 RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb(c);
@@ -326,7 +410,7 @@ namespace {
             act("AnatomicaAskVirgin", "Ask a man whether he is still an anal virgin. He will answer.",
                 "SNCanAsk", "SNAsk", "{\"target\": \"Actor\"}");
             Extras::RegisterSN(vm);   // anatomica_lot (only with the extras mod)
-            logger::info("Anatomica: registered with SkyrimNet (3 decorators, 4 actions{})", Extras::On() ? ", extras' anatomica_lot" : "");
+            logger::info("Anatomica: registered with SkyrimNet (4 decorators, 4 actions{})", Extras::On() ? ", extras' anatomica_lot" : "");
         });
     }
 
@@ -338,6 +422,8 @@ namespace {
     std::unordered_map<RE::FormID, double> g_sceneAt, g_remarkAt;
     std::unordered_map<RE::FormID, int> g_arousalSent;
     double g_lastTick = 0.0, g_lastRemark = 0.0;
+    struct BulgeRound { bool active = false, watched = false; float most = 0.0f; bool deep = false; RE::FormID partner = 0; int shape = 0; double offAt = 0.0; };
+    std::unordered_map<RE::FormID, BulgeRound> g_bulgeRound;   // 2.5o: per man, the bulge this round (memories, watchers)
 
     // ---- bathing
     bool IsBath(RE::FormID mgefId) {
@@ -390,6 +476,9 @@ namespace Bridge {
         auto F = [&](const char* k, float& v, float lo, float hi) { if (save) ini.SetDoubleValue(S, k, v); else v = std::clamp(static_cast<float>(ini.GetDoubleValue(S, k, v)), lo, hi); };
         B("SkyrimNet", g.sn); B("SNStatus", g.snStatus); B("SNMemory", g.snMemory); B("SNReact", g.snReact);
         B("SNInspect", g.actInspect); B("SNLube", g.actLube); B("SNClench", g.actClench); B("SNAsk", g.actAsk);
+        B("SNBulge", g.snBulge); B("SNMadeFor", g.madeFor); I("SNMadeForTimes", g.madeForTimes, 2, 100); F("SNMadeForForget", g.madeForForget, 2.0f, 365.0f);
+        B("SNLooseFrom", g.looseFrom); B("SNBulgeMemory", g.bulgeMem); B("SNRumours", g.rumours); I("SNRumourMin", g.rumourMin, 1, 50);
+        B("SLSFBestiality", g.slsfBeast); B("SNFirsts", g.firsts); B("SNWatchBulge", g.watchBulge);
         B("SNScene", g.snScene); B("SNRemarks", g.snRemarks); F("SNRemarkMinutes", g.remarkMinutes, 0.5f, 60.0f); F("SNRemarkChance", g.remarkChance, 0.0f, 1.0f);
         B("SLSF", g.fame); I("SLSFFameMin", g.fameLo, 0, 50); I("SLSFFameMax", g.fameHi, 1, 100); F("SLSFFirst", g.fameFirst, 1.0f, 10.0f); B("SLSFGroup", g.fameGroup);
         B("Arousal", g.arousal); I("ArousalFrom", g.arousalFrom, 0, 99); F("ArousalWet", g.arousalWet, 0.0f, 1.0f); B("ArousalSensitive", g.arousalSens);
@@ -404,6 +493,7 @@ namespace Bridge {
         vm->RegisterFunction("SNSelf"sv, "AnatomicaNative"sv, SNSelf);
         vm->RegisterFunction("SNSeen"sv, "AnatomicaNative"sv, SNSeen);
         vm->RegisterFunction("SNKnows"sv, "AnatomicaNative"sv, SNKnows);
+        vm->RegisterFunction("SNRumour"sv, "AnatomicaNative"sv, SNRumour);
         vm->RegisterFunction("SNCanInspect"sv, "AnatomicaNative"sv, SNCanInspect);
         vm->RegisterFunction("SNCanLube"sv, "AnatomicaNative"sv, SNCanLube);
         vm->RegisterFunction("SNCanClench"sv, "AnatomicaNative"sv, SNCanClench);
@@ -417,7 +507,7 @@ namespace Bridge {
         if (!sink) if (auto* src = RE::ScriptEventSourceHolder::GetSingleton()) { src->AddEventSink<RE::TESMagicEffectApplyEvent>(&g_bathSink); sink = true; }
         {
             std::lock_guard lk(g_mx);
-            g_react.clear(); g_sceneSent.clear(); g_sceneAt.clear(); g_remarkAt.clear(); g_arousalSent.clear();
+            g_react.clear(); g_sceneSent.clear(); g_sceneAt.clear(); g_remarkAt.clear(); g_arousalSent.clear(); g_bulgeRound.clear();
         }
         RegisterSN();
     }
@@ -436,6 +526,25 @@ namespace Bridge {
         }
         // arousal
         if (g.arousal) Exposure(manId, first ? g.exposureFirst : g.exposureEach);
+        // 2.5o: what kind took him (made for it, rumours, what stretched him) and his firsts
+        const std::uint32_t fresh = Kinds::OnTaken(man, partner);
+        if (g.slsfBeast && g.fame && HasSLSF() && man->IsPlayerRef() && partner && Size::IsCreatureActor(partner))
+            Static("AnatomicaNative", "SendFame", RE::BSFixedString("Bestiality"), static_cast<std::int32_t>(g.fameLo), static_cast<std::int32_t>(std::max(g.fameLo + 1, g.fameHi)));
+        if (fresh && g.firsts && SN() && partner) {
+            const std::string M = Name(man), P = Name(partner);
+            const Kinds::Kind k = Kinds::KindOf(partner);
+            std::vector<std::string> what;
+            if (fresh & Kinds::kFirstCreature) what.push_back(k.key.starts_with("creature:") ? std::format("his first time with an animal - a {}", k.key.substr(9)) : "his first time with a creature");
+            if (fresh & Kinds::kFirstKnot) what.push_back("the first time a knot was pushed into him");
+            if (fresh & Kinds::kFirstFlare) what.push_back("the first flared cock he has taken");
+            if (fresh & Kinds::kFirstColossal) what.push_back("the biggest thing he has ever taken");
+            if (!what.empty()) {
+                const std::string w = Join(what);
+                if (g.snMemory) Remember(std::format("{} took {}: {}.", P, M, w), partner, man);
+                std::lock_guard lk(g_mx);
+                g_react.push_back({manId, partnerId, std::format("{} has just had {} - {}.", P, M, w), Now()});
+            }
+        }
         if (!first || !SN()) return;
         // SkyrimNet: both remember it; the partner reacts once the round is over
         const std::string M = Name(man), P = partner ? Name(partner) : std::string{};
@@ -516,7 +625,50 @@ namespace Bridge {
             const RE::FormID id = man->GetFormID();
             const std::string seen = (g.snScene || g.snRemarks) ? Seen(man, true) : std::string{};
             const Colour::Snapshot s = seen.empty() ? Colour::Snapshot{} : Colour::SnapshotOf(man);
-            const bool shows = !seen.empty() && (s.gape > 0.15f || s.tender > 0.25f || s.wet > 0.2f || s.swell > 0.25f || s.schlong > 0.15f);
+            const bool bulgeShows = !BulgeSeen(man).empty();
+            const bool shows = !seen.empty() && (bulgeShows || s.gape > 0.15f || s.tender > 0.25f || s.wet > 0.2f || s.swell > 0.25f || s.schlong > 0.15f);
+            // 2.5o: the bulge this round - how far it went, firsts, people watching, the partner's memory of it after
+            {
+                const Engine::Bulge b = Engine::BulgeOf(id);
+                BulgeRound fin{};
+                bool finished = false, watch = false;
+                std::uint32_t fresh = 0;
+                if (b.on) fresh = Kinds::OnReach(id, b.reach, b.deep && b.reach > 6.2f);
+                {
+                    std::lock_guard lk(g_mx);
+                    auto& r = g_bulgeRound[id];
+                    if (b.on) {
+                        if (!r.active) r = BulgeRound{true};
+                        r.most = std::max(r.most, b.reach); r.deep = r.deep || (b.deep && b.reach > 6.2f);
+                        if (b.partner) r.partner = b.partner;
+                        r.shape = b.shape; r.offAt = now;
+                        if (!r.watched && (r.most > 4.2f || r.deep)) { r.watched = true; watch = true; }
+                    } else if (r.active && now - r.offAt > 10.0) { fin = r; finished = true; r.active = false; }
+                }
+                RE::Actor* partner = RE::TESForm::LookupByID<RE::Actor>(finished ? fin.partner : b.partner);
+                if ((fresh & Kinds::kFirstDeep) && g.firsts && partner) {
+                    const std::string t = std::format("{} took {} so deep that it bulged almost up to his chest - deeper than anything before.", Name(partner), Name(man));
+                    if (g.snMemory) Remember(t, partner, man);
+                    std::lock_guard lk(g_mx);
+                    g_react.push_back({id, partner->GetFormID(), t, now});
+                }
+                if (finished && g.bulgeMem && partner && fin.most > 2.4f) {
+                    const Kinds::Kind k = Kinds::KindOf(partner);
+                    const std::string by = k.key.starts_with("creature:") ? std::format("The {}'s cock", k.key.substr(9)) : std::format("{}'s cock", Name(partner));
+                    Remember(std::format("{} had {}'s belly bulging {} - its shape plain to see through his skin.", by, Name(man), ReachWords(fin.most, fin.deep)), partner, man);
+                }
+                if (watch && g.watchBulge && g.snRemarks && Rand01() <= g.remarkChance) {
+                    RE::Actor* who = nullptr; float best = 900.0f;
+                    for (auto* o : all) {
+                        if (!o || o == man || o == partner || o->IsDead() || o->IsChild() || o->IsInCombat() || o->IsPlayerRef()) continue;
+                        const float d = o->GetPosition().GetDistance(man->GetPosition());
+                        bool los = false;
+                        if (d < best && o->HasLineOfSight(man, los) && los) { best = d; who = o; }
+                    }
+                    const std::string bs = BulgeSeen(man);
+                    if (who && !bs.empty()) { ++g_sentRemark; Narrate(std::format("{} watches as {}", Name(who), bs), who, man); }
+                }
+            }
             if (g.snScene && shows) {
                 std::lock_guard lk(g_mx);
                 if (g_sceneSent[id] != seen || now - g_sceneAt[id] > 20.0) {
@@ -568,20 +720,21 @@ namespace Bridge {
             ImGuiMCP::TextDisabled("Sent: memories %d, reactions and remarks %d, scene notes %d.", g_sentMem.load(), g_sentReact.load(), g_sentScene.load());
             Help("SkyrimNet only asks for a man's state when it writes a prompt about him (when someone talks to or about "
                  "him), so the first numbers stay at 0 until then.");
-            static std::string pv[3];
+            static std::string pv[4];
             static std::string who;
             if (ImGuiMCP::Button("Show what SkyrimNet gets for the selected man")) {
                 RE::Actor* a = nullptr;
                 if (auto sel = RE::Console::GetSelectedRef()) a = sel->As<RE::Actor>();
                 if (!a) a = RE::PlayerCharacter::GetSingleton();
                 who = Name(a);
-                pv[0] = Self(a); pv[1] = Seen(a, true); pv[2] = Knows(a);
+                pv[0] = Self(a); pv[1] = Seen(a, true); pv[2] = Knows(a); pv[3] = Kinds::Rumour(a, g.rumourMin);
             }
             Help("The man you click in the console (~), or you. Exactly the text SkyrimNet's prompts get.");
             if (!who.empty()) {
                 ImGuiMCP::TextWrapped("%s - what he knows: %s", who.c_str(), pv[0].empty() ? "(nothing)" : pv[0].c_str());
                 ImGuiMCP::TextWrapped("What others see (naked only): %s", pv[1].empty() ? "(nothing - dressed, or nothing shows)" : pv[1].c_str());
                 ImGuiMCP::TextWrapped("What he remembers of men he has had: %s", pv[2].empty() ? "(nothing)" : pv[2].c_str());
+                ImGuiMCP::TextWrapped("Rumours where he is: %s", pv[3].empty() ? "(nothing)" : pv[3].c_str());
             }
         }
         ImGuiMCP::BeginDisabled(offSN);
@@ -617,6 +770,41 @@ namespace Bridge {
                 if (ImGuiMCP::SliderFloat("Chance", &pct, 0.0f, 100.0f, "%.0f%%")) { g.remarkChance = pct / 100.0f; ch = true; }
                 ImGuiMCP::Unindent();
             }
+            // 2.5o
+            ImGuiMCP::SeparatorText("Belly bulge and what he takes");
+            ch |= ImGuiMCP::Checkbox("The belly bulge", &g.snBulge);
+            Help("While the bulge shows, people see its shape and how far up it goes (a knot, a flared head, almost up to his "
+                 "chest...), and he feels it. Shown whenever the bulge itself shows (its \"Shows through\" setting, During sex "
+                 "page), and the imprint after.");
+            ch |= ImGuiMCP::Checkbox("\"Made for it\"", &g.madeFor);
+            Help("After he has taken one kind often enough - knotted, flared... or, with More Nasty Critters, one kind of "
+                 "creature - he, and the men who have had him, know he takes them like he was made for them. It fades if he "
+                 "goes long enough without.");
+            if (g.madeFor) {
+                ImGuiMCP::Indent();
+                ch |= ImGuiMCP::SliderInt("After this many times", &g.madeForTimes, 2, 100);
+                ch |= ImGuiMCP::SliderFloat("Fades after (game days without)", &g.madeForForget, 2.0f, 365.0f, "%.0f");
+                ImGuiMCP::Unindent();
+            }
+            ch |= ImGuiMCP::Checkbox("What stretched him", &g.looseFrom);
+            Help("While he is still loose or gaping, he knows (and it can be seen) what did it - \"still loose from the wolves "
+                 "last night\".");
+            ch |= ImGuiMCP::Checkbox("Partners remember the bulge", &g.bulgeMem);
+            Help("After a round where the bulge went past his lower belly, the one who gave it to him remembers how far it went.");
+            ch |= ImGuiMCP::Checkbox("Firsts", &g.firsts);
+            Help("His first creature, first knot, first flared cock, the biggest he has taken and his first super deep: each "
+                 "becomes a memory, and the partner says something after.");
+            ch |= ImGuiMCP::Checkbox("People watching react to the bulge", &g.watchBulge);
+            Help("When it goes past his navel (or super deep), someone watching may say something - uses \"People comment on "
+                 "it\" and its chance.");
+            ch |= ImGuiMCP::Checkbox("Rumours", &g.rumours);
+            Help("Where it keeps happening, people talk: \"Around Whiterun people whisper that he lets wolves have him.\" "
+                 "Heard by anyone talking to him in that hold. Needs the Anatomica prompt pack.");
+            if (g.rumours) {
+                ImGuiMCP::Indent();
+                ch |= ImGuiMCP::SliderInt("After this many times there", &g.rumourMin, 1, 50);
+                ImGuiMCP::Unindent();
+            }
             if (ImGuiMCP::Button("Register with SkyrimNet again")) RegisterSN();
             Help("Done on every load. Use this if you switched SkyrimNet parts on in the middle of a game.");
             ImGuiMCP::Unindent();
@@ -637,6 +825,7 @@ namespace Bridge {
             if (g.fameHi < g.fameLo) g.fameHi = g.fameLo;
             ch |= ImGuiMCP::SliderFloat("Your first time counts", &g.fameFirst, 1.0f, 10.0f, "x%.1f");
             ch |= ImGuiMCP::Checkbox("Several men in a row: Group fame too", &g.fameGroup);
+            ch |= ImGuiMCP::Checkbox("Creatures: Bestiality fame too", &g.slsfBeast);   // 2.5o
             ImGuiMCP::Unindent();
         }
         ImGuiMCP::EndDisabled();

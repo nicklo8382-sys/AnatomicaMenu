@@ -310,9 +310,12 @@ namespace {
         std::lock_guard lk(g_mx);
         if (save) {
             ini.Delete("ShapeTypes", nullptr);
+            ini.Delete("CreatureTypes", nullptr);
             for (auto& d : g_defs)
-                if (d.source == "menu")
+                if (d.source == "menu") {
                     ini.SetValue("ShapeTypes", d.key.c_str(), std::format("{} | {} | {:.2f} | {:.2f} | {:.2f} | {:.2f} | {}", d.name, d.word, d.open, d.build, d.loose, d.tender, d.desc).c_str());
+                    if (d.creature) ini.SetValue("CreatureTypes", d.key.c_str(), "1");   // 2.5q: a creature type (MNC section)
+                }
             ini.Delete("ShapeByActor", nullptr);
             for (auto& [k, t] : g_menuActors) ini.SetValue("ShapeByActor", t.c_str(), k.c_str());
             return;
@@ -322,6 +325,9 @@ namespace {
         CSimpleIniA::TNamesDepend keys;
         ini.GetAllKeys("ShapeTypes", keys);
         for (auto& k : keys) Define(k.pItem, ini.GetValue("ShapeTypes", k.pItem, ""), "menu");
+        keys.clear();
+        ini.GetAllKeys("CreatureTypes", keys);
+        for (auto& k : keys) if (const int i = DefIndex(k.pItem)) g_defs[i].creature = true;
         g_menuActors.clear();
         keys.clear();
         ini.GetAllKeys("ShapeByActor", keys);   // Plugin|ID = shape key
@@ -499,7 +505,7 @@ namespace Size {
                 ImGuiMCP::Unindent();
             }
             // ---- the selected man: what was found, and a shape of your own choosing for him
-            static std::string shown;
+            static std::string shown, bulgeWhy;
             static RE::FormID shownId = 0;
             RE::Actor* sel = nullptr;
             if (auto r = RE::Console::GetSelectedRef()) sel = r->As<RE::Actor>();
@@ -518,10 +524,15 @@ namespace Size {
                 const char* nm = sel->GetDisplayFullName();
                 shown = std::format("{}: {}, {}{}{}", nm ? nm : "?", c < 0 ? std::string("size not known yet (asked TNG - press again)") : std::string(kName[c]), nmShape,
                                     si.from.empty() ? std::string{} : std::format(" - \"{}\"", si.from), si.how.empty() ? std::string{} : std::format(" ({})", si.how));
+                bulgeWhy.clear();
+                During::Knots kn;
+                During::AutoShape(sel, &kn, &bulgeWhy);   // 2.5p: what his bulge will be, and why
+                if (kn.mask) bulgeWhy += std::format(", + {}", kn.mask == 3 ? "knots 1 and 2" : kn.mask == 1 ? "knot 1" : "knot 2");
                 shownId = sel->GetFormID();
             }
             Help("The man you click in the console (~), or you. Shows which schlong was found and how its shape was decided.");
             if (!shown.empty()) ImGuiMCP::TextWrapped("%s", shown.c_str());
+            if (!bulgeWhy.empty()) ImGuiMCP::TextWrapped("Belly bulge: %s", bulgeWhy.c_str());
             {
                 std::lock_guard lk(g_mx);
                 const std::string fk = FormKey(sel);
@@ -627,8 +638,30 @@ namespace Size {
             if (ImGuiMCP::Combo("A creature counts", &sel, items, 3)) { g.creatureCat = sel + 3; ch = true; }
             ImGuiMCP::Unindent();
         }
-        if (ImGuiMCP::TreeNode("Creature types (change them)###crtypes")) {
+        {   // 2.5p: what decides the selected creature's bulge
+            static std::string crWhy;
+            if (ImGuiMCP::Button("Check the selected creature")) {
+                RE::Actor* sel = nullptr;
+                if (auto r = RE::Console::GetSelectedRef()) sel = r->As<RE::Actor>();
+                if (!sel) crWhy = "Click a creature in the console (~) first.";
+                else {
+                    const std::string grp = Mnc::GroupName(sel), type = Mnc::TypeFor(sel);
+                    std::string why;
+                    During::Knots kn;
+                    During::AutoShape(sel, &kn, &why);
+                    const char* nm = sel->GetDisplayFullName();
+                    crWhy = std::format("{}: group {}, type {}. Belly bulge: {}{}", nm ? nm : "?", grp.empty() ? "(none)" : grp,
+                                        type.empty() ? "(automatic)" : type, why,
+                                        kn.mask ? std::format(", + {}", kn.mask == 3 ? "knots 1 and 2" : kn.mask == 1 ? "knot 1" : "knot 2") : std::string{});
+                }
+            }
+            Help("Shows which group a creature you clicked in the console (~) is in, which type it counts as, and the belly bulge "
+                 "it will give - and what decided it.");
+            if (!crWhy.empty()) ImGuiMCP::TextWrapped("%s", crWhy.c_str());
+        }
+        if (ImGuiMCP::TreeNode("Creature types (change them, or add your own)###crtypes")) {
             std::lock_guard lk(g_mx);
+            int cremove = 0;
             ImGuiMCP::TextDisabled("x1.00 = no change. Open: how far he gapes. Build: time to open up (lower = faster). "
                                    "Loose: lasting looseness. Sore: soreness and redness.");
             for (size_t i = 1; i < g_defs.size(); ++i) {
@@ -647,11 +680,36 @@ namespace Size {
                     e |= ImGuiMCP::SliderFloat("Sore", &d.tender, 0.5f, 2.0f, "x%.2f");
                     ch |= During::RenderTypeBulge(d.key);   // 2.5k: its belly bulge (During sex) and knots
                     if (!d.desc.empty()) ImGuiMCP::TextDisabled("%s", d.desc.c_str());
+                    if (d.source == "menu" && ImGuiMCP::SmallButton("Remove this type")) cremove = static_cast<int>(i);
                     if (e) { d.source = "menu"; ch = true; }
                     ImGuiMCP::TreePop();
                 }
                 ImGuiMCP::PopID();
             }
+            if (cremove) {   // 2.5q: back to the built-in one (or gone, if it was added here)
+                std::vector<ShapeDef> keep;
+                for (size_t i = 1; i < g_defs.size(); ++i) if (g_defs[i].source == "menu" && static_cast<int>(i) != cremove) keep.push_back(g_defs[i]);
+                Builtins();
+                LoadShapeFiles();
+                for (auto& d : keep) { const int i = DefIndex(d.key); if (!i) g_defs.push_back(d); else g_defs[i] = d; }
+                g_resolved = false; g_shapes.clear(); ch = true;
+            }
+            static char ck[32] = "";
+            ImGuiMCP::InputText("##newctype", ck, sizeof(ck));
+            ImGuiMCP::SameLine();
+            if (ImGuiMCP::Button("Add a creature type") && ck[0]) {
+                std::string key = LowerS(TrimS(ck));
+                for (auto& c : key) if (c == ' ' || c == '|' || c == '=') c = '_';
+                if (!DefIndex(key)) {
+                    ShapeDef d{key, TrimS(ck), LowerS(TrimS(ck)), "", "menu"};
+                    d.creature = true;
+                    g_defs.push_back(d);
+                    ch = true;
+                }
+                ck[0] = 0;
+            }
+            Help("Type a name and add it: it gets its own open / build / loose / sore, belly bulge and knots. Then pick it as the "
+                 "type of a kind of creature below.");
             ImGuiMCP::TreePop();
         }
         if (ImGuiMCP::TreeNode("Each kind of creature###crgroups")) {
@@ -667,8 +725,9 @@ namespace Size {
             for (auto& gr : Mnc::Groups()) {
                 int v = 0;
                 for (size_t i = 0; i < types.size(); ++i) if (types[i].first == gr.type) v = static_cast<int>(i) + 1;
-                const std::string label = gr.races ? std::format("{} ({} races)###ct_{}", gr.name, gr.races, gr.name)
-                                                   : std::format("{} (by name)###ct_{}", gr.name, gr.name);
+                const std::string label = gr.races > 0 ? std::format("{} ({} races)###ct_{}", gr.name, gr.races, gr.name)
+                                        : gr.races < 0 ? std::format("{} (yours: {})###ct_{}", gr.name, gr.words, gr.name)
+                                                       : std::format("{} (by name)###ct_{}", gr.name, gr.name);
                 ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 14.0f);
                 if (ImGuiMCP::Combo(label.c_str(), &v, opts.data(), static_cast<int>(opts.size()))) {
                     Mnc::SetType(gr.name, v > 0 ? types[v - 1].first : std::string{});
@@ -692,7 +751,34 @@ namespace Size {
                     ImGuiMCP::Unindent();
                 }
                 if (oc) { Mnc::SetOverride(gr.name, ov); ch = true; }
+                if (gr.races < 0) {
+                    ImGuiMCP::SameLine();
+                    if (ImGuiMCP::SmallButton(std::format("Remove##rk_{}", gr.name).c_str())) { Mnc::RemoveKind(gr.name); { std::lock_guard lk(g_mx); g_shapes.clear(); } ch = true; }
+                }
             }
+            // 2.5q: a kind of your own
+            ImGuiMCP::SeparatorText("Add your own kind");
+            static char kn[40] = "", kw[120] = "";
+            ImGuiMCP::InputText("Name##newkind", kn, sizeof(kn));
+            ImGuiMCP::InputText("Words in its race ID (comma separated)##newkindw", kw, sizeof(kw));
+            if (ImGuiMCP::Button("Use the selected creature's race")) {
+                RE::Actor* sel = nullptr;
+                if (auto r = RE::Console::GetSelectedRef()) sel = r->As<RE::Actor>();
+                const std::string id = Mnc::RaceId(sel);
+                if (!id.empty()) {
+                    std::snprintf(kw, sizeof(kw), "%s", id.c_str());
+                    if (!kn[0]) if (auto* race = sel->GetRace(); race && race->GetName()) std::snprintf(kn, sizeof(kn), "%s", race->GetName());
+                }
+            }
+            ImGuiMCP::SameLine();
+            if (ImGuiMCP::Button("Add this kind") && kn[0] && kw[0]) {
+                Mnc::AddKind(TrimS(kn), kw);
+                { std::lock_guard lk(g_mx); g_shapes.clear(); }
+                kn[0] = 0; kw[0] = 0; ch = true;
+            }
+            Help("A kind of creature of your own (one More Nasty Critters does not list, or one you want apart from its group): "
+                 "any creature whose race ID contains one of the words. It comes first, before the More Nasty Critters groups, "
+                 "and gets a type and its own settings like the others. Click a creature in the console (~) and use its race to fill the words.");
             ImGuiMCP::TreePop();
         }
         return ch;

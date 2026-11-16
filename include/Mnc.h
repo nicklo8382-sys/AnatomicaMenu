@@ -23,10 +23,14 @@ namespace Mnc {
         std::string Save() const;
         static Override Load(const char* v);
     };
-    bool OverrideFor(RE::Actor* creature, Override* out);   // true when his group has its own settings switched on
-    struct Group { std::string name; int races; std::string type; Override ov; };
+    bool OverrideFor(RE::Actor* creature, Override* out);
+    std::string GroupName(RE::Actor* creature);     // 2.5p: his MNC group ("" = none)   // true when his group has its own settings switched on
+    struct Group { std::string name; int races; std::string type; Override ov; std::string words; };   // races -1 = added in the menu (words: matched in the race ID)
     std::vector<Group> Groups();                    // for the menu (sorted by name)
     void SetType(const std::string& group, const std::string& typeKey);   // "" = automatic
     void SetOverride(const std::string& group, const Override& o);
-    void Ini(CSimpleIniA& ini, bool save);          // [CreatureType] group = type, [CreatureOverride] group = its own settings
+    void AddKind(const std::string& name, const std::string& words);   // 2.5q: a kind of creature of your own (words in its race ID, comma separated)
+    void RemoveKind(const std::string& name);
+    std::string RaceId(RE::Actor* a);               // its race's editor ID (lower case)
+    void Ini(CSimpleIniA& ini, bool save);          // [CreatureType] group = type, [CreatureOverride] group = its own settings, [CreatureKinds] name = race words
 }

@@ -223,6 +223,7 @@ namespace {
     std::unordered_map<RE::FormID, float> g_gape;
     struct DuringNow { float depth = -100.0f, hole = 0.0f, ring = 0.0f, off = -1.0f; bool held = false; };
     std::unordered_map<RE::FormID, DuringNow> g_during;   // for the status window
+    std::unordered_map<RE::FormID, Engine::Bulge> g_bulgeNow;   // 2.5o: for SkyrimNet (under g_gapeMx)
     std::atomic<bool> g_queued{false};
     double g_last = 0.0, g_lastCol = 0.0;
 
@@ -541,6 +542,14 @@ namespace {
                             bw[kBelly] = dw.bulge * dw.belly * Smooth(s.bellyG) * std::max(0.0f, 1.0f + 0.5f * dw.bellyRandom * s.rndB);
                         }
                         bulging = true;
+                        {   // 2.5o: what SkyrimNet can say about it
+                            std::lock_guard gl(g_gapeMx);
+                            auto& b = g_bulgeNow[act->GetFormID()];
+                            if (now - b.since > 30.0 && !b.on) { b.roundMax = 0.0f; b.roundDeep = false; }
+                            b.on = true; b.shape = shape; b.reach = filled; b.roundMax = std::max(b.roundMax, filled);
+                            b.deep = deepOk; b.roundDeep = b.roundDeep || (deepOk && filled > 6.2f);
+                            b.amount = A; b.belly = bw[kBelly]; b.imprint = 0.0f; b.partner = partner ? partner->GetFormID() : 0; b.since = now;
+                        }
                     }
                 }
             }
@@ -551,6 +560,18 @@ namespace {
             const float linger = (now - s.bulgeLast < 30.0) ? std::max(0.8f, dw.linger * (0.5f + Smooth(s.bulgeDil))) : 0.8f;
             if (!bulging && now - s.bulgeLast > 30.0) s.bulgeDil = 0.0f;
             if (!bulging && now - s.bulgeLast > 3.0) { s.grow = 0.0f; s.fillHold = 0.0f; }
+            if (!bulging) {   // 2.5o: no longer showing (the round's most is kept a while for memories)
+                std::lock_guard gl(g_gapeMx);
+                if (auto it = g_bulgeNow.find(act->GetFormID()); it != g_bulgeNow.end()) {
+                    it->second.on = false;
+                    float im = 0.0f;
+                    if (dw.imprint && dw.bulge > 0.0f) {
+                        const float age = static_cast<float>(now - s.bulgeLast) / (60.0f * std::max(0.5f, dw.imprintMin));
+                        im = age < 1.0f ? dw.imprintAmt * (1.0f - Smooth(age)) : 0.0f;
+                    }
+                    it->second.imprint = im;
+                }
+            }
             if (!bulging) s.bellyG = std::max(0.0f, s.bellyG - dt / std::max(2.0f, 2.0f * dw.bellyTime));   // settles slowly   // build-up starts again next time
             if (!bulging && !(tip.ok && partner) && dw.imprint && dw.bulge > 0.0f) {   // 2.5 imprint: a faint copy that fades over the minutes set
                 const float age = static_cast<float>(now - s.bulgeLast) / (60.0f * std::max(0.5f, dw.imprintMin));
@@ -1136,6 +1157,11 @@ namespace Engine {
         SetMorph(a, "AGLooseT", K, v > 0.0f ? gt : 0.0f);   // healing counts from now
         g_morph->UpdateModelWeight(a, false);
         return true;
+    }
+    Engine::Bulge BulgeOf(RE::FormID id) {
+        std::lock_guard gl(g_gapeMx);
+        auto it = g_bulgeNow.find(id);
+        return it == g_bulgeNow.end() ? Engine::Bulge{} : it->second;
     }
     Engine::During DuringOf(RE::FormID id) {
         std::lock_guard gl(g_gapeMx);

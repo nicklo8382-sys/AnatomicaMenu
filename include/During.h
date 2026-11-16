@@ -24,7 +24,7 @@ namespace During {
         static Knots Load(const char* v);
     };
     // "From his schlong": creature (More Nasty Critters), his TNG type, his size; knots (if given): that schlong's knots
-    int AutoShape(RE::Actor* partner, Knots* knots = nullptr);
+    int AutoShape(RE::Actor* partner, Knots* knots = nullptr, std::string* why = nullptr);   // why: what decided it (menu readout)
     // 2.5k: the bulge shape + knots controls, drawn on the Integrations page (each schlong type, each size, MNC overrides)
     bool BulgeChoice(int& shape, Knots& k, const std::string& id, const char* zero);
     bool RenderTypeBulge(const std::string& typeKey);

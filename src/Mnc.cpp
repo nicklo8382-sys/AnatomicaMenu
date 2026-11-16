@@ -20,6 +20,7 @@ namespace {
     std::map<std::string, std::string> g_type;                    // group -> type key set in the menu ("auto" = automatic)
     std::unordered_map<RE::FormID, std::string> g_styleType;      // style armour -> type key
     std::map<std::string, Mnc::Override> g_ov;                    // 2.5k: group -> its own settings (an override of its type)
+    std::map<std::string, std::vector<std::string>> g_custom;     // 2.5q: kinds added in the menu: name -> words in the race ID
 
     double Now() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
     std::string Lower(std::string x) { for (auto& c : x) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); return x; }
@@ -114,7 +115,8 @@ namespace {
                     if (T[j].t == '{') ++depth;
                     else if (T[j].t == '}') { if (--depth == 0) break; }
                     else if (depth == 1 && T[j].t == 's' && j + 2 < T.size() && T[j + 1].t == ':' && T[j + 2].t == '[') {
-                        const std::string group = T[j].s;
+                        std::string group = T[j].s;
+                        if (Lower(group) == "dogs") group = "Canines";   // 2.5q: the same thing - one group
                         size_t k = j + 3;
                         for (; k < T.size() && T[k].t != ']'; ++k)
                             if (T[k].t == 's' && !T[k].s.empty()) {
@@ -152,8 +154,26 @@ namespace {
         auto* race = a ? a->GetRace() : nullptr;
         if (!race) return {};
         const std::string ed = race->formEditorID.c_str() ? Lower(race->formEditorID.c_str()) : std::string{};
+        for (auto& [name, words] : g_custom)   // 2.5q: kinds added in the menu come first
+            for (auto& w : words) if (!w.empty() && ed.find(w) != std::string::npos) return name;
         if (auto it = g_raceGroup.find(ed); it != g_raceGroup.end()) return it->second;
         for (auto& w : kWordGroups) if (Has(ed, w.words)) return w.name;
+        // 2.5r: a race MNC does not list (a follower dog, another mod's wolf...): by the group's name in its race ID, so it
+        // still gets that group's settings instead of a plain guess. Longest names first (werewolf before wolf).
+        static const std::pair<const char*, const char*> kAlias[] = {
+            {"dog", "Canines"}, {"hound", "Canines"}, {"husky", "Canines"}, {"mastiff", "Canines"}, {"mutt", "Canines"},
+            {"sabercat", "SabreCats"}, {"mare", "Horses"}, {"stallion", "Horses"}, {"pony", "Horses"}};
+        std::vector<std::pair<std::string, std::string>> stems;   // stem -> group
+        for (auto& [g, n] : g_groupRaces) {
+            std::string st = Lower(g);
+            if (st.ends_with("wolves")) st = st.substr(0, st.size() - 3) + "f";
+            else if (st.ends_with("es") && !st.ends_with("ces") && !st.ends_with("ges") && !st.ends_with("res")) st.resize(st.size() - 2);
+            else if (st.ends_with("s")) st.pop_back();
+            if (st.size() >= 3) stems.emplace_back(st, g);
+        }
+        for (auto& [w, g] : kAlias) if (g_groupRaces.count(g)) stems.emplace_back(w, g);
+        std::sort(stems.begin(), stems.end(), [](auto& x, auto& y) { return x.first.size() > y.first.size(); });
+        for (auto& [st, g] : stems) if (ed.find(st) != std::string::npos) return g;
         return {};
     }
 }
@@ -214,12 +234,45 @@ namespace Mnc {
         std::lock_guard lk(g_mx);
         g_type[group] = typeKey.empty() ? std::string("auto") : typeKey;
     }
+    std::string GroupName(RE::Actor* a) {
+        std::lock_guard lk(g_mx);
+        Ensure();
+        return g_active ? GroupOf(a) : std::string{};
+    }
     std::vector<Group> Groups() {
         std::lock_guard lk(g_mx);
         Ensure();
         std::vector<Group> out;
-        for (auto& [g, n] : g_groupRaces) out.push_back({g, n, GroupType(g), g_ov.count(g) ? g_ov[g] : Override{}});
+        for (auto& [g, words] : g_custom) {   // 2.5q: added in the menu (first)
+            std::string w;
+            for (auto& x : words) w += (w.empty() ? "" : ", ") + x;
+            out.insert(out.begin(), {g, -1, GroupType(g), g_ov.count(g) ? g_ov[g] : Override{}, w});
+        }
+        for (auto& [g, n] : g_groupRaces) if (!g_custom.count(g)) out.push_back({g, n, GroupType(g), g_ov.count(g) ? g_ov[g] : Override{}, {}});
         return out;
+    }
+    void AddKind(const std::string& name, const std::string& words) {
+        std::vector<std::string> v;
+        std::string cur;
+        for (char c : words + ",") {
+            if (c == ',') {
+                const auto a = cur.find_first_not_of(" \t"), b = cur.find_last_not_of(" \t");
+                if (a != std::string::npos) v.push_back(Lower(cur.substr(a, b - a + 1)));
+                cur.clear();
+            } else cur += c;
+        }
+        std::lock_guard lk(g_mx);
+        if (!name.empty() && !v.empty()) g_custom[name] = v;
+    }
+    void RemoveKind(const std::string& name) {
+        std::lock_guard lk(g_mx);
+        g_custom.erase(name);
+        g_ov.erase(name);
+        g_type.erase(name);
+    }
+    std::string RaceId(RE::Actor* a) {
+        auto* race = a ? a->GetRace() : nullptr;
+        return race && race->formEditorID.c_str() ? Lower(race->formEditorID.c_str()) : std::string{};
     }
     void Ini(CSimpleIniA& ini, bool save) {
         constexpr const char* SO = "CreatureOverride";
@@ -227,6 +280,12 @@ namespace Mnc {
         if (save) {
             for (auto& [g, v] : g_type) ini.SetValue("CreatureType", g.c_str(), v.c_str());
             for (auto& [g, v] : g_ov) ini.SetValue(SO, g.c_str(), v.Save().c_str());
+            ini.Delete("CreatureKinds", nullptr);
+            for (auto& [g, words] : g_custom) {
+                std::string w;
+                for (auto& x : words) w += (w.empty() ? "" : ", ") + x;
+                ini.SetValue("CreatureKinds", g.c_str(), w.c_str());
+            }
             return;
         }
         CSimpleIniA::TNamesDepend kt;
@@ -235,5 +294,17 @@ namespace Mnc {
         CSimpleIniA::TNamesDepend ko;
         ini.GetAllKeys(SO, ko);
         for (auto& k : ko) g_ov[k.pItem] = Override::Load(ini.GetValue(SO, k.pItem, "0"));
+        CSimpleIniA::TNamesDepend kc;
+        ini.GetAllKeys("CreatureKinds", kc);
+        g_custom.clear();
+        for (auto& k : kc) {
+            std::vector<std::string> v;
+            std::string cur, words = std::string(ini.GetValue("CreatureKinds", k.pItem, "")) + ",";
+            for (char c : words) {
+                if (c == ',') { const auto a = cur.find_first_not_of(" \t"), b = cur.find_last_not_of(" \t"); if (a != std::string::npos) v.push_back(Lower(cur.substr(a, b - a + 1))); cur.clear(); }
+                else cur += c;
+            }
+            if (!v.empty()) g_custom[k.pItem] = v;
+        }
     }
 }
