@@ -182,7 +182,7 @@ namespace During {
         if (save) ini.SetLongValue(S, "BulgeShape", g_w.bulgeShape);
         else g_w.bulgeShape = std::clamp(static_cast<int>(ini.GetLongValue(S, "BulgeShape", g_w.bulgeShape)), 0, kShapeCount - 1);
         F("BulgeShaftStrength", g_w.shaftK, 0.0f, 2.0f); F("BulgeHeadStrength", g_w.headK, 0.0f, 2.0f);
-        F("BulgeBuildTime", g_w.buildTime, 1.0f, 60.0f); B("BulgeHoldFull", g_w.holdFull);
+        F("BulgeBuildTime", g_w.buildTime, 1.0f, 60.0f); F("BulgeTravelSpeed", g_w.travelSpeed, 0.1f, 2.0f); B("BulgeHoldFull", g_w.holdFull);
         F("BulgeStomach", g_w.belly, 0.0f, 2.0f); F("BulgeStomachTime", g_w.bellyTime, 1.0f, 180.0f); F("BulgeStomachRandom", g_w.bellyRandom, 0.0f, 1.0f);
         B("BulgeImprint", g_w.imprint); F("BulgeImprintAmount", g_w.imprintAmt, 0.0f, 0.5f); F("BulgeImprintMinutes", g_w.imprintMin, 0.5f, 15.0f);
         for (int i = 1; i < kShapeCount; ++i) {   // movement per shape: 1 travelling, 2 twitching, 4 build-up
@@ -422,11 +422,18 @@ namespace During {
                 const char* shapes[kShapeCount];
                 for (int i = 0; i < kShapeCount; ++i) shapes[i] = ShapeName(i);
                 ch |= ImGuiMCP::Combo("Bulge shape", &g_w.bulgeShape, shapes, kShapeCount);
-                Help("From his schlong: the shape set for his schlong's type below (or for his size), and for creatures with More "
-                     "Nasty Critters the shape for his kind. The others pick one shape for everyone.\n"
-                     "Every shape fills up his belly section by section from the bottom (six sections), the head at the front.");
+                {
+                    std::string h = "From his schlong: the shape set for his schlong's type in \"Shape for each schlong\" below (or for "
+                                    "his size, when his type is set to that or not known)";
+                    if (Mnc::Active()) h += ", and for creatures the shape set for their kind";
+                    h += ". The others pick one shape for everyone.\nEvery shape fills up his belly section by section from the "
+                         "bottom (six sections), the head at the front.";
+                    Help(h.c_str());
+                }
                 if (ImGuiMCP::TreeNode("Shape for each schlong###bytype")) {
                     ImGuiMCP::TextDisabled("Used by \"From his schlong\". Any schlong can have any shape.");
+                    ImGuiMCP::TextDisabled("\"By his size\": that type takes the shape set under \"By his size\" at the bottom, "
+                                           "for how big he is.");
                     const char* opts[kShapeCount];
                     opts[0] = "By his size";
                     for (int i = 1; i < kShapeCount; ++i) opts[i] = ShapeName(i);
@@ -464,7 +471,9 @@ namespace During {
                         if (knotBoxes(kn, v, "ty_" + key)) { g_typeKnots[key] = kn; ch = true; }
                     }
                     ImGuiMCP::SeparatorText("By his size (TNG)");
-                    static const char* szn[3] = {"Smaller, or not known###sz0", "L###sz1", "XL###sz2"};
+                    ImGuiMCP::TextDisabled("For any schlong whose type is set to \"By his size\" above, and for any schlong whose type "
+                                           "could not be found (or without TNG).");
+                    static const char* szn[3] = {"XS / S / M, or size not known###sz0", "L###sz1", "XL###sz2"};
                     for (int i = 0; i < 3; ++i) {
                         int v = g_sizeShape[i] - 1;
                         ImGuiMCP::SetNextItemWidth(w);
@@ -489,7 +498,7 @@ namespace During {
                     ImGuiMCP::TreePop();
                 }
                 if (ImGuiMCP::TreeNode("Movement for each shape###moves")) {
-                    ImGuiMCP::TextDisabled("Travelling: the head runs up and back down by itself, whatever his strokes do.");
+                    ImGuiMCP::TextDisabled("Travelling: the head runs up and back down by itself, at its own pace (speed below).");
                     ImGuiMCP::TextDisabled("Twitching: small, sudden jumps now and then.");
                     ImGuiMCP::TextDisabled("Build-up: grows to the full shape over time instead of at once.");
                     if (ImGuiMCP::BeginTable("##mv", 4)) {
@@ -501,6 +510,12 @@ namespace During {
                             ImGuiMCP::TableNextColumn(); ch |= ImGuiMCP::Checkbox(std::format("Build-up##bu{}", i).c_str(), &g_w.build[i]);
                         }
                         ImGuiMCP::EndTable();
+                    }
+                    {
+                        float ts = g_w.travelSpeed * 100.0f;
+                        if (ImGuiMCP::SliderFloat("Travelling speed", &ts, 10.0f, 200.0f, "%.0f%%")) { g_w.travelSpeed = ts / 100.0f; ch = true; }
+                        Help("100% = once up and back for each of his thrusts (as fast as he is going); 50% = every other "
+                             "thrust; 200% = twice per thrust. When he is still it keeps the pace of his last strokes.");
                     }
                     ch |= ImGuiMCP::SliderFloat("Build-up time", &g_w.buildTime, 1.0f, 60.0f, "%.0f s");
                     Help("How long the build-up takes to reach the full shape. It still moves in and out with his strokes while it grows.");

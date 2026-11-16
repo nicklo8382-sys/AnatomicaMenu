@@ -187,7 +187,8 @@ namespace {
         float imp[kNB]{};                        // 2.5 imprint: the shape as it last was
         float bulgeReach = 0.0f;                 // 2.5: how deep his strokes have been reaching (the head's travel)
         float grow = 0.0f, fillHold = 0.0f;      // 2.5 build-up: how far grown (0-1), how far the held shaft reaches
-        double moveT = 0.0;                      // 2.5 travelling: its clock
+        double moveT = 0.0;                      // 2.5 travelling: its phase (radians)
+        double lastPush = -100.0; float strokeT = 1.2f;   // 2.5g: when the last thrust began, the time between thrusts
         float tw = 0.0f, twWant = 0.0f; double twNext = 0.0;   // 2.5 twitching
         float bellyG = 0.0f, rndB = 0.0f;        // 2.5f stomach: how far risen (0-1), this stroke's variation
         float pulse = 0.0f, bulgeDil = 0.0f;     // thrust pulse; how worked he was while it bulged (lingering)
@@ -418,6 +419,9 @@ namespace {
             s.pulse = std::max(0.0f, s.pulse - dt / 0.22f);   // a fast push adds a quick extra bump that dies away at once
             if (vel > 4.0f) s.pulse = std::max(s.pulse, dw.pulse * std::clamp((vel - 4.0f) / 12.0f, 0.0f, 1.0f));
             if (vel > 2.0f && s.lastVel <= 2.0f) {   // a new push: this stroke's randomness
+                const double gap = now - s.lastPush;
+                if (gap > 0.25 && gap < 4.0) s.strokeT += (static_cast<float>(gap) - s.strokeT) * 0.35f;   // 2.5g: his pace
+                s.lastPush = now;
                 s.rndH = Rand(-1.0f, 1.0f) * dw.bulgeRandom;
                 s.rndA = Rand(-1.0f, 1.0f) * dw.bulgeRandom;
                 s.rndB = Rand(-1.0f, 1.0f);
@@ -438,8 +442,10 @@ namespace {
                     const float range = std::max(10.0f, s.bulgeReach - dw.bulgeStart);
                     float p = test ? 0.55f + 0.45f * std::sin(static_cast<float>(now) * 1.6f)
                                    : std::clamp((tip.depth - dw.bulgeStart) / range, 0.0f, 1.0f);
-                    s.moveT += dt;
-                    if (dw.travel[shape]) p = 0.5f - 0.5f * std::cos(static_cast<float>(s.moveT) * 1.25f);   // up and back, ~5 s
+                    // travelling: up and back at its own pace - 100% = once per thrust (his pace), kept when he is still
+                    s.moveT += dt * 6.2831853 * dw.travelSpeed / std::clamp(s.strokeT, 0.35f, 4.0f);
+                    if (s.moveT > 6283.1853) s.moveT -= 6283.1853;
+                    if (dw.travel[shape]) p = 0.5f - 0.5f * std::cos(static_cast<float>(s.moveT));
                     if (dw.twitch[shape]) {
                         if (now >= s.twNext) { s.twWant = Rand(-0.14f, 0.14f); s.twNext = now + Rand(0.25f, 1.3f); }
                         s.tw += (s.twWant - s.tw) * std::min(1.0f, dt / 0.04f);   // a quick jump...

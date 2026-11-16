@@ -43,6 +43,7 @@ namespace During {
         float shaftK = 1.0f, headK = 1.0f;   // 2.5: strength of the shaft / the head (x Bulge strength)
         bool travel[kShapeCount]{}, twitch[kShapeCount]{}, build[kShapeCount]{};   // 2.5 movement, per shape
         float buildTime = 12.0f;  // 2.5 build-up: seconds to the full shape (1-60)
+        float travelSpeed = 0.3f; // 2.5g travelling: 1 = once up and back per thrust
         bool holdFull = true;     // 2.5 build-up: once full the shaft stays, only the head moves
         float belly = 0.5f, bellyTime = 30.0f, bellyRandom = 0.3f;   // 2.5f stomach: how far the whole lower belly rounds out (0 = off),
                                                                       // seconds to rise to it, how much it varies stroke to stroke
