@@ -25,8 +25,14 @@ namespace During {
     };
     // "From his schlong": creature (More Nasty Critters), his TNG type, his size; knots (if given): that schlong's knots
     int AutoShape(RE::Actor* partner, Knots* knots = nullptr);
+    // 2.5k: the bulge shape + knots controls, drawn on the Integrations page (each schlong type, each size, MNC overrides)
+    bool BulgeChoice(int& shape, Knots& k, const std::string& id, const char* zero);
+    bool RenderTypeBulge(const std::string& typeKey);
+    bool RenderSizeBulge();
     void Ini(CSimpleIniA& ini, bool save);   // [DuringSex] in AnatomicaMenu.ini (loaded / saved with the colour settings)
     float Donut();                           // 0 = off, else the most the ring swells while he is taken (Anatomica Ring)
+    int DonutStyle();                        // 2.5m/n: 0 Ring, 1 Donut, 2 Rosebud, 3 Lips, 4 Pucker (the Anatomica slider of that name)
+    float DonutStyleStrength(int style);     // 2.5n: that shape's own strength
     void SyncPPA();                          // puts PPA's own opening back if a 2.4 test build had turned it to (almost) none
     // the rest of the page, read by the gape engine each tick (0 = off)
     struct Want {
@@ -47,6 +53,8 @@ namespace During {
         bool holdFull = true;     // 2.5 build-up: once full the shaft stays, only the head moves
         float belly = 0.5f, bellyTime = 30.0f, bellyRandom = 0.3f;   // 2.5f stomach: how far the whole lower belly rounds out (0 = off),
                                                                       // seconds to rise to it, how much it varies stroke to stroke
+        bool deep = false;        // 2.5k super deep: some scenes go two sections further (towards his chest)
+        float deepChance = 0.3f;  // the chance a scene does (0-1)
         bool imprint = false;     // 2.5 after sex: a faint copy of the last shape lingers
         float imprintAmt = 0.15f, imprintMin = 3.0f;   // how strong (of the full shape), minutes until it is gone
         float bulgeRandom = 0.3f; // how much each stroke varies (height / size)

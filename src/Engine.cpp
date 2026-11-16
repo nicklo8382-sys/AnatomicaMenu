@@ -160,7 +160,8 @@ namespace {
     // the belly-bulge sliders (2.5: 56): Seg 1-6, Head 1-6, Knot, Flare 1-6, Ridge 1-6, Bead 1-6, Big 1-6, Big Head 1-6,
     // Hook 1-6, Knot 2, Tentacle 1-6
     constexpr int kSeg = 0, kHead = 6, kKnot1 = 12, kFlare = 13, kRidge = 19, kBead = 25, kBig = 31, kBigHead = 37, kHook = 43,
-                  kKnot2 = 49, kTent = 50, kBelly = 56, kNB = 57;
+                  kKnot2 = 49, kTent = 50, kBelly = 56, kDeepSeg = 57, kDeepHead = 59, kDeepFlare = 61,
+                  kDeepBig = 63, kDeepBigHead = 65, kDeepTent = 67, kNB = 69;
     const std::vector<std::string>& BulgeNames() {
         static const std::vector<std::string> n = [] {
             std::vector<std::string> v(kNB);
@@ -168,6 +169,14 @@ namespace {
             fam(kSeg, "Seg"); fam(kHead, "Head"); fam(kFlare, "Flare"); fam(kRidge, "Ridge"); fam(kBead, "Bead"); fam(kBig, "Big");
             fam(kBigHead, "Big Head"); fam(kHook, "Hook"); fam(kTent, "Tentacle");
             v[kKnot1] = "Anatomica Bulge Knot"; v[kKnot2] = "Anatomica Bulge Knot 2"; v[kBelly] = "Anatomica Bulge Belly";
+            for (int i = 0; i < 2; ++i) {   // 2.5k super deep: two more sections and their heads
+                v[kDeepSeg + i] = std::format("Anatomica Bulge Deep Seg {}", i + 1);
+                v[kDeepHead + i] = std::format("Anatomica Bulge Deep Head {}", i + 1);
+                v[kDeepFlare + i] = std::format("Anatomica Bulge Deep Flare {}", i + 1);
+                v[kDeepBig + i] = std::format("Anatomica Bulge Deep Big {}", i + 1);          // 2.5l: Colossal
+                v[kDeepBigHead + i] = std::format("Anatomica Bulge Deep Big Head {}", i + 1);
+                v[kDeepTent + i] = std::format("Anatomica Bulge Deep Tentacle {}", i + 1);    // 2.5l: Long tentacle
+            }
             return v;
         }();
         return n;
@@ -182,6 +191,7 @@ namespace {
         float sz = 1.0f;          // partner size (TNG): how far he opens this round
         RE::FormID szFirst = 0;   // the round's first partner (his size can still be on its way from TNG)
         float donut = 0.0f, donutSent = -1.0f;   // During sex page: the puffy rim while he is taken
+        int donutStyleSent = -1;                 // 2.5m: which slider carries it (Ring / Donut)
         float depth = -100.0f;                   // how deep the schlong in him is (last tick), for the withdraw
         float pout = 0.0f, canal = 0.0f, bulge[kNB]{};   // During sex page: rim, open inside, belly bulge (BulgeNames)
         float imp[kNB]{};                        // 2.5 imprint: the shape as it last was
@@ -191,6 +201,7 @@ namespace {
         double lastPush = -100.0; float strokeT = 1.2f;   // 2.5g: when the last thrust began, the time between thrusts
         float tw = 0.0f, twWant = 0.0f; double twNext = 0.0;   // 2.5 twitching
         float bellyG = 0.0f, rndB = 0.0f;        // 2.5f stomach: how far risen (0-1), this stroke's variation
+        bool deep = false;                       // 2.5k: this scene goes super deep (rolled when a scene's bulge starts)
         float pulse = 0.0f, bulgeDil = 0.0f;     // thrust pulse; how worked he was while it bulged (lingering)
         float hole = 0.0f, holeSent = -100.0f;
         double inLast = -100.0;                  // last time a schlong was found in him by the bones
@@ -363,13 +374,18 @@ namespace {
             const float want = (amt > 0.0f && (partner || atEntrance || s.inScene)) ? amt * Smooth(s.dil) : 0.0f;
             if (want > s.donut) s.donut = std::min(want, s.donut + dt / 1.5f);
             else s.donut = std::max(want, s.donut - dt / 4.0f);
-            if (s.donutSent < 0.0f || std::abs(s.donut - s.donutSent) > 0.01f || (s.donut == 0.0f && s.donutSent > 0.0f)) {
+            const int style = During::DonutStyle();
+            if (s.donutSent < 0.0f || std::abs(s.donut - s.donutSent) > 0.01f || (s.donut == 0.0f && s.donutSent > 0.0f) || style != s.donutStyleSent) {
                 {
                     if (!s.ringSwellCleared) { SetMorph(act, "Anatomica Swell", "AnatomicaDuring", 0.0f); s.ringSwellCleared = true; }   // 2.4 test builds used Swell
-                    SetMorph(act, "Anatomica Ring", "AnatomicaDuring", s.donut);
+                    static const char* kRingSl[5] = {"Anatomica Ring", "Anatomica Donut", "Anatomica Rosebud", "Anatomica Lips", "Anatomica Pucker"};
+                    for (int i = 0; i < 5; ++i)   // 2.5n: the chosen ring shape (its own strength); the others off
+                        if (i == style || i == s.donutStyleSent || s.donutStyleSent < 0)
+                            SetMorph(act, kRingSl[i], "AnatomicaDuring", i == style ? s.donut * During::DonutStyleStrength(i) : 0.0f);
                     update = true;
                 }
                 s.donutSent = s.donut;
+                s.donutStyleSent = style;
             }
         }
         if (std::abs(s.dil - s.dilSent) > 0.02f || (s.dil == 0.0f && s.dilSent != 0.0f)) {   // kept with the save
@@ -458,6 +474,7 @@ namespace {
                         s.grow = std::min(1.0f, s.grow + dt / std::max(1.0f, dw.buildTime));
                         A *= 0.08f + 0.92f * Smooth(s.grow);
                     }
+                    if (now - s.bulgeLast > 30.0) s.deep = dw.deep && Rand(0.0f, 1.0f) < dw.deepChance;   // a new scene: super deep?
                     int seg = kSeg, head = kHead, knots = 0;
                     float segK = 1.0f, headK = 0.6f, wob = 0.0f;
                     bool blend = true;   // shaft and head mixed as one (the head keeps its size as it slides)
@@ -476,24 +493,34 @@ namespace {
                     }
                     segK *= dw.shaftK;
                     headK *= dw.headK;
-                    float filled = std::clamp(p * 6.0f + s.rndH * 0.6f, 0.0f, 6.0f);
-                    if (wob > 0.0f) filled = std::clamp(filled + wob * std::sin(static_cast<float>(now) * 2.3f + static_cast<float>(act->GetFormID() % 7)), 0.0f, 6.0f);
+                    // 2.5k super deep: two more sections towards his chest (shapes built on the plain shaft, round or flared head)
+                    // (2.5l: Colossal and Long tentacle too, on their own longer paths)
+                    const bool deepOk = (test ? dw.deep : s.deep) &&
+                                        ((seg == kSeg && (head == kHead || head == kFlare)) || seg == kBig || seg == kTent);
+                    const int NS = deepOk ? 8 : 6;
+                    const int deepSeg = seg == kBig ? kDeepBig : seg == kTent ? kDeepTent : kDeepSeg;
+                    const int deepHead = head == kFlare ? kDeepFlare : head == kBigHead ? kDeepBigHead : kDeepHead;
+                    auto segAt = [&](int k) { return k < 6 ? seg + k : deepSeg + (k - 6); };
+                    auto headAt = [&](int h) { return h < 6 ? head + h : deepHead + (h - 6); };
+                    const float NSf = static_cast<float>(NS);
+                    float filled = std::clamp(p * NSf + s.rndH * 0.6f, 0.0f, NSf);
+                    if (wob > 0.0f) filled = std::clamp(filled + wob * std::sin(static_cast<float>(now) * 2.3f + static_cast<float>(act->GetFormID() % 7)), 0.0f, NSf);
                     // build-up, hold when full: once grown, the shaft stays as far as it got and only the head moves
                     const bool hold = dw.build[shape] && dw.holdFull && s.grow >= 1.0f && !test;
                     if (hold) s.fillHold = std::max(s.fillHold, filled); else s.fillHold = 0.0f;
                     if (A > 0.0f && filled > 0.0f) {
                         const float hi = filled - 0.6f;   // head k sits 0.6 of a section back from the end of section k + 1
                         int h0 = 0; float fr = 0.0f;
-                        if (hi > 0.0f) { h0 = std::min(4, static_cast<int>(hi)); fr = std::clamp(hi - static_cast<float>(h0), 0.0f, 1.0f); }
+                        if (hi > 0.0f) { h0 = std::min(NS - 2, static_cast<int>(hi)); fr = std::clamp(hi - static_cast<float>(h0), 0.0f, 1.0f); }
                         if (seg >= 0) {
                             if (hold || !blend || head < 0) {
                                 const float f = hold ? std::max(filled, s.fillHold) : filled;
-                                for (int k = 0; k < 6; ++k) bw[seg + k] = A * segK * std::clamp(f - static_cast<float>(k), 0.0f, 1.0f);
+                                for (int k = 0; k < NS; ++k) bw[segAt(k)] = A * segK * std::clamp(f - static_cast<float>(k), 0.0f, 1.0f);
                             } else if (hi <= 0.0f) bw[seg] = A * segK * filled;
                             else {   // the mix each head was built against: sections before it full, its own at 0.6
-                                for (int k = 0; k < h0; ++k) bw[seg + k] = A * segK;
-                                bw[seg + h0] = A * segK * (0.6f + 0.4f * fr);
-                                if (h0 + 1 < 6) bw[seg + h0 + 1] = A * segK * 0.6f * fr;
+                                for (int k = 0; k < h0; ++k) bw[segAt(k)] = A * segK;
+                                bw[segAt(h0)] = A * segK * (0.6f + 0.4f * fr);
+                                if (h0 + 1 < NS) bw[segAt(h0 + 1)] = A * segK * 0.6f * fr;
                             }
                         }
                         if (head >= 0) {
@@ -501,13 +528,13 @@ namespace {
                             else {
                                 // 2.5c hooked: the last position carries the hook - bring it in only over the end of the stroke
                                 const float fh = (shape == During::kHooked && h0 == 4) ? fr * fr * fr : fr;
-                                bw[head + h0] = A * headK * (1.0f - fh);
-                                bw[head + h0 + 1] = A * headK * fh;
+                                bw[headAt(h0)] = A * headK * (1.0f - fh);
+                                bw[headAt(h0 + 1)] = A * headK * fh;
                             }
                         }
                         // knots: from the shape, or ticked for his schlong (2.5d); each its own strength
-                        if (knots >= 1 || (kn.mask & 1)) bw[kKnot1] = A * kn.k1 * std::clamp((filled - 1.2f) / 0.8f, 0.0f, 1.0f);   // once it is in
-                        if (knots >= 2 || (kn.mask & 2)) bw[kKnot2] = A * kn.k2 * std::clamp((filled - 3.3f) / 0.8f, 0.0f, 1.0f);
+                        if (knots >= 1 || (kn.mask & 1)) bw[kKnot1] = A * kn.k1 * std::clamp((filled - 1.8f) / 0.8f, 0.0f, 1.0f);   // once it is in (2.5j: knot at 2.0)
+                        if (knots >= 2 || (kn.mask & 2)) bw[kKnot2] = A * kn.k2 * std::clamp((filled - 3.6f) / 0.8f, 0.0f, 1.0f);
                         // 2.5f stomach: the whole lower belly rises over the scene (its own time), varying stroke to stroke
                         if (dw.belly > 0.0f) {
                             s.bellyG = std::min(1.0f, s.bellyG + dt / std::max(1.0f, dw.bellyTime));

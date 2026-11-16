@@ -31,6 +31,8 @@ namespace {
     std::string g_note;
     std::atomic<bool> g_donutOn{false};
     std::atomic<float> g_donutAmt{0.5f};
+    std::atomic<int> g_donutStyle{0};   // 2.5m/n: During::kRingSliders (Ring, Donut, Rosebud, Lips, Pucker)
+    float g_styleAmt[5] = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f};   // 2.5n: each ring shape's own strength (x How puffy)
     std::mutex g_wmx;
     bool g_canalOn = true, g_bulgeOn = false;
     During::Want MakeW() {     // 2.5: the movement defaults per shape
@@ -53,6 +55,12 @@ namespace {
         if (key == "flared") return kHorse;
         if (key == "ridged" || key == "barbed") return kRidged;
         if (key == "tentacle") return kBeaded;
+        if (key == "corkscrew") return kHooked;
+        if (key == "colossal") return kColossal;
+        if (key == "segmented") return kSegmented;
+        if (key == "pizzle") return kBeaded;
+        if (key == "elemental") return kRidged;
+        if (key == "tapered" || key == "cold" || key == "piston" || key == "twin") return kShaft;
         return kAuto;
     }
     int TypeShape(const std::string& key) {
@@ -164,9 +172,14 @@ namespace During {
         if (save) {
             ini.SetBoolValue(S, "Donut", on);
             ini.SetDoubleValue(S, "DonutAmount", amt);
+            ini.SetLongValue(S, "DonutStyle", g_donutStyle);
+            for (int i = 0; i < 5; ++i) ini.SetDoubleValue(S, std::format("DonutStyleStrength{}", i).c_str(), g_styleAmt[i]);
         } else {
             g_donutOn = ini.GetBoolValue(S, "Donut", on);
             g_donutAmt = std::clamp(static_cast<float>(ini.GetDoubleValue(S, "DonutAmount", amt)), 0.0f, 2.0f);
+            g_donutStyle = std::clamp(static_cast<int>(ini.GetLongValue(S, "DonutStyle", 0)), 0, 4);
+            for (int i = 0; i < 5; ++i)
+                g_styleAmt[i] = std::clamp(static_cast<float>(ini.GetDoubleValue(S, std::format("DonutStyleStrength{}", i).c_str(), g_styleAmt[i])), 0.0f, 2.0f);
         }
         std::lock_guard lk(g_wmx);
         auto B = [&](const char* k, bool& v) { if (save) ini.SetBoolValue(S, k, v); else v = ini.GetBoolValue(S, k, v); };
@@ -184,6 +197,7 @@ namespace During {
         F("BulgeShaftStrength", g_w.shaftK, 0.0f, 2.0f); F("BulgeHeadStrength", g_w.headK, 0.0f, 2.0f);
         F("BulgeBuildTime", g_w.buildTime, 1.0f, 60.0f); F("BulgeTravelSpeed", g_w.travelSpeed, 0.1f, 2.0f); B("BulgeHoldFull", g_w.holdFull);
         F("BulgeStomach", g_w.belly, 0.0f, 2.0f); F("BulgeStomachTime", g_w.bellyTime, 1.0f, 180.0f); F("BulgeStomachRandom", g_w.bellyRandom, 0.0f, 1.0f);
+        B("BulgeSuperDeep", g_w.deep); F("BulgeSuperDeepChance", g_w.deepChance, 0.0f, 1.0f);
         B("BulgeImprint", g_w.imprint); F("BulgeImprintAmount", g_w.imprintAmt, 0.0f, 0.5f); F("BulgeImprintMinutes", g_w.imprintMin, 0.5f, 15.0f);
         for (int i = 1; i < kShapeCount; ++i) {   // movement per shape: 1 travelling, 2 twitching, 4 build-up
             const std::string k = std::format("BulgeMove{}", i);
@@ -236,6 +250,52 @@ namespace During {
                                              "Hooked", "Double knot", "Long tentacle"};
         return (shape >= 0 && shape < kShapeCount) ? n[shape] : "";
     }
+    // 2.5k: the bulge choice for one schlong (Integrations page): shape + knots; zero names what 0 means
+    bool BulgeChoice(int& shape, Knots& k, const std::string& id, const char* zero) {
+        const char* opts[kShapeCount];
+        opts[0] = zero;
+        for (int i = 1; i < kShapeCount; ++i) opts[i] = ShapeName(i);
+        bool c = false;
+        ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 13.0f);
+        c |= ImGuiMCP::Combo(std::format("Bulge shape##bs_{}", id).c_str(), &shape, opts, kShapeCount);
+        bool k1 = k.mask & 1, k2 = k.mask & 2, kc = false;
+        ImGuiMCP::SameLine(); kc |= ImGuiMCP::Checkbox(std::format("Knot 1##k1_{}", id).c_str(), &k1);
+        ImGuiMCP::SameLine(); kc |= ImGuiMCP::Checkbox(std::format("Knot 2##k2_{}", id).c_str(), &k2);
+        if (kc) { k.mask = (k1 ? 1 : 0) | (k2 ? 2 : 0); c = true; }
+        const bool show1 = k1 || shape == kKnot || shape == kDoubleKnot, show2 = k2 || shape == kDoubleKnot;
+        if (show1) {
+            float v = k.k1 * 100.0f;
+            ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 10.0f);
+            if (ImGuiMCP::SliderFloat(std::format("Knot 1 strength##s1_{}", id).c_str(), &v, 0.0f, 200.0f, "%.0f%%")) { k.k1 = v / 100.0f; c = true; }
+        }
+        if (show2) {
+            float v = k.k2 * 100.0f;
+            if (show1) ImGuiMCP::SameLine();
+            ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 10.0f);
+            if (ImGuiMCP::SliderFloat(std::format("Knot 2 strength##s2_{}", id).c_str(), &v, 0.0f, 200.0f, "%.0f%%")) { k.k2 = v / 100.0f; c = true; }
+        }
+        return c;
+    }
+    bool RenderTypeBulge(const std::string& key) {
+        std::lock_guard lk(g_wmx);
+        int v = TypeShape(key);
+        Knots kn = g_typeKnots.count(key) ? g_typeKnots[key] : Knots{};
+        if (!BulgeChoice(v, kn, "ty_" + key, "By his size")) return false;
+        g_typeShape[key] = v;
+        g_typeKnots[key] = kn;
+        return true;
+    }
+    bool RenderSizeBulge() {
+        std::lock_guard lk(g_wmx);
+        bool ch = false;
+        static const char* szn[3] = {"XS / S / M, or size not known", "L", "XL"};
+        for (int i = 0; i < 3; ++i) {
+            ImGuiMCP::TextUnformatted(szn[i]);
+            int v = g_sizeShape[i];
+            if (BulgeChoice(v, g_sizeKnots[i], std::format("sz{}", i), "A bump at the tip")) { g_sizeShape[i] = std::max(1, v); ch = true; }
+        }
+        return ch;
+    }
     std::string Knots::Save() const { return std::format("{}|{:.2f}|{:.2f}", mask, k1, k2); }
     Knots Knots::Load(const char* v) {
         Knots k;
@@ -251,11 +311,9 @@ namespace During {
     int AutoShape(RE::Actor* p, Knots* knots) {
         if (knots) *knots = {};
         if (!p) return kTip;
-        if (Size::IsCreatureActor(p) && Mnc::Active()) {
-            Knots kn;
-            const int m = Mnc::ShapeFor(p, &kn);
-            if (m > 0) { if (knots) *knots = kn; return m; }
-        }
+        Mnc::Override ov;   // 2.5k: a More Nasty Critters group's own settings win
+        const bool hasOv = Size::IsCreatureActor(p) && Mnc::Active() && Mnc::OverrideFor(p, &ov);
+        if (hasOv && ov.shape > 0) { if (knots) *knots = ov.knots; return ov.shape; }
         const std::string key = Size::ShapeKey(Size::Shape(p));
         int t = 0, sz[3];
         Knots tk, szk[3];
@@ -270,6 +328,7 @@ namespace During {
         }
         const int cat = Size::Cat(p);
         const int si = cat == 4 ? 2 : cat >= 3 ? 1 : 0;
+        if (hasOv) tk = ov.knots;   // its own knots on its type's shape
         if (knots) {
             if (t > 0) *knots = tk;
             else {   // his type goes by size: the size row's knots, plus any ticked for his type (its own strength wins)
@@ -298,6 +357,8 @@ namespace During {
         return true;
     }
     float Donut() { return g_donutOn ? g_donutAmt.load() : 0.0f; }
+    int DonutStyle() { return g_donutStyle.load(); }
+    float DonutStyleStrength(int i) { return (i >= 0 && i < 5) ? g_styleAmt[i] : 1.0f; }
     void SyncPPA() {
         ReadToml();
         // PPA opens and places the hole. Earlier 2.4 test builds turned PPA's opening down to almost none - put the defaults back.
@@ -409,6 +470,16 @@ namespace During {
                     if (ImGuiMCP::SliderFloat("Head strength", &hk, 0.0f, 200.0f, "%.0f%%")) { g_w.headK = hk / 100.0f; ch = true; }
                     Help("Only the head at the front (round, flared, colossal or hooked), on top of Bulge strength.");
                 }
+                ch |= ImGuiMCP::Checkbox("Super deep", &g_w.deep);
+                Help("Some scenes go further: two more sections up his belly, almost to his chest, with the head at the end. "
+                     "Rolled at the start of each scene. Works with a bump at the tip, the whole shaft, horse, knot, double "
+                     "knot, the wandering tentacle, Colossal and Long tentacle (Ridged, Segmented and Hooked keep their length).");
+                if (g_w.deep) {
+                    float dc = g_w.deepChance * 100.0f;
+                    ImGuiMCP::Indent();
+                    if (ImGuiMCP::SliderFloat("Chance per scene", &dc, 0.0f, 100.0f, "%.0f%%")) { g_w.deepChance = dc / 100.0f; ch = true; }
+                    ImGuiMCP::Unindent();
+                }
                 if (ImGuiMCP::TreeNode("Stomach###stomach")) {
                     float b = g_w.belly * 100.0f, r = g_w.bellyRandom * 100.0f;
                     if (ImGuiMCP::SliderFloat("Stomach strength", &b, 0.0f, 200.0f, "%.0f%%")) { g_w.belly = b / 100.0f; ch = true; }
@@ -430,73 +501,8 @@ namespace During {
                          "bottom (six sections), the head at the front.";
                     Help(h.c_str());
                 }
-                if (ImGuiMCP::TreeNode("Shape for each schlong###bytype")) {
-                    ImGuiMCP::TextDisabled("Used by \"From his schlong\". Any schlong can have any shape.");
-                    ImGuiMCP::TextDisabled("\"By his size\": that type takes the shape set under \"By his size\" at the bottom, "
-                                           "for how big he is.");
-                    const char* opts[kShapeCount];
-                    opts[0] = "By his size";
-                    for (int i = 1; i < kShapeCount; ++i) opts[i] = ShapeName(i);
-                    // knot boxes after a row: 1 knot 1, 2 knot 2
-                    // knot boxes after a row, and the strength of each knot it has (ticked, or its shape's own knots)
-                    auto knotBoxes = [&](Knots& k, int shape, const std::string& id) {
-                        bool k1 = k.mask & 1, k2 = k.mask & 2, c = false;
-                        ImGuiMCP::SameLine(); c |= ImGuiMCP::Checkbox(std::format("Knot 1##k1_{}", id).c_str(), &k1);
-                        ImGuiMCP::SameLine(); c |= ImGuiMCP::Checkbox(std::format("Knot 2##k2_{}", id).c_str(), &k2);
-                        if (c) k.mask = (k1 ? 1 : 0) | (k2 ? 2 : 0);
-                        const bool show1 = k1 || shape == kKnot || shape == kDoubleKnot, show2 = k2 || shape == kDoubleKnot;
-                        if (show1 || show2) ImGuiMCP::Indent();
-                        if (show1) {
-                            float v = k.k1 * 100.0f;
-                            ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 10.0f);
-                            if (ImGuiMCP::SliderFloat(std::format("Knot 1 strength##s1_{}", id).c_str(), &v, 0.0f, 200.0f, "%.0f%%")) { k.k1 = v / 100.0f; c = true; }
-                        }
-                        if (show2) {
-                            float v = k.k2 * 100.0f;
-                            if (show1) ImGuiMCP::SameLine();
-                            ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 10.0f);
-                            if (ImGuiMCP::SliderFloat(std::format("Knot 2 strength##s2_{}", id).c_str(), &v, 0.0f, 200.0f, "%.0f%%")) { k.k2 = v / 100.0f; c = true; }
-                        }
-                        if (show1 || show2) ImGuiMCP::Unindent();
-                        return c;
-                    };
-                    const float w = ImGuiMCP::GetFontSize() * 13.0f;
-                    ImGuiMCP::TextDisabled("Knot 1 / Knot 2: add the low / higher knot to that schlong's shape (e.g. a horse with a knot), each with "
-                                           "its own strength (also for the Knot / Double knot shapes' knots).");
-                    for (auto& [key, name] : Size::ShapeList()) {
-                        int v = TypeShape(key);
-                        ImGuiMCP::SetNextItemWidth(w);
-                        if (ImGuiMCP::Combo(std::format("{}###ty_{}", name, key).c_str(), &v, opts, kShapeCount)) { g_typeShape[key] = v; ch = true; }
-                        Knots kn = g_typeKnots.count(key) ? g_typeKnots[key] : Knots{};
-                        if (knotBoxes(kn, v, "ty_" + key)) { g_typeKnots[key] = kn; ch = true; }
-                    }
-                    ImGuiMCP::SeparatorText("By his size (TNG)");
-                    ImGuiMCP::TextDisabled("For any schlong whose type is set to \"By his size\" above, and for any schlong whose type "
-                                           "could not be found (or without TNG).");
-                    static const char* szn[3] = {"XS / S / M, or size not known###sz0", "L###sz1", "XL###sz2"};
-                    for (int i = 0; i < 3; ++i) {
-                        int v = g_sizeShape[i] - 1;
-                        ImGuiMCP::SetNextItemWidth(w);
-                        if (ImGuiMCP::Combo(szn[i], &v, opts + 1, kShapeCount - 1)) { g_sizeShape[i] = v + 1; ch = true; }
-                        ch |= knotBoxes(g_sizeKnots[i], g_sizeShape[i], std::format("sz{}", i));
-                    }
-                    if (Mnc::Active()) {
-                        ImGuiMCP::SeparatorText("Creatures (More Nasty Critters)");
-                        ImGuiMCP::TextDisabled("Werewolves and dragons follow their MNC style first (dog -> knot, horse -> horse, "
-                                               "dragon -> ridged).");
-                        opts[0] = "Automatic";
-                        for (auto& gr : Mnc::Groups()) {
-                            int v = gr.shape;
-                            const std::string label = gr.races ? std::format("{} ({} races)###mnc_{}", gr.name, gr.races, gr.name)
-                                                               : std::format("{} (by name)###mnc_{}", gr.name, gr.name);
-                            ImGuiMCP::SetNextItemWidth(w);
-                            if (ImGuiMCP::Combo(label.c_str(), &v, opts, kShapeCount)) { Mnc::SetShape(gr.name, v); ch = true; }
-                            Knots kn = gr.knots;
-                            if (knotBoxes(kn, v, "mnc_" + gr.name)) { Mnc::SetKnots(gr.name, kn); ch = true; }
-                        }
-                    }
-                    ImGuiMCP::TreePop();
-                }
+                ImGuiMCP::TextDisabled("The shape (and knots) for each schlong type and size are set on the Integrations page, "
+                                       "under Partner size and shape.");
                 if (ImGuiMCP::TreeNode("Movement for each shape###moves")) {
                     ImGuiMCP::TextDisabled("Travelling: the head runs up and back down by itself, at its own pace (speed below).");
                     ImGuiMCP::TextDisabled("Twitching: small, sudden jumps now and then.");
@@ -580,6 +586,18 @@ namespace During {
                  "settles a few seconds after the schlong leaves him (the after-sex swelling, After sex page, carries on from there). "
                  "Uses the Anatomica Ring slider: rebuild the body with \"Build Morphs\" in BodySlide.");
             if (on) {
+                int st = g_donutStyle;
+                static const char* styles[] = {"Puffy ring (a raised band)", "Donut (a full, round ring)", "Rosebud (the inside rolls out)",
+                                               "Pout lips (fuller above and below)", "Pucker (drawn in, deep folds)"};
+                if (ImGuiMCP::Combo("Ring shape", &st, styles, 5)) { g_donutStyle = st; ch = true; }
+                Help("Puffy ring: a raised band round the hole (Anatomica Ring). Donut: the rim rolls up into a fat, round ring "
+                     "round an open hole (Anatomica Donut). Rosebud: the inner wall rolls out past the rim in a smooth, rounded bud "
+                     "(Anatomica Rosebud). Pout lips: the rim swells into two soft lips above and below the hole (Anatomica Lips). "
+                     "Pucker: the rim draws in round the hole in deep folds (Anatomica Pucker).");
+                float sp = g_styleAmt[st] * 100.0f;
+                if (ImGuiMCP::SliderFloat("This shape's strength", &sp, 0.0f, 200.0f, "%.0f%%")) { g_styleAmt[st] = sp / 100.0f; ch = true; }
+                Help("Each ring shape keeps its own strength (on top of \"How puffy, at most\"), so switching shapes keeps how "
+                     "strong you set each one.");
                 float pct = amt * 100.0f;
                 if (ImGuiMCP::SliderFloat("How puffy, at most", &pct, 0.0f, 200.0f, "%.0f%%")) { amt = pct / 100.0f; ch = true; }
             }

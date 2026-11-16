@@ -1,6 +1,7 @@
 #include "Size.h"
 #include "SKSEMenuFramework.h"
 #include "Mnc.h"
+#include "During.h"
 
 #include <algorithm>
 #include <chrono>
@@ -451,6 +452,12 @@ namespace Size {
     K ShapeFor(RE::Actor* p) {
         K k;
         if (!g.on || !g.shape) return k;
+        if (Mnc::Override ov; IsCreature(p) && Mnc::Active() && Mnc::OverrideFor(p, &ov)) {   // 2.5k: its group's own settings
+            if (g.gape) { k.open = ScaleS(ov.open); k.build = ScaleS(ov.build); }
+            if (g.loose) k.loose = ScaleS(ov.loose);
+            if (g.tender) k.tender = ScaleS(ov.tender);
+            return k;
+        }
         const int s = Shape(p);
         std::lock_guard lk(g_mx);
         if (s <= 0 || s >= static_cast<int>(g_defs.size())) return k;
@@ -536,11 +543,19 @@ namespace Size {
             }
             Help("Your own choice for this man (or yourself) - a unique custom build, a follower... It wins over everything else "
                  "and is kept in AnatomicaMenu.ini.");
+            // ---- 2.5k: the belly bulge by his size (for types set to "By his size", and schlongs whose type isn't found)
+            if (ImGuiMCP::TreeNode("Belly bulge by his size###bulgesize")) {
+                ImGuiMCP::TextDisabled("For any schlong type set to \"By his size\" below, any schlong whose type could not be "
+                                       "found, and everyone without TNG.");
+                ch |= During::RenderSizeBulge();
+                ImGuiMCP::TreePop();
+            }
             // ---- the shapes themselves
             if (ImGuiMCP::TreeNode("Shapes (change them, or add your own)")) {
                 std::lock_guard lk(g_mx);
                 ImGuiMCP::TextDisabled("x1.00 = no change. Open: how far he gapes. Build: time to open up (lower = faster). "
-                                       "Loose: lasting looseness. Sore: soreness and redness.");
+                                       "Loose: lasting looseness. Sore: soreness and redness. Bulge shape: his belly bulge during "
+                                       "sex (with \"From his schlong\"); Knot 1 / 2 add knots to it.");
                 if (!g_fileList.empty()) {
                     std::string fl;
                     for (auto& f : g_fileList) fl += (fl.empty() ? "" : ", ") + f;
@@ -561,6 +576,7 @@ namespace Size {
                         e |= ImGuiMCP::SliderFloat("Build", &d.build, 0.5f, 2.0f, "x%.2f");
                         e |= ImGuiMCP::SliderFloat("Loose", &d.loose, 0.5f, 2.0f, "x%.2f");
                         e |= ImGuiMCP::SliderFloat("Sore", &d.tender, 0.5f, 2.0f, "x%.2f");
+                        ch |= During::RenderTypeBulge(d.key);   // 2.5k: its belly bulge (During sex) and knots
                         if (!d.desc.empty()) ImGuiMCP::TextDisabled("%s", d.desc.c_str());
                         if (d.source == "menu" && ImGuiMCP::SmallButton("Remove this shape")) remove = static_cast<int>(i);
                         if (d.source == "menu") Help("Back to how the built-in shape or a compatibility file defines it (if one does).");
@@ -629,6 +645,7 @@ namespace Size {
                     e |= ImGuiMCP::SliderFloat("Build", &d.build, 0.5f, 2.0f, "x%.2f");
                     e |= ImGuiMCP::SliderFloat("Loose", &d.loose, 0.5f, 2.0f, "x%.2f");
                     e |= ImGuiMCP::SliderFloat("Sore", &d.tender, 0.5f, 2.0f, "x%.2f");
+                    ch |= During::RenderTypeBulge(d.key);   // 2.5k: its belly bulge (During sex) and knots
                     if (!d.desc.empty()) ImGuiMCP::TextDisabled("%s", d.desc.c_str());
                     if (e) { d.source = "menu"; ch = true; }
                     ImGuiMCP::TreePop();
@@ -637,9 +654,11 @@ namespace Size {
             }
             ImGuiMCP::TreePop();
         }
-        if (ImGuiMCP::TreeNode("Type for each kind of creature###crgroups")) {
-            ImGuiMCP::TextDisabled("Which type each MNC group counts as (how far it opens him, loosens him, how sore). Werewolves and "
-                                   "dragons follow the MNC style they wear first (dog -> knotted, horse -> flared, dragon -> ridged).");
+        if (ImGuiMCP::TreeNode("Each kind of creature###crgroups")) {
+            ImGuiMCP::TextDisabled("Which type each MNC group counts as: how far it opens him, loosens him, how sore, and its belly "
+                                   "bulge and knots (set on each type). Werewolves and dragons follow the MNC style they wear first "
+                                   "(dog -> knotted, horse -> flared, dragon -> ridged). \"Own settings\" gives a group its own "
+                                   "values and bulge instead of its type's.");
             const auto types = CreatureTypeList();
             std::vector<std::string> names{"Automatic (by its name)"};
             for (auto& t : types) names.push_back(t.second);
@@ -656,6 +675,23 @@ namespace Size {
                     { std::lock_guard lk(g_mx); g_shapes.clear(); }
                     ch = true;
                 }
+                // 2.5k: its own settings instead of its type's
+                Mnc::Override ov = gr.ov;
+                bool oc = false;
+                ImGuiMCP::SameLine();
+                oc |= ImGuiMCP::Checkbox(std::format("Own settings##ovon_{}", gr.name).c_str(), &ov.on);
+                if (ov.on) {
+                    ImGuiMCP::Indent();
+                    ImGuiMCP::PushID(gr.name.c_str());
+                    oc |= ImGuiMCP::SliderFloat("Open", &ov.open, 0.5f, 2.0f, "x%.2f");
+                    oc |= ImGuiMCP::SliderFloat("Build", &ov.build, 0.5f, 2.0f, "x%.2f");
+                    oc |= ImGuiMCP::SliderFloat("Loose", &ov.loose, 0.5f, 2.0f, "x%.2f");
+                    oc |= ImGuiMCP::SliderFloat("Sore", &ov.tender, 0.5f, 2.0f, "x%.2f");
+                    oc |= During::BulgeChoice(ov.shape, ov.knots, "ov_" + gr.name, "Its type's shape");
+                    ImGuiMCP::PopID();
+                    ImGuiMCP::Unindent();
+                }
+                if (oc) { Mnc::SetOverride(gr.name, ov); ch = true; }
             }
             ImGuiMCP::TreePop();
         }
