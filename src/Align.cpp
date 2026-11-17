@@ -86,6 +86,9 @@ namespace {
         int lastFac = -1;                // logged: which action factions he was in
         bool morph = false;              // his schlong is switched off in PPA
         std::string scene;               // his OStim scene ("" = not known)
+        int vagScene = -1;               // 2.5y: the scene, as made, has him as the target of vaginal sex (OStim turns it into
+                                         // anal for a man, so its factions don't say so): -1 not known, 0 no, 1 yes
+        std::string vagSceneOf;          // the scene that answer is for
         double asked = -10.0;
     };
     std::unordered_map<RE::FormID, St> g_st;
@@ -93,11 +96,50 @@ namespace {
     std::string g_lastWho;
 
     // his OStim scene, asked in the background: OActor.GetThreadID -> OThread.GetScene
-    struct SceneCb : RE::BSScript::IStackCallbackFunctor {
+    // his OStim scene, asked in the background: OActor.GetThreadID -> OThread.GetScene, OThread.GetActorPosition ->
+    // OMetadata.FindActionForTarget(scene, position, "vaginalsex"): was the animation made for a vagina where he is?
+    struct VagCb : RE::BSScript::IStackCallbackFunctor {
         RE::FormID id = 0;
+        std::string scene;
         void operator()(RE::BSScript::Variable r) override {
             std::lock_guard lk(g_mx);
-            if (auto it = g_st.find(id); it != g_st.end()) it->second.scene = r.IsString() ? std::string(r.GetString()) : std::string();
+            if (auto it = g_st.find(id); it != g_st.end()) { it->second.vagScene = (r.IsInt() && r.GetSInt() >= 0) ? 1 : 0; it->second.vagSceneOf = scene; }
+        }
+        void SetObject(const RE::BSTSmartPointer<RE::BSScript::Object>&) override {}
+    };
+    struct PosCb : RE::BSScript::IStackCallbackFunctor {
+        RE::FormID id = 0;
+        std::string scene;
+        void operator()(RE::BSScript::Variable r) override {
+            const int pos = r.IsInt() ? r.GetSInt() : -1;
+            if (pos < 0 || scene.empty()) return;
+            auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+            if (!vm) return;
+            auto* cb = new VagCb;
+            cb->id = id; cb->scene = scene;
+            RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> p(cb);
+            vm->DispatchStaticCall("OMetadata", "FindActionForTarget", RE::MakeFunctionArguments(RE::BSFixedString(scene), static_cast<std::int32_t>(pos), RE::BSFixedString("vaginalsex")), p);
+        }
+        void SetObject(const RE::BSTSmartPointer<RE::BSScript::Object>&) override {}
+    };
+    struct SceneCb : RE::BSScript::IStackCallbackFunctor {
+        RE::FormID id = 0;
+        int tid = -1;
+        void operator()(RE::BSScript::Variable r) override {
+            const std::string sc = r.IsString() ? std::string(r.GetString()) : std::string();
+            bool ask = false;
+            {
+                std::lock_guard lk(g_mx);
+                if (auto it = g_st.find(id); it != g_st.end()) { it->second.scene = sc; ask = !sc.empty() && it->second.vagSceneOf != sc; }
+            }
+            if (!ask) return;
+            auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+            auto* a = RE::TESForm::LookupByID<RE::Actor>(id);
+            if (!vm || !a) return;
+            auto* cb = new PosCb;
+            cb->id = id; cb->scene = sc;
+            RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> p(cb);
+            vm->DispatchStaticCall("OThread", "GetActorPosition", RE::MakeFunctionArguments(static_cast<std::int32_t>(tid), static_cast<RE::Actor*>(a)), p);
         }
         void SetObject(const RE::BSTSmartPointer<RE::BSScript::Object>&) override {}
     };
@@ -109,7 +151,7 @@ namespace {
             auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
             if (!vm) return;
             auto* cb = new SceneCb;
-            cb->id = id;
+            cb->id = id; cb->tid = tid;
             RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> p(cb);
             vm->DispatchStaticCall("OThread", "GetScene", RE::MakeFunctionArguments(static_cast<std::int32_t>(tid)), p);
         }
@@ -175,19 +217,22 @@ namespace Align {
             }
 
             // 1. the move: a man / futa as the target of vaginal sex
-            const bool vag = In(a, g_vagT) || In(a, g_vagTailT);
+            // OStim's own factions, or (2.5y) the scene as made: a man put where a woman would be taken vaginally - OStim
+            // then calls it anal, but the animation still aims at where a vagina would be
+            const bool vag = In(a, g_vagT) || In(a, g_vagTailT) || (taken && s.vagScene == 1 && s.vagSceneOf == s.scene && !s.scene.empty());
             const bool futaOk = !man && schlong && (g.futa == 1 || (g.futa == 0 && FutasUseAnus()));
             RE::NiPoint3 want{};
             if (g.move && vag && (man || futaOk)) {
                 if (!Gap(a, man, g.strength, want)) want = {};
             }
             {   // 2.5x: what OStim says he is doing, and the move, in the log
-                const int fac = (vag ? 1 : 0) | (taken ? 2 : 0) | (InAny(a, g_usedF) ? 4 : 0) | (schlong ? 8 : 0);
+                const int fac = (vag ? 1 : 0) | (taken ? 2 : 0) | (InAny(a, g_usedF) ? 4 : 0) | (schlong ? 8 : 0) | (s.vagScene == 1 ? 16 : 0);
                 const char* nm = a->GetDisplayFullName();
                 if (fac != s.lastFac) {
                     s.lastFac = fac;
-                    logger::info("Anatomica bottoms: {} - vaginal target {}, taken {}, his schlong has a job {}, has a schlong {} ({})",
-                                 nm ? nm : "?", vag, taken, (fac & 4) != 0, schlong, man ? "man" : "woman");
+                    logger::info("Anatomica bottoms: {} - vaginal target {} (scene {} made vaginal for him: {}), taken {}, his schlong has a job {}, has a schlong {} ({})",
+                                 nm ? nm : "?", vag, s.scene.empty() ? "?" : s.scene, s.vagScene < 0 ? "?" : s.vagScene ? "yes" : "no",
+                                 taken, (fac & 4) != 0, schlong, man ? "man" : "woman");
                 }
                 const bool mv = Length(want) > 0.01f;
                 if (mv != s.moving) {

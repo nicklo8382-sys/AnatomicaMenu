@@ -37,6 +37,16 @@ namespace {
          "Goes with the distance above: their rebuilt maps are dropped and made again when they come close.", false, {}},
         {"ProcessingInLoading", "true", "First rebuild during the loading screen",
          "Men don't pop from flat to shaded when you arrive - loading screens take a little longer.", false, {}},
+        // 2.5y: how fast an update arrives (the bulge looked sunken for a moment while its new map was still being made)
+        {"GPUDeviceIndex", "0", "Use your main graphics card",
+         "-1 (its default) picks a second GPU if there is one - usually the CPU's built-in graphics, which is slow: each "
+         "update then takes about half a second or more and the bulge's shading lags behind it. 0 = the card the game "
+         "runs on - much faster, at the cost of a little of its time.", false, {}},
+        {"AutoTaskQ", "2", "Updates faster",
+         "How quickly its queue is worked through (3 = balanced, its default; 2 = faster; 1 = fastest). Faster = the shading "
+         "keeps up with the bulge better, a bit more load.", false, {}},
+        {"TaskQTickMS", "50", "Look at its queue twice as often",
+         "100 (its default) = every 0.1 s. 50 = every 0.05 s, so an update Anatomica asks for starts sooner.", false, {}},
     };
     int g_detectMs = 5000;   // the DetectTickMS asked for (slider)
     int g_distance = 1000;   // the UpdateDistance asked for (slider; 0 = everyone loaded)
