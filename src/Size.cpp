@@ -1,4 +1,5 @@
 #include "Size.h"
+#include "Lang.h"
 #include "SKSEMenuFramework.h"
 #include "Mnc.h"
 #include "During.h"
@@ -336,11 +337,11 @@ namespace {
         g_shapes.clear();
         logger::info("Anatomica: {} schlong shapes ({} compatibility file{})", g_defs.size() - 1, g_fileList.size(), g_fileList.size() == 1 ? "" : "s");
     }
-    bool Section(const char* title) { return ImGuiMCP::CollapsingHeader(title); }
+    bool Section(const char* title) { return Tr::CollapsingHeader(title); }
     void Help(const char* t) {
         ImGuiMCP::SameLine();
-        ImGuiMCP::TextDisabled("(?)");
-        if (ImGuiMCP::IsItemHovered()) { ImGuiMCP::BeginTooltip(); ImGuiMCP::PushTextWrapPos(420.0f); ImGuiMCP::TextUnformatted(t); ImGuiMCP::PopTextWrapPos(); ImGuiMCP::EndTooltip(); }
+        Tr::TextDisabled("(?)");
+        if (ImGuiMCP::IsItemHovered()) { ImGuiMCP::BeginTooltip(); ImGuiMCP::PushTextWrapPos(420.0f); Tr::TextUnformatted(t); ImGuiMCP::PopTextWrapPos(); ImGuiMCP::EndTooltip(); }
     }
 }
 
@@ -387,6 +388,16 @@ namespace Size {
         return it == g_known.end() ? kUnknown : it->second.cat;
     }
 
+    bool HasSchlong(RE::Actor* a) {   // 2.5v: a schlong worn as an item (SOS-style) or one of TNG's in his / her skin
+        if (!a) return false;
+        std::lock_guard lk(g_mx);
+        Index();
+        if (auto* worn = a->GetWornArmor(RE::BGSBipedObjectForm::BipedObjectSlot::kModPelvisSecondary); worn && !worn->HasPartOf(RE::BGSBipedObjectForm::BipedObjectSlot::kBody))
+            return true;
+        if (auto* skin = a->GetSkin())
+            for (auto* arma : skin->armorAddons) if (g_byArma.count(arma)) return true;
+        return false;
+    }
     int Shape(RE::Actor* p) {
         if (!p) return kShapeUnknown;
         const RE::FormID id = p->GetFormID();
@@ -478,30 +489,31 @@ namespace Size {
         const bool noTNG = !HasTNG();
         if (!Section(noTNG ? "Partner size and shape (The New Gentleman)  (not installed)###tng" : "Partner size and shape (The New Gentleman)###tng")) return false;
         bool ch = false;
-        if (noTNG) ImGuiMCP::TextColored(ImGuiMCP::ImVec4{1.0f, 0.45f, 0.4f, 1.0f}, "The New Gentleman is not installed - every man counts as average size (greyed out). "
-                                                                                     "Creatures, and shapes set in the menu or by compatibility files, still work.");
-        ch |= ImGuiMCP::Checkbox("The size of the man taking him matters", &g.on);
+        if (noTNG) Tr::TextColored(ImGuiMCP::ImVec4{1.0f, 0.45f, 0.4f, 1.0f}, "%s", Mnc::Active()
+            ? "The New Gentleman is not installed - every man counts as average size (greyed out). Creatures, and shapes set in the menu or by compatibility files, still work."
+            : "The New Gentleman is not installed - every man counts as average size (greyed out). Shapes set in the menu or by compatibility files still work.");   // 2.5v
+        ch |= Tr::Checkbox("The size of the man taking him matters", &g.on);
         Help("Read from The New Gentleman (each man's size: XS, S, M, L, XL). A bigger man opens him further and faster, "
              "loosens him more and leaves him sorer; a smaller one the reverse. An average (M) man changes nothing.");
         if (g.on) {
             ImGuiMCP::Indent();
-            ch |= ImGuiMCP::Checkbox("How far and how fast he opens", &g.gape);
-            ch |= ImGuiMCP::Checkbox("Lasting looseness", &g.loose);
-            ch |= ImGuiMCP::Checkbox("How sore and red he gets", &g.tender);
+            ch |= Tr::Checkbox("How far and how fast he opens", &g.gape);
+            ch |= Tr::Checkbox("Lasting looseness", &g.loose);
+            ch |= Tr::Checkbox("How sore and red he gets", &g.tender);
             float pct = g.strength * 100.0f;
             ImGuiMCP::BeginDisabled(noTNG);
-            if (ImGuiMCP::SliderFloat("How much size matters", &pct, 0.0f, 200.0f, "%.0f%%")) { g.strength = pct / 100.0f; ch = true; }
+            if (Tr::SliderFloat("How much size matters", &pct, 0.0f, 200.0f, "%.0f%%")) { g.strength = pct / 100.0f; ch = true; }
             ImGuiMCP::EndDisabled();
             Help("100% = an XL man opens him 30% further, loosens him 50% more and makes him 30% sorer; an XS man 25% less "
                  "open, 40% less loosening. 200% doubles those differences.");
-            ch |= ImGuiMCP::Checkbox("The shape of his schlong matters too", &g.shape);
+            ch |= Tr::Checkbox("The shape of his schlong matters too", &g.shape);
             Help("Read from the schlong TNG gave him (TNG's own Circumcised / Muscular / Regular, add-ons by their name or "
                  "their mod's compatibility file). Each shape opens, loosens and makes him sore its own way - see Shapes below, "
                  "where every shape can be changed and new ones added.");
             if (g.shape) {
                 ImGuiMCP::Indent();
                 float sp = g.shapeStrength * 100.0f;
-                if (ImGuiMCP::SliderFloat("How much the shape matters", &sp, 0.0f, 200.0f, "%.0f%%")) { g.shapeStrength = sp / 100.0f; ch = true; }
+                if (Tr::SliderFloat("How much the shape matters", &sp, 0.0f, 200.0f, "%.0f%%")) { g.shapeStrength = sp / 100.0f; ch = true; }
                 ImGuiMCP::Unindent();
             }
             // ---- the selected man: what was found, and a shape of your own choosing for him
@@ -510,7 +522,7 @@ namespace Size {
             RE::Actor* sel = nullptr;
             if (auto r = RE::Console::GetSelectedRef()) sel = r->As<RE::Actor>();
             if (!sel) sel = RE::PlayerCharacter::GetSingleton();
-            if (ImGuiMCP::Button("Size and shape of the selected man") || (shownId && shownId != sel->GetFormID())) {
+            if (Tr::Button("Size and shape of the selected man") || (shownId && shownId != sel->GetFormID())) {
                 const int c = Cat(sel);
                 ShapeInfo si;
                 std::string nmShape;
@@ -531,66 +543,66 @@ namespace Size {
                 shownId = sel->GetFormID();
             }
             Help("The man you click in the console (~), or you. Shows which schlong was found and how its shape was decided.");
-            if (!shown.empty()) ImGuiMCP::TextWrapped("%s", shown.c_str());
-            if (!bulgeWhy.empty()) ImGuiMCP::TextWrapped("Belly bulge: %s", bulgeWhy.c_str());
+            if (!shown.empty()) Tr::TextWrapped("%s", shown.c_str());
+            if (!bulgeWhy.empty()) Tr::TextWrapped("Belly bulge: %s", bulgeWhy.c_str());
             {
                 std::lock_guard lk(g_mx);
                 const std::string fk = FormKey(sel);
                 std::string cur;
                 for (auto& [k, t] : g_menuActors) if (t == fk) cur = k;
                 const int ci = cur.empty() ? 0 : DefIndex(cur);
-                if (!fk.empty() && ImGuiMCP::BeginCombo("His schlong is", ci ? g_defs[ci].name.c_str() : "Found automatically")) {
+                if (!fk.empty() && Tr::BeginCombo("His schlong is", ci ? g_defs[ci].name.c_str() : "Found automatically")) {
                     auto set = [&](const std::string& key) {
                         std::erase_if(g_menuActors, [&](auto& p) { return p.second == fk; });
                         if (!key.empty()) g_menuActors.push_back({key, fk});
                         g_resolved = false; g_shapes.clear(); shownId = 0; ch = true;
                     };
-                    if (ImGuiMCP::Selectable("Found automatically", ci == 0)) set("");
+                    if (Tr::Selectable("Found automatically", ci == 0)) set("");
                     for (size_t i = 1; i < g_defs.size(); ++i)
-                        if (ImGuiMCP::Selectable(g_defs[i].name.c_str(), static_cast<int>(i) == ci)) set(g_defs[i].key);
+                        if (Tr::Selectable(g_defs[i].name.c_str(), static_cast<int>(i) == ci)) set(g_defs[i].key);
                     ImGuiMCP::EndCombo();
                 }
-                if (fk.empty()) ImGuiMCP::TextDisabled("(a spawned actor without a base of his own: his shape can't be set here)");
+                if (fk.empty()) Tr::TextDisabled("(a spawned actor without a base of his own: his shape can't be set here)");
             }
             Help("Your own choice for this man (or yourself) - a unique custom build, a follower... It wins over everything else "
                  "and is kept in AnatomicaMenu.ini.");
             // ---- 2.5k: the belly bulge by his size (for types set to "By his size", and schlongs whose type isn't found)
-            if (ImGuiMCP::TreeNode("Belly bulge by his size###bulgesize")) {
-                ImGuiMCP::TextDisabled("For any schlong type set to \"By his size\" below, any schlong whose type could not be "
+            if (Tr::TreeNode("Belly bulge by his size###bulgesize")) {
+                Tr::TextDisabled("For any schlong type set to \"By his size\" below, any schlong whose type could not be "
                                        "found, and everyone without TNG.");
                 ch |= During::RenderSizeBulge();
                 ImGuiMCP::TreePop();
             }
             // ---- the shapes themselves
-            if (ImGuiMCP::TreeNode("Shapes (change them, or add your own)")) {
+            if (Tr::TreeNode("Shapes (change them, or add your own)")) {
                 std::lock_guard lk(g_mx);
-                ImGuiMCP::TextDisabled("x1.00 = no change. Open: how far he gapes. Build: time to open up (lower = faster). "
+                Tr::TextDisabled("x1.00 = no change. Open: how far he gapes. Build: time to open up (lower = faster). "
                                        "Loose: lasting looseness. Sore: soreness and redness. Bulge shape: his partner's belly bulge "
                                        "during sex; Knot 1 / 2 add knots to it; Shaft / Head: this schlong's own bulge strength, x the "
                                        "Shaft / Head strength on the During sex page (that page sets it for everyone, 100% here = no change).");
                 if (!g_fileList.empty()) {
                     std::string fl;
                     for (auto& f : g_fileList) fl += (fl.empty() ? "" : ", ") + f;
-                    ImGuiMCP::TextDisabled("Compatibility files: %s", fl.c_str());
+                    Tr::TextDisabled("Compatibility files: %s", fl.c_str());
                 }
                 int remove = 0;
                 for (size_t i = 1; i < g_defs.size(); ++i) {
                     ShapeDef& d = g_defs[i];
                     if (d.creature) continue;   // 2.5f: in the More Nasty Critters section
                     ImGuiMCP::PushID(static_cast<int>(i));
-                    if (ImGuiMCP::TreeNode("shape", "%s  (%s)", d.name.c_str(), d.source.c_str())) {
+                    if (Tr::TreeNode("shape", "%s  (%s)", d.name.c_str(), d.source.c_str())) {
                         bool e = false;
                         char nb[64]; std::snprintf(nb, sizeof(nb), "%s", d.name.c_str());
-                        if (ImGuiMCP::InputText("Name", nb, sizeof(nb))) { d.name = nb; e = true; }
+                        if (Tr::InputText("Name", nb, sizeof(nb))) { d.name = nb; e = true; }
                         char wb[48]; std::snprintf(wb, sizeof(wb), "%s", d.word.c_str());
-                        if (ImGuiMCP::InputText("Word (SkyrimNet: \"his huge ___ cock\")", wb, sizeof(wb))) { d.word = wb; e = true; }
-                        e |= ImGuiMCP::SliderFloat("Open", &d.open, 0.5f, 2.0f, "x%.2f");
-                        e |= ImGuiMCP::SliderFloat("Build", &d.build, 0.5f, 2.0f, "x%.2f");
-                        e |= ImGuiMCP::SliderFloat("Loose", &d.loose, 0.5f, 2.0f, "x%.2f");
-                        e |= ImGuiMCP::SliderFloat("Sore", &d.tender, 0.5f, 2.0f, "x%.2f");
+                        if (Tr::InputText("Word (SkyrimNet: \"his huge ___ cock\")", wb, sizeof(wb))) { d.word = wb; e = true; }
+                        e |= Tr::SliderFloat("Open", &d.open, 0.5f, 2.0f, "x%.2f");
+                        e |= Tr::SliderFloat("Build", &d.build, 0.5f, 2.0f, "x%.2f");
+                        e |= Tr::SliderFloat("Loose", &d.loose, 0.5f, 2.0f, "x%.2f");
+                        e |= Tr::SliderFloat("Sore", &d.tender, 0.5f, 2.0f, "x%.2f");
                         ch |= During::RenderTypeBulge(d.key);   // 2.5k: its belly bulge (During sex) and knots
-                        if (!d.desc.empty()) ImGuiMCP::TextDisabled("%s", d.desc.c_str());
-                        if (d.source == "menu" && ImGuiMCP::SmallButton("Remove this shape")) remove = static_cast<int>(i);
+                        if (!d.desc.empty()) Tr::TextDisabled("%s", d.desc.c_str());
+                        if (d.source == "menu" && Tr::SmallButton("Remove this shape")) remove = static_cast<int>(i);
                         if (d.source == "menu") Help("Back to how the built-in shape or a compatibility file defines it (if one does).");
                         if (e) { d.source = "menu"; ch = true; }
                         ImGuiMCP::TreePop();
@@ -609,9 +621,9 @@ namespace Size {
                     g_resolved = false; g_shapes.clear(); ch = true;
                 }
                 static char nk[32] = "";
-                ImGuiMCP::InputText("##newshape", nk, sizeof(nk));
+                Tr::InputText("##newshape", nk, sizeof(nk));
                 ImGuiMCP::SameLine();
-                if (ImGuiMCP::Button("Add a new shape") && nk[0]) {
+                if (Tr::Button("Add a new shape") && nk[0]) {
                     std::string key = LowerS(TrimS(nk));
                     for (auto& c : key) if (c == ' ' || c == '|' || c == '=') c = '_';
                     if (!DefIndex(key)) { g_defs.push_back({key, TrimS(nk), LowerS(TrimS(nk)), "", "menu"}); ch = true; }
@@ -630,18 +642,18 @@ namespace Size {
         if (!Mnc::Active()) return false;
         if (!Section("Creatures (More Nasty Critters)###mnc")) return false;
         bool ch = false;
-        ch |= ImGuiMCP::Checkbox("Creatures count too", &g.creatures);
+        ch |= Tr::Checkbox("Creatures count too", &g.creatures);
         Help("Horses, werewolves, trolls, dragons and other creatures (no TNG size of their own) count as big partners.");
         if (g.creatures) {
             ImGuiMCP::Indent();
             static const char* items[] = {"Like an L man", "Like an XL man", "Bigger than any man"};
             int sel = std::clamp(g.creatureCat - 3, 0, 2);
-            if (ImGuiMCP::Combo("A creature counts", &sel, items, 3)) { g.creatureCat = sel + 3; ch = true; }
+            if (Tr::Combo("A creature counts", &sel, items, 3)) { g.creatureCat = sel + 3; ch = true; }
             ImGuiMCP::Unindent();
         }
         {   // 2.5p: what decides the selected creature's bulge
             static std::string crWhy;
-            if (ImGuiMCP::Button("Check the selected creature")) {
+            if (Tr::Button("Check the selected creature")) {
                 RE::Actor* sel = nullptr;
                 if (auto r = RE::Console::GetSelectedRef()) sel = r->As<RE::Actor>();
                 if (!sel) crWhy = "Click a creature in the console (~) first.";
@@ -658,31 +670,31 @@ namespace Size {
             }
             Help("Shows which group a creature you clicked in the console (~) is in, which type it counts as, and the belly bulge "
                  "it will give - and what decided it.");
-            if (!crWhy.empty()) ImGuiMCP::TextWrapped("%s", crWhy.c_str());
+            if (!crWhy.empty()) Tr::TextWrapped("%s", crWhy.c_str());
         }
-        if (ImGuiMCP::TreeNode("Creature types (change them, or add your own)###crtypes")) {
+        if (Tr::TreeNode("Creature types (change them, or add your own)###crtypes")) {
             std::lock_guard lk(g_mx);
             int cremove = 0;
-            ImGuiMCP::TextDisabled("x1.00 = no change. Open: how far he gapes. Build: time to open up (lower = faster). "
+            Tr::TextDisabled("x1.00 = no change. Open: how far he gapes. Build: time to open up (lower = faster). "
                                    "Loose: lasting looseness. Sore: soreness and redness. Bulge shape, knots and Shaft / Head: "
                                    "the belly bulge it gives (Shaft / Head x the During sex page's).");
             for (size_t i = 1; i < g_defs.size(); ++i) {
                 ShapeDef& d = g_defs[i];
                 if (!d.creature) continue;
                 ImGuiMCP::PushID(static_cast<int>(1000 + i));
-                if (ImGuiMCP::TreeNode("ctype", "%s  (%s)", d.name.c_str(), d.source.c_str())) {
+                if (Tr::TreeNode("ctype", "%s  (%s)", d.name.c_str(), d.source.c_str())) {
                     bool e = false;
                     char nb[64]; std::snprintf(nb, sizeof(nb), "%s", d.name.c_str());
-                    if (ImGuiMCP::InputText("Name", nb, sizeof(nb))) { d.name = nb; e = true; }
+                    if (Tr::InputText("Name", nb, sizeof(nb))) { d.name = nb; e = true; }
                     char wb[48]; std::snprintf(wb, sizeof(wb), "%s", d.word.c_str());
-                    if (ImGuiMCP::InputText("Word (SkyrimNet: \"his huge ___ cock\")", wb, sizeof(wb))) { d.word = wb; e = true; }
-                    e |= ImGuiMCP::SliderFloat("Open", &d.open, 0.5f, 2.0f, "x%.2f");
-                    e |= ImGuiMCP::SliderFloat("Build", &d.build, 0.5f, 2.0f, "x%.2f");
-                    e |= ImGuiMCP::SliderFloat("Loose", &d.loose, 0.5f, 2.0f, "x%.2f");
-                    e |= ImGuiMCP::SliderFloat("Sore", &d.tender, 0.5f, 2.0f, "x%.2f");
+                    if (Tr::InputText("Word (SkyrimNet: \"his huge ___ cock\")", wb, sizeof(wb))) { d.word = wb; e = true; }
+                    e |= Tr::SliderFloat("Open", &d.open, 0.5f, 2.0f, "x%.2f");
+                    e |= Tr::SliderFloat("Build", &d.build, 0.5f, 2.0f, "x%.2f");
+                    e |= Tr::SliderFloat("Loose", &d.loose, 0.5f, 2.0f, "x%.2f");
+                    e |= Tr::SliderFloat("Sore", &d.tender, 0.5f, 2.0f, "x%.2f");
                     ch |= During::RenderTypeBulge(d.key);   // 2.5k: its belly bulge (During sex) and knots
-                    if (!d.desc.empty()) ImGuiMCP::TextDisabled("%s", d.desc.c_str());
-                    if (d.source == "menu" && ImGuiMCP::SmallButton("Remove this type")) cremove = static_cast<int>(i);
+                    if (!d.desc.empty()) Tr::TextDisabled("%s", d.desc.c_str());
+                    if (d.source == "menu" && Tr::SmallButton("Remove this type")) cremove = static_cast<int>(i);
                     if (e) { d.source = "menu"; ch = true; }
                     ImGuiMCP::TreePop();
                 }
@@ -697,9 +709,9 @@ namespace Size {
                 g_resolved = false; g_shapes.clear(); ch = true;
             }
             static char ck[32] = "";
-            ImGuiMCP::InputText("##newctype", ck, sizeof(ck));
+            Tr::InputText("##newctype", ck, sizeof(ck));
             ImGuiMCP::SameLine();
-            if (ImGuiMCP::Button("Add a creature type") && ck[0]) {
+            if (Tr::Button("Add a creature type") && ck[0]) {
                 std::string key = LowerS(TrimS(ck));
                 for (auto& c : key) if (c == ' ' || c == '|' || c == '=') c = '_';
                 if (!DefIndex(key)) {
@@ -714,8 +726,8 @@ namespace Size {
                  "type of a kind of creature below.");
             ImGuiMCP::TreePop();
         }
-        if (ImGuiMCP::TreeNode("Each kind of creature###crgroups")) {
-            ImGuiMCP::TextDisabled("Which type each MNC group counts as: how far it opens him, loosens him, how sore, and its belly "
+        if (Tr::TreeNode("Each kind of creature###crgroups")) {
+            Tr::TextDisabled("Which type each MNC group counts as: how far it opens him, loosens him, how sore, and its belly "
                                    "bulge and knots (set on each type). Werewolves and dragons follow the MNC style they wear first "
                                    "(dog -> knotted, horse -> flared, dragon -> ridged). \"Own settings\" gives a group its own "
                                    "values and bulge instead of its type's.");
@@ -731,7 +743,7 @@ namespace Size {
                                         : gr.races < 0 ? std::format("{} (yours: {})###ct_{}", gr.name, gr.words, gr.name)
                                                        : std::format("{} (by name)###ct_{}", gr.name, gr.name);
                 ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 14.0f);
-                if (ImGuiMCP::Combo(label.c_str(), &v, opts.data(), static_cast<int>(opts.size()))) {
+                if (Tr::Combo(label.c_str(), &v, opts.data(), static_cast<int>(opts.size()))) {
                     Mnc::SetType(gr.name, v > 0 ? types[v - 1].first : std::string{});
                     { std::lock_guard lk(g_mx); g_shapes.clear(); }
                     ch = true;
@@ -740,14 +752,14 @@ namespace Size {
                 Mnc::Override ov = gr.ov;
                 bool oc = false;
                 ImGuiMCP::SameLine();
-                oc |= ImGuiMCP::Checkbox(std::format("Own settings##ovon_{}", gr.name).c_str(), &ov.on);
+                oc |= Tr::Checkbox(std::format("Own settings##ovon_{}", gr.name).c_str(), &ov.on);
                 if (ov.on) {
                     ImGuiMCP::Indent();
                     ImGuiMCP::PushID(gr.name.c_str());
-                    oc |= ImGuiMCP::SliderFloat("Open", &ov.open, 0.5f, 2.0f, "x%.2f");
-                    oc |= ImGuiMCP::SliderFloat("Build", &ov.build, 0.5f, 2.0f, "x%.2f");
-                    oc |= ImGuiMCP::SliderFloat("Loose", &ov.loose, 0.5f, 2.0f, "x%.2f");
-                    oc |= ImGuiMCP::SliderFloat("Sore", &ov.tender, 0.5f, 2.0f, "x%.2f");
+                    oc |= Tr::SliderFloat("Open", &ov.open, 0.5f, 2.0f, "x%.2f");
+                    oc |= Tr::SliderFloat("Build", &ov.build, 0.5f, 2.0f, "x%.2f");
+                    oc |= Tr::SliderFloat("Loose", &ov.loose, 0.5f, 2.0f, "x%.2f");
+                    oc |= Tr::SliderFloat("Sore", &ov.tender, 0.5f, 2.0f, "x%.2f");
                     oc |= During::BulgeChoice(ov.shape, ov.knots, "ov_" + gr.name, "Its type's shape");
                     ImGuiMCP::PopID();
                     ImGuiMCP::Unindent();
@@ -755,15 +767,15 @@ namespace Size {
                 if (oc) { Mnc::SetOverride(gr.name, ov); ch = true; }
                 if (gr.races < 0) {
                     ImGuiMCP::SameLine();
-                    if (ImGuiMCP::SmallButton(std::format("Remove##rk_{}", gr.name).c_str())) { Mnc::RemoveKind(gr.name); { std::lock_guard lk(g_mx); g_shapes.clear(); } ch = true; }
+                    if (Tr::SmallButton(std::format("Remove##rk_{}", gr.name).c_str())) { Mnc::RemoveKind(gr.name); { std::lock_guard lk(g_mx); g_shapes.clear(); } ch = true; }
                 }
             }
             // 2.5q: a kind of your own
-            ImGuiMCP::SeparatorText("Add your own kind");
+            Tr::SeparatorText("Add your own kind");
             static char kn[40] = "", kw[120] = "";
-            ImGuiMCP::InputText("Name##newkind", kn, sizeof(kn));
-            ImGuiMCP::InputText("Words in its race ID (comma separated)##newkindw", kw, sizeof(kw));
-            if (ImGuiMCP::Button("Use the selected creature's race")) {
+            Tr::InputText("Name##newkind", kn, sizeof(kn));
+            Tr::InputText("Words in its race ID (comma separated)##newkindw", kw, sizeof(kw));
+            if (Tr::Button("Use the selected creature's race")) {
                 RE::Actor* sel = nullptr;
                 if (auto r = RE::Console::GetSelectedRef()) sel = r->As<RE::Actor>();
                 const std::string id = Mnc::RaceId(sel);
@@ -773,7 +785,7 @@ namespace Size {
                 }
             }
             ImGuiMCP::SameLine();
-            if (ImGuiMCP::Button("Add this kind") && kn[0] && kw[0]) {
+            if (Tr::Button("Add this kind") && kn[0] && kw[0]) {
                 Mnc::AddKind(TrimS(kn), kw);
                 { std::lock_guard lk(g_mx); g_shapes.clear(); }
                 kn[0] = 0; kw[0] = 0; ch = true;

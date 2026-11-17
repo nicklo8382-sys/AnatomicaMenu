@@ -1,4 +1,5 @@
 #include "SoftButt.h"
+#include "Lang.h"
 #include "Colour.h"
 #include "SKSEMenuFramework.h"
 
@@ -86,11 +87,11 @@ namespace {
     }
     void Help(const char* t) {
         ImGuiMCP::SameLine();
-        ImGuiMCP::TextDisabled("(?)");
+        Tr::TextDisabled("(?)");
         if (ImGuiMCP::IsItemHovered()) {
             ImGuiMCP::BeginTooltip();
             ImGuiMCP::PushTextWrapPos(ImGuiMCP::GetFontSize() * 30.0f);
-            ImGuiMCP::TextUnformatted(t);
+            Tr::TextUnformatted(t);
             ImGuiMCP::PopTextWrapPos();
             ImGuiMCP::EndTooltip();
         }
@@ -126,21 +127,21 @@ namespace SoftButt {
     }
 
     void RenderSection() {
-        if (!ImGuiMCP::CollapsingHeader("Soft butt (SMP physics)###softbutt")) return;
+        if (!Tr::CollapsingHeader("Soft butt (SMP physics)###softbutt")) return;
         const bool has = Item() != nullptr;
         if (!has) {
-            ImGuiMCP::TextColored(ImGuiMCP::ImVec4{1.0f, 0.45f, 0.4f, 1.0f},
+            Tr::TextColored(ImGuiMCP::ImVec4{1.0f, 0.45f, 0.4f, 1.0f},
                                   "Not installed: needs the installer's \"Soft butt (SMP)\" option (AnatomicaSoftButt.esp) and FSMP.");
             ImGuiMCP::BeginDisabled();
         }
-        ImGuiMCP::TextColored(ImGuiMCP::ImVec4{1.0f, 0.75f, 0.3f, 1.0f},
+        Tr::TextColored(ImGuiMCP::ImVec4{1.0f, 0.75f, 0.3f, 1.0f},
                               "Warning: heavy on performance. Every man who gets it runs his own SMP physics - keep it to you, or "
                               "you and your followers, unless your PC has power to spare.");
-        ImGuiMCP::TextWrapped("SMP takes over his butt from CBPC: a softer, heavier jiggle that is pushed by hands and partners' "
+        Tr::TextWrapped("SMP takes over his butt from CBPC: a softer, heavier jiggle that is pushed by hands and partners' "
                               "bodies. Off by default.");
         static const char* who[] = {"Off", "Only you", "You and your followers", "Every man (heaviest)"};
         int w = g_who.load();
-        if (ImGuiMCP::Combo("Who gets the soft butt", &w, who, 4)) {
+        if (Tr::Combo("Who gets the soft butt", &w, who, 4)) {
             g_who = w;
             Colour::SaveNow();
             if (WriteCbpc(w)) {
@@ -157,8 +158,8 @@ namespace SoftButt {
              "needs a game restart to take effect.");
         if (g_cbpcWho == -1) g_cbpcWho = ReadCbpc();
         if (g_cbpcWho >= 0 && g_cbpcWho != w)
-            ImGuiMCP::TextColored(ImGuiMCP::ImVec4{1.0f, 0.75f, 0.3f, 1.0f}, "Restart the game to finish the change (CBPC).");
-        if (!g_note.empty()) ImGuiMCP::TextWrapped("%s", g_note.c_str());
+            Tr::TextColored(ImGuiMCP::ImVec4{1.0f, 0.75f, 0.3f, 1.0f}, "Restart the game to finish the change (CBPC).");
+        if (!g_note.empty()) Tr::TextWrapped("%s", g_note.c_str());
         if (!has) ImGuiMCP::EndDisabled();
     }
 }

@@ -1,4 +1,6 @@
 #include "Bridge.h"
+#include "Lang.h"
+#include "Mu.h"
 #include "Colour.h"
 #include "Engine.h"
 #include "Virgin.h"
@@ -457,15 +459,17 @@ namespace {
         }
     } g_bathSink;
 
-    bool Section(const char* title) { return ImGuiMCP::CollapsingHeader(title); }   // a drop-down section
+    bool Section(const char* title) { return Tr::CollapsingHeader(title); }   // a drop-down section
     void Help(const char* t) {
         ImGuiMCP::SameLine();
-        ImGuiMCP::TextDisabled("(?)");
-        if (ImGuiMCP::IsItemHovered()) { ImGuiMCP::BeginTooltip(); ImGuiMCP::PushTextWrapPos(420.0f); ImGuiMCP::TextUnformatted(t); ImGuiMCP::PopTextWrapPos(); ImGuiMCP::EndTooltip(); }
+        Tr::TextDisabled("(?)");
+        if (ImGuiMCP::IsItemHovered()) { ImGuiMCP::BeginTooltip(); ImGuiMCP::PushTextWrapPos(420.0f); Tr::TextUnformatted(t); ImGuiMCP::PopTextWrapPos(); ImGuiMCP::EndTooltip(); }
     }
     // a mod that is not installed: a red line, and its settings greyed out (kept as they are, for when it is added)
-    void Missing(const char* what) { ImGuiMCP::TextColored(ImGuiMCP::ImVec4{1.0f, 0.45f, 0.4f, 1.0f}, "%s is not installed - these settings do nothing until it is (they are kept).", what); }
-    std::string Title(const char* title, const char* id, bool missing) { return std::format("{}{}###{}", title, missing ? "  (not installed)" : "", id); }
+    void Missing(const char* what) { Tr::TextColored(ImGuiMCP::ImVec4{1.0f, 0.45f, 0.4f, 1.0f}, "%s is not installed - these settings do nothing until it is (they are kept).", what); }
+    std::string Title(const char* title, const char* id, bool missing) {   // 2.5v: translated here (its ID stays the same)
+        return std::format("{}{}###{}", Lang::T(title), missing ? std::string("  ") + Lang::T("(not installed)") : std::string(), id);
+    }
 }
 
 namespace Bridge {
@@ -486,6 +490,7 @@ namespace Bridge {
         B("Bathing", g.bath); B("BathDries", g.bathDry); F("BathSoothes", g.bathSoothe, 0.0f, 1.0f); F("BathHours", g.bathHours, 0.0f, 48.0f);
         if (g.fameHi < g.fameLo) g.fameHi = g.fameLo;
         Size::Ini(ini, save);
+        Mu::Ini(ini, save);
         Extras::Ini(ini, save);
     }
 
@@ -701,7 +706,7 @@ namespace Bridge {
 
     void __stdcall RenderPage() {
         bool ch = false;
-        ImGuiMCP::TextWrapped("Anatomica with other mods. Each part only does something when its mod is installed.");
+        Tr::TextWrapped("Anatomica with other mods. Each part only does something when its mod is installed.");
 
         const bool offSN = !HasSkyrimNet(), offFame = !HasSLSF(), offAr = !ArousalFaction();
         if (Section(Title("SkyrimNet", "sn", offSN).c_str())) {
@@ -709,20 +714,20 @@ namespace Bridge {
         else {
             // is it working? (this session)
             const ImGuiMCP::ImVec4 good{0.5f, 0.9f, 0.5f, 1.0f}, bad{1.0f, 0.55f, 0.4f, 1.0f};
-            if (g_regAt <= 0.0) ImGuiMCP::TextColored(bad, "Not registered with SkyrimNet yet this session (it happens a few seconds after loading a save).");
+            if (g_regAt <= 0.0) Tr::TextColored(bad, "Not registered with SkyrimNet yet this session (it happens a few seconds after loading a save).");
             else {
                 const bool all = g_decOk == g_decAsk && g_actOk == g_actAsk;
-                ImGuiMCP::TextColored(all ? good : bad, "SkyrimNet accepted %d of %d status functions and %d of %d actions (%.0f s ago).",
+                Tr::TextColored(all ? good : bad, "SkyrimNet accepted %d of %d status functions and %d of %d actions (%.0f s ago).",
                                       g_decOk.load(), g_decAsk.load(), g_actOk.load(), g_actAsk.load(), Now() - g_regAt);
             }
-            ImGuiMCP::TextDisabled("Since loading: SkyrimNet asked for his state %d / what is seen %d / what partners know %d times; actions done %d.",
+            Tr::TextDisabled("Since loading: SkyrimNet asked for his state %d / what is seen %d / what partners know %d times; actions done %d.",
                                    g_callsSelf.load(), g_callsSeen.load(), g_callsKnows.load(), g_actRun.load());
-            ImGuiMCP::TextDisabled("Sent: memories %d, reactions and remarks %d, scene notes %d.", g_sentMem.load(), g_sentReact.load(), g_sentScene.load());
+            Tr::TextDisabled("Sent: memories %d, reactions and remarks %d, scene notes %d.", g_sentMem.load(), g_sentReact.load(), g_sentScene.load());
             Help("SkyrimNet only asks for a man's state when it writes a prompt about him (when someone talks to or about "
                  "him), so the first numbers stay at 0 until then.");
             static std::string pv[4];
             static std::string who;
-            if (ImGuiMCP::Button("Show what SkyrimNet gets for the selected man")) {
+            if (Tr::Button("Show what SkyrimNet gets for the selected man")) {
                 RE::Actor* a = nullptr;
                 if (auto sel = RE::Console::GetSelectedRef()) a = sel->As<RE::Actor>();
                 if (!a) a = RE::PlayerCharacter::GetSingleton();
@@ -731,52 +736,52 @@ namespace Bridge {
             }
             Help("The man you click in the console (~), or you. Exactly the text SkyrimNet's prompts get.");
             if (!who.empty()) {
-                ImGuiMCP::TextWrapped("%s - what he knows: %s", who.c_str(), pv[0].empty() ? "(nothing)" : pv[0].c_str());
-                ImGuiMCP::TextWrapped("What others see (naked only): %s", pv[1].empty() ? "(nothing - dressed, or nothing shows)" : pv[1].c_str());
-                ImGuiMCP::TextWrapped("What he remembers of men he has had: %s", pv[2].empty() ? "(nothing)" : pv[2].c_str());
-                ImGuiMCP::TextWrapped("Rumours where he is: %s", pv[3].empty() ? "(nothing)" : pv[3].c_str());
+                Tr::TextWrapped("%s - what he knows: %s", who.c_str(), pv[0].empty() ? "(nothing)" : pv[0].c_str());
+                Tr::TextWrapped("What others see (naked only): %s", pv[1].empty() ? "(nothing - dressed, or nothing shows)" : pv[1].c_str());
+                Tr::TextWrapped("What he remembers of men he has had: %s", pv[2].empty() ? "(nothing)" : pv[2].c_str());
+                Tr::TextWrapped("Rumours where he is: %s", pv[3].empty() ? "(nothing)" : pv[3].c_str());
             }
         }
         ImGuiMCP::BeginDisabled(offSN);
-        ch |= ImGuiMCP::Checkbox("Use SkyrimNet", &g.sn);
+        ch |= Tr::Checkbox("Use SkyrimNet", &g.sn);
         if (g.sn) {
             ImGuiMCP::Indent();
-            ch |= ImGuiMCP::Checkbox("What people know and see", &g.snStatus);
+            ch |= Tr::Checkbox("What people know and see", &g.snStatus);
             Help("A man knows his own state and history; men who have had him remember it; anyone who sees him naked sees "
                  "how his hole looks right now (tight or used, gaping, red, wet). Needs the Anatomica prompt pack (installed "
                  "with the mod).");
-            ch |= ImGuiMCP::Checkbox("Memories", &g.snMemory);
+            ch |= Tr::Checkbox("Memories", &g.snMemory);
             Help("When he loses his virginity both remember who took it and when; when his body tightens back up he "
                  "remembers that (quietly - nobody reacts).");
-            ch |= ImGuiMCP::Checkbox("Reaction after his first time", &g.snReact);
+            ch |= Tr::Checkbox("Reaction after his first time", &g.snReact);
             Help("Once the round is over, the man who took it says something about it - aware whether it was his real "
                  "first time or a restored one.");
-            ImGuiMCP::TextUnformatted("Things NPCs can choose to do:");
+            Tr::TextUnformatted("Things NPCs can choose to do:");
             ImGuiMCP::Indent();
-            ch |= ImGuiMCP::Checkbox("Inspect his hole", &g.actInspect);
-            ch |= ImGuiMCP::Checkbox("Lube him up", &g.actLube);
-            ch |= ImGuiMCP::Checkbox("Order him to clench or relax", &g.actClench);
-            ch |= ImGuiMCP::Checkbox("Ask if he is a virgin", &g.actAsk);
+            ch |= Tr::Checkbox("Inspect his hole", &g.actInspect);
+            ch |= Tr::Checkbox("Lube him up", &g.actLube);
+            ch |= Tr::Checkbox("Order him to clench or relax", &g.actClench);
+            ch |= Tr::Checkbox("Ask if he is a virgin", &g.actAsk);
             ImGuiMCP::Unindent();
             Help("Only offered when it makes sense: a naked man close by (asking does not need him naked).");
-            ch |= ImGuiMCP::Checkbox("Scene awareness", &g.snScene);
+            ch |= Tr::Checkbox("Scene awareness", &g.snScene);
             Help("While he is naked and it shows (gaping, red, wet...), people nearby are told what they can see. It goes "
                  "away when he recovers or dresses.");
-            ch |= ImGuiMCP::Checkbox("People comment on it", &g.snRemarks);
+            ch |= Tr::Checkbox("People comment on it", &g.snRemarks);
             if (g.snRemarks) {
                 ImGuiMCP::Indent();
-                ch |= ImGuiMCP::SliderFloat("At most every (minutes, per man)", &g.remarkMinutes, 0.5f, 60.0f, "%.1f");
+                ch |= Tr::SliderFloat("At most every (minutes, per man)", &g.remarkMinutes, 0.5f, 60.0f, "%.1f");
                 float pct = g.remarkChance * 100.0f;
-                if (ImGuiMCP::SliderFloat("Chance", &pct, 0.0f, 100.0f, "%.0f%%")) { g.remarkChance = pct / 100.0f; ch = true; }
+                if (Tr::SliderFloat("Chance", &pct, 0.0f, 100.0f, "%.0f%%")) { g.remarkChance = pct / 100.0f; ch = true; }
                 ImGuiMCP::Unindent();
             }
             // 2.5o
-            ImGuiMCP::SeparatorText("Belly bulge and what he takes");
-            ch |= ImGuiMCP::Checkbox("The belly bulge", &g.snBulge);
+            Tr::SeparatorText("Belly bulge and what he takes");
+            ch |= Tr::Checkbox("The belly bulge", &g.snBulge);
             Help("While the bulge shows, people see its shape and how far up it goes (a knot, a flared head, almost up to his "
                  "chest...), and he feels it. Shown whenever the bulge itself shows (its \"Shows through\" setting, During sex "
                  "page), and the imprint after.");
-            ch |= ImGuiMCP::Checkbox("\"Made for it\"", &g.madeFor);
+            ch |= Tr::Checkbox("\"Made for it\"", &g.madeFor);
             Help(Mnc::Active() ? "After he has taken one kind often enough - knotted, flared... or one kind of creature (wolves, "
                                  "horses...) - he, and the men who have had him, know he takes them like he was made for them. It "
                                  "fades if he goes long enough without."
@@ -785,36 +790,36 @@ namespace Bridge {
                                  "enough without.");
             if (g.madeFor) {
                 ImGuiMCP::Indent();
-                ch |= ImGuiMCP::SliderInt("After this many times", &g.madeForTimes, 2, 100);
-                ch |= ImGuiMCP::SliderFloat("Fades after (game days without)", &g.madeForForget, 2.0f, 365.0f, "%.0f");
+                ch |= Tr::SliderInt("After this many times", &g.madeForTimes, 2, 100);
+                ch |= Tr::SliderFloat("Fades after (game days without)", &g.madeForForget, 2.0f, 365.0f, "%.0f");
                 ImGuiMCP::Unindent();
             }
-            ch |= ImGuiMCP::Checkbox("What stretched him", &g.looseFrom);
+            ch |= Tr::Checkbox("What stretched him", &g.looseFrom);
             Help(Mnc::Active() ? "While he is still loose or gaping, he knows (and it can be seen) what did it - \"still loose from "
                                  "the wolves last night\"."
                                : "While he is still loose or gaping, he knows (and it can be seen) who did it - \"still loose from "
                                  "Farkas last night\".");
-            ch |= ImGuiMCP::Checkbox("Partners remember the bulge", &g.bulgeMem);
+            ch |= Tr::Checkbox("Partners remember the bulge", &g.bulgeMem);
             Help("After a round where the bulge went past his lower belly, the one who gave it to him remembers how far it went.");
-            ch |= ImGuiMCP::Checkbox("Firsts", &g.firsts);
+            ch |= Tr::Checkbox("Firsts", &g.firsts);
             Help(Mnc::Active() ? "His first creature, first knot, first flared cock, the biggest he has taken and his first super "
                                  "deep: each becomes a memory, and the partner says something after."
                                : "His first knot, first flared cock, the biggest he has taken and his first super deep: each "
                                  "becomes a memory, and the partner says something after.");
-            ch |= ImGuiMCP::Checkbox("People watching react to the bulge", &g.watchBulge);
+            ch |= Tr::Checkbox("People watching react to the bulge", &g.watchBulge);
             Help("When it goes past his navel (or super deep), someone watching may say something - uses \"People comment on "
                  "it\" and its chance.");
-            ch |= ImGuiMCP::Checkbox("Rumours", &g.rumours);
+            ch |= Tr::Checkbox("Rumours", &g.rumours);
             Help(Mnc::Active() ? "Where it keeps happening, people talk: \"Around Whiterun people whisper that he lets wolves have "
                                  "him.\" Heard by anyone talking to him in that hold. Needs the Anatomica prompt pack."
                                : "Where it keeps happening, people talk: \"Around Whiterun it is said that he has a taste for "
                                  "knotted cocks.\" Heard by anyone talking to him in that hold. Needs the Anatomica prompt pack.");
             if (g.rumours) {
                 ImGuiMCP::Indent();
-                ch |= ImGuiMCP::SliderInt("After this many times there", &g.rumourMin, 1, 50);
+                ch |= Tr::SliderInt("After this many times there", &g.rumourMin, 1, 50);
                 ImGuiMCP::Unindent();
             }
-            if (ImGuiMCP::Button("Register with SkyrimNet again")) RegisterSN();
+            if (Tr::Button("Register with SkyrimNet again")) RegisterSN();
             Help("Done on every load. Use this if you switched SkyrimNet parts on in the middle of a game.");
             ImGuiMCP::Unindent();
         }
@@ -825,16 +830,16 @@ namespace Bridge {
         if (Section(Title("SLSF Reloaded (fame)", "slsf", offFame).c_str())) {
         if (offFame) Missing("SLSF Reloaded");
         ImGuiMCP::BeginDisabled(offFame);
-        ch |= ImGuiMCP::Checkbox("Being taken adds Anal fame", &g.fame);
+        ch |= Tr::Checkbox("Being taken adds Anal fame", &g.fame);
         Help("Where it happens, each time you (the player) are taken. SLSF fame belongs to the player only.");
         if (g.fame) {
             ImGuiMCP::Indent();
-            ch |= ImGuiMCP::SliderInt("Fame, at least", &g.fameLo, 0, 50);
-            ch |= ImGuiMCP::SliderInt("Fame, at most", &g.fameHi, 1, 100);
+            ch |= Tr::SliderInt("Fame, at least", &g.fameLo, 0, 50);
+            ch |= Tr::SliderInt("Fame, at most", &g.fameHi, 1, 100);
             if (g.fameHi < g.fameLo) g.fameHi = g.fameLo;
-            ch |= ImGuiMCP::SliderFloat("Your first time counts", &g.fameFirst, 1.0f, 10.0f, "x%.1f");
-            ch |= ImGuiMCP::Checkbox("Several men in a row: Group fame too", &g.fameGroup);
-            if (Mnc::Active()) ch |= ImGuiMCP::Checkbox("Creatures: Bestiality fame too", &g.slsfBeast);   // 2.5o (More Nasty Critters only)
+            ch |= Tr::SliderFloat("Your first time counts", &g.fameFirst, 1.0f, 10.0f, "x%.1f");
+            ch |= Tr::Checkbox("Several men in a row: Group fame too", &g.fameGroup);
+            if (Mnc::Active()) ch |= Tr::Checkbox("Creatures: Bestiality fame too", &g.slsfBeast);   // 2.5o (More Nasty Critters only)
             ImGuiMCP::Unindent();
         }
         ImGuiMCP::EndDisabled();
@@ -842,34 +847,35 @@ namespace Bridge {
         if (Section(Title("Arousal (SexLab Aroused / OSL Aroused / SLO Aroused NG)", "arousal", offAr).c_str())) {
         if (offAr) Missing("An arousal mod");
         ImGuiMCP::BeginDisabled(offAr);
-        ch |= ImGuiMCP::Checkbox("Arousal makes him wet and twitchy", &g.arousal);
+        ch |= Tr::Checkbox("Arousal makes him wet and twitchy", &g.arousal);
         if (g.arousal) {
             ImGuiMCP::Indent();
-            ch |= ImGuiMCP::SliderInt("From arousal", &g.arousalFrom, 0, 99);
+            ch |= Tr::SliderInt("From arousal", &g.arousalFrom, 0, 99);
             float pct = g.arousalWet * 100.0f;
-            if (ImGuiMCP::SliderFloat("How wet at full arousal", &pct, 0.0f, 100.0f, "%.0f%%")) { g.arousalWet = pct / 100.0f; ch = true; }
-            ch |= ImGuiMCP::Checkbox("Twitchier", &g.arousalSens);
+            if (Tr::SliderFloat("How wet at full arousal", &pct, 0.0f, 100.0f, "%.0f%%")) { g.arousalWet = pct / 100.0f; ch = true; }
+            ch |= Tr::Checkbox("Twitchier", &g.arousalSens);
             Help("Sharper clenches and slower, heavier breathing of the hole - uses \"Sensitive while tender\" (After sex page).");
-            ch |= ImGuiMCP::SliderInt("His first time arouses him", &g.exposureFirst, 0, 100);
-            ch |= ImGuiMCP::SliderInt("Every time he is taken", &g.exposureEach, 0, 50);
+            ch |= Tr::SliderInt("His first time arouses him", &g.exposureFirst, 0, 100);
+            ch |= Tr::SliderInt("Every time he is taken", &g.exposureEach, 0, 50);
             ImGuiMCP::Unindent();
         }
         ImGuiMCP::EndDisabled();
         }
         if (Section("Bathing")) {
-        ch |= ImGuiMCP::Checkbox("Washing", &g.bath);
+        ch |= Tr::Checkbox("Washing", &g.bath);
         Help("Bathing in Skyrim (or any bath / wash / soap effect).");
         if (g.bath) {
             ImGuiMCP::Indent();
-            ch |= ImGuiMCP::Checkbox("Dries him (and the giver's schlong)", &g.bathDry);
+            ch |= Tr::Checkbox("Dries him (and the giver's schlong)", &g.bathDry);
             float pct = g.bathSoothe * 100.0f;
-            if (ImGuiMCP::SliderFloat("Soothes the redness by", &pct, 0.0f, 100.0f, "%.0f%%")) { g.bathSoothe = pct / 100.0f; ch = true; }
-            ch |= ImGuiMCP::SliderFloat("Counts as rest", &g.bathHours, 0.0f, 48.0f, "%.1f h");
+            if (Tr::SliderFloat("Soothes the redness by", &pct, 0.0f, 100.0f, "%.0f%%")) { g.bathSoothe = pct / 100.0f; ch = true; }
+            ch |= Tr::SliderFloat("Counts as rest", &g.bathHours, 0.0f, 48.0f, "%.1f h");
             Help("Like a healing potion: hours off his waits (virginity coming back, looseness, the first-time reaction - "
                  "what counts is set on the Virginity page).");
             ImGuiMCP::Unindent();
         }
         }
+        ch |= Mu::RenderSection();   // 2.5v
         if (ch) Colour::SaveNow();
     }
 }

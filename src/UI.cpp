@@ -1,4 +1,6 @@
 #include "During.h"
+#include "Lang.h"
+#include <deque>
 #include "SoftButt.h"
 #include <string_view>
 #include "UI.h"
@@ -159,8 +161,8 @@ namespace {
 
     void HelpMarker(const char* text) {
         ImGuiMCP::SameLine();
-        ImGuiMCP::TextDisabled("(?)");
-        if (ImGuiMCP::IsItemHovered()) ImGuiMCP::SetTooltip("%s", text);
+        Tr::TextDisabled("(?)");
+        if (ImGuiMCP::IsItemHovered()) Tr::SetTooltip("%s", Lang::T(text));
     }
 }
 
@@ -176,29 +178,37 @@ void UI::ApplySavedSettings() {
     logger::info("Anatomica: settings applied to {}", kPlugin);
 }
 
+namespace {
+    const char* PageName(const char* en) {   // kept for good: the framework may hold on to the pointer
+        static std::deque<std::string> names;
+        return names.emplace_back(Lang::T(en)).c_str();
+    }
+}
+
 void UI::Register() {
     if (!SKSEMenuFramework::IsInstalled()) {
         logger::warn("SKSE Menu Framework not installed - Anatomica menu disabled");
         return;
     }
     LoadIni();
+    Lang::Init();   // 2.5v: the page names below are translated once, here (a new language renames them after a restart)
     SKSEMenuFramework::SetSection("Anatomica");
-    SKSEMenuFramework::AddSectionItem("General", Colour::RenderGeneral);
-    SKSEMenuFramework::AddSectionItem("Gape", Gape::Render);
-    SKSEMenuFramework::AddSectionItem("During sex", During::RenderPage);
-    SKSEMenuFramework::AddSectionItem("Movement", Motion::Render);
-    SKSEMenuFramework::AddSectionItem("Colours", Colour::RenderColours);
-    SKSEMenuFramework::AddSectionItem("Per race", Colour::RenderRaces);
-    SKSEMenuFramework::AddSectionItem("Skin rules", Colour::RenderRules);
-    SKSEMenuFramework::AddSectionItem("After sex", Colour::RenderAfter);
-    SKSEMenuFramework::AddSectionItem("Virginity", Virgin::RenderPage);
-    SKSEMenuFramework::AddSectionItem("Integrations", Bridge::RenderPage);
-    if (Extras::On()) SKSEMenuFramework::AddSectionItem("Extras", Extras::RenderPage);   // only with the separate Anatomica Extras mod
-    if (kCum) SKSEMenuFramework::AddSectionItem("Cum & drips", Drip::RenderPage);   // off for now (Features.h)
-    SKSEMenuFramework::AddSectionItem("Status", Colour::RenderStatus);
-    SKSEMenuFramework::AddSectionItem("Testing", Colour::RenderTesting);
-    SKSEMenuFramework::AddSectionItem("Jiggle", Jiggle::Render);
-    SKSEMenuFramework::AddSectionItem("About", About::Render);
+    SKSEMenuFramework::AddSectionItem(PageName("General"), Colour::RenderGeneral);
+    SKSEMenuFramework::AddSectionItem(PageName("Gape"), Gape::Render);
+    SKSEMenuFramework::AddSectionItem(PageName("During sex"), During::RenderPage);
+    SKSEMenuFramework::AddSectionItem(PageName("Movement"), Motion::Render);
+    SKSEMenuFramework::AddSectionItem(PageName("Colours"), Colour::RenderColours);
+    SKSEMenuFramework::AddSectionItem(PageName("Per race"), Colour::RenderRaces);
+    SKSEMenuFramework::AddSectionItem(PageName("Skin rules"), Colour::RenderRules);
+    SKSEMenuFramework::AddSectionItem(PageName("After sex"), Colour::RenderAfter);
+    SKSEMenuFramework::AddSectionItem(PageName("Virginity"), Virgin::RenderPage);
+    SKSEMenuFramework::AddSectionItem(PageName("Integrations"), Bridge::RenderPage);
+    if (Extras::On()) SKSEMenuFramework::AddSectionItem(PageName("Extras"), Extras::RenderPage);   // only with the separate Anatomica Extras mod
+    if (kCum) SKSEMenuFramework::AddSectionItem(PageName("Cum & drips"), Drip::RenderPage);   // off for now (Features.h)
+    SKSEMenuFramework::AddSectionItem(PageName("Status"), Colour::RenderStatus);
+    SKSEMenuFramework::AddSectionItem(PageName("Testing"), Colour::RenderTesting);
+    SKSEMenuFramework::AddSectionItem(PageName("Jiggle"), Jiggle::Render);
+    SKSEMenuFramework::AddSectionItem(PageName("About"), About::Render);
     Colour::RegisterWindow();
 }
 
@@ -211,12 +221,12 @@ namespace {
         bool changed = false;
         if (std::string_view(kGape[i].fmt) == "pct") {
             float pct = g_values[i] * 100.0f;
-            if (ImGuiMCP::SliderFloat(kGape[i].label, &pct, kGape[i].lo * 100.0f, kGape[i].hi * 100.0f, "%.0f%%")) {
+            if (Tr::SliderFloat(kGape[i].label, &pct, kGape[i].lo * 100.0f, kGape[i].hi * 100.0f, "%.0f%%")) {
                 g_values[i] = pct / 100.0f;
                 changed = true;
             }
         } else {
-            changed |= ImGuiMCP::SliderFloat(kGape[i].label, &g_values[i], kGape[i].lo, kGape[i].hi, kGape[i].fmt);
+            changed |= Tr::SliderFloat(kGape[i].label, &g_values[i], kGape[i].lo, kGape[i].hi, kGape[i].fmt);
         }
         HelpMarker(kGape[i].help);
         return changed;
@@ -225,11 +235,11 @@ namespace {
 
 void __stdcall UI::Gape::Render() {
     if (!GetGlobal(kEnabledId)) {
-        ImGuiMCP::TextWrapped("AnatomicaGape.esp is not loaded. Install the \"After-sex gape and dilation\" option and enable the plugin.");
+        Tr::TextWrapped("AnatomicaGape.esp is not loaded. Install the \"After-sex gape and dilation\" option and enable the plugin.");
         return;
     }
     bool changed = false;
-    changed |= ImGuiMCP::Checkbox("Enable gape (after sex, and during sex if set above 0%)", &g_enabled);
+    changed |= Tr::Checkbox("Enable gape (after sex, and during sex if set above 0%)", &g_enabled);
     ImGuiMCP::Separator();
     for (size_t i = 0; i < std::size(kGape); ++i)
         if (!IsMotionKey(kGape[i].key)) changed |= SliderFor(i);
@@ -245,20 +255,20 @@ void __stdcall UI::Gape::Render() {
         SaveIni();
     }
     ImGuiMCP::Spacing();
-    ImGuiMCP::TextDisabled("Changes apply immediately and are kept for every save.");
+    Tr::TextDisabled("Changes apply immediately and are kept for every save.");
 }
 
 void __stdcall UI::Motion::Render() {
     if (!GetGlobal(kEnabledId)) {
-        ImGuiMCP::TextWrapped("AnatomicaGape.esp is not loaded. Install the \"After-sex gape and dilation\" option and enable the plugin.");
+        Tr::TextWrapped("AnatomicaGape.esp is not loaded. Install the \"After-sex gape and dilation\" option and enable the plugin.");
         return;
     }
-    ImGuiMCP::TextWrapped("After sex, while the anus is still gaping, it can keep moving: a slow, uneven breathing "
+    Tr::TextWrapped("After sex, while the anus is still gaping, it can keep moving: a slow, uneven breathing "
                           "(tighten and relax) and now and then a quick clench that lets go slowly. Both fade out as the gape closes. "
                           "Only after the scene - during sex PPA moves the anus.");
     ImGuiMCP::Separator();
     bool changed = false;
-    changed |= ImGuiMCP::Checkbox("Enable after-sex movement", &g_wink);
+    changed |= Tr::Checkbox("Enable after-sex movement", &g_wink);
     for (size_t i = 0; i < std::size(kGape); ++i)
         if (IsMotionKey(kGape[i].key)) changed |= SliderFor(i);
     ImGuiMCP::Spacing();
@@ -273,18 +283,18 @@ void __stdcall UI::Motion::Render() {
         SaveIni();
     }
     ImGuiMCP::Spacing();
-    ImGuiMCP::TextDisabled("Changes apply immediately and are kept for every save.");
+    Tr::TextDisabled("Changes apply immediately and are kept for every save.");
 }
 
 void __stdcall UI::Jiggle::Render() {
-    ImGuiMCP::TextWrapped("Male jiggle strength for the Anatomica CBPC option (1.0 = Anatomica default, 0 = off).");
-    ImGuiMCP::TextColored(ImGuiMCP::ImVec4{1.0f, 0.8f, 0.35f, 1.0f},
+    Tr::TextWrapped("Male jiggle strength for the Anatomica CBPC option (1.0 = Anatomica default, 0 = off).");
+    Tr::TextColored(ImGuiMCP::ImVec4{1.0f, 0.8f, 0.35f, 1.0f},
                           "Changes take effect after you restart the game: CBPC only reads its config files when the game starts. "
                           "Press Apply, then quit and start Skyrim again.");
     ImGuiMCP::Separator();
     bool changed = false;
-    for (auto& p : kJiggle) changed |= ImGuiMCP::SliderFloat(p.label, &p.mult, 0.0f, 3.0f, "x%.2f");
-    if (ImGuiMCP::Button("Apply")) {
+    for (auto& p : kJiggle) changed |= Tr::SliderFloat(p.label, &p.mult, 0.0f, 3.0f, "x%.2f");
+    if (Tr::Button("Apply")) {
         int ok = 0;
         for (auto& p : kJiggle) ok += WriteJiggle(p) ? 1 : 0;
         SaveIni();
@@ -298,13 +308,13 @@ void __stdcall UI::Jiggle::Render() {
         changed = true;
     }
     if (changed) g_status = "Not applied yet - press Apply.";
-    if (!g_status.empty()) ImGuiMCP::TextWrapped("%s", g_status.c_str());
+    if (!g_status.empty()) Tr::TextWrapped("%s", g_status.c_str());
     ImGuiMCP::Spacing();
     SoftButt::RenderSection();
 }
 
 void __stdcall UI::About::Render() {
-    ImGuiMCP::TextWrapped("Anatomica - anatomical anus for HIMBO.");
-    ImGuiMCP::TextWrapped("The gape settings drive AnatomicaGape.esp; the body has to be built in BodySlide with \"Build Morphs\" for the gape to show.");
-    ImGuiMCP::TextWrapped("Settings file: Data/SKSE/Plugins/AnatomicaMenu.ini");
+    Tr::TextWrapped("Anatomica - anatomical anus for HIMBO.");
+    Tr::TextWrapped("The gape settings drive AnatomicaGape.esp; the body has to be built in BodySlide with \"Build Morphs\" for the gape to show.");
+    Tr::TextWrapped("Settings file: Data/SKSE/Plugins/AnatomicaMenu.ini");
 }

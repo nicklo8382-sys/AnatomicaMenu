@@ -1,4 +1,5 @@
 #include "During.h"
+#include "Lang.h"
 #include "SoftButt.h"
 #include "Colour.h"
 #include "Drip.h"
@@ -614,7 +615,7 @@ namespace {
     };
     // skin rules (Smart random): a man whose skin looks like `skin` (hue within +-tol) gets `anus`
     // a drop-down section (closed until clicked) - keeps the pages short
-    bool Section(const char* title) { return ImGuiMCP::CollapsingHeader(title); }
+    bool Section(const char* title) { return Tr::CollapsingHeader(title); }
     constexpr bool kLube = true;    // lube colour: the outer wet layer of the rim (and the rim texture)
     struct Rule {
         bool on = true;
@@ -1903,8 +1904,8 @@ namespace {
                               ImGuiMCP::ImVec2{ImGuiMCP::GetFontSize() * 2.2f, ImGuiMCP::GetFontSize() * 1.1f});
         ImGuiMCP::SameLine();
         const auto b = [](float v) { return static_cast<int>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f)); };
-        if (note) ImGuiMCP::Text("%s: %s", label, note);
-        else ImGuiMCP::Text("%s: #%02X%02X%02X", label, b(c[0]), b(c[1]), b(c[2]));
+        if (note) Tr::Text("%s: %s", Lang::T(label), Lang::T(note));
+        else Tr::Text("%s: #%02X%02X%02X", Lang::T(label), b(c[0]), b(c[1]), b(c[2]));
         ImGuiMCP::PopID();
     }
     void ColourRows(const Status& st) {
@@ -2086,8 +2087,8 @@ namespace {
     // ---- the status window: movable, live, over the game -------------------------------------------
     void Bar(const char* label, float v) {
         char buf[64];
-        std::snprintf(buf, sizeof buf, "%s %.0f%%", label, v * 100.0f);
-        ImGuiMCP::ProgressBar(std::clamp(v, 0.0f, 1.0f), ImGuiMCP::ImVec2{ImGuiMCP::GetFontSize() * 14.0f, 0.0f}, buf);
+        std::snprintf(buf, sizeof buf, "%s %.0f%%", Lang::T(label), v * 100.0f);
+        Tr::ProgressBar(std::clamp(v, 0.0f, 1.0f), ImGuiMCP::ImVec2{ImGuiMCP::GetFontSize() * 14.0f, 0.0f}, buf);
     }
     void __stdcall RenderStatusWindow() {
         if (!g_winOpen) return;
@@ -2097,10 +2098,10 @@ namespace {
         ImGuiMCP::SetNextWindowPos(ImGuiMCP::ImVec2{40.0f, 200.0f}, ImGuiMCP::ImGuiCond_FirstUseEver);
         ImGuiMCP::SetNextWindowBgAlpha(moving ? 0.9f : 0.6f);
         bool open = true;
-        if (ImGuiMCP::Begin("Anatomica status", moving ? &open : nullptr, flags)) {
+        if (Tr::Begin("Anatomica status", moving ? &open : nullptr, flags)) {
             RE::Actor* a = g_inspect ? RE::TESForm::LookupByID<RE::Actor>(g_inspect) : nullptr;
             if (!a) {
-                ImGuiMCP::TextUnformatted("Look at a man and press the status hotkey.");
+                Tr::TextUnformatted("Look at a man and press the status hotkey.");
             } else {
                 Status st;
                 {
@@ -2108,8 +2109,8 @@ namespace {
                     if (!g_loaded) LoadIni();
                     st = StatusOf(a);
                 }
-                ImGuiMCP::Text("%s  (%s)", st.name.c_str(), st.race.c_str());
-                ImGuiMCP::Text("Colour pick: %s%s", st.colour.c_str(), st.own ? " (his own)" : "");
+                Tr::Text("%s  (%s)", st.name.c_str(), st.race.c_str());
+                Tr::Text("Colour pick: %s%s", st.colour.c_str(), st.own ? " (his own)" : "");
                 ColourRows(st);
                 {   // while he is taken the left-over gape is 0: show how far the hole is opened round him instead
                     const auto dn0 = Engine::DuringOf(a->GetFormID());
@@ -2122,20 +2123,20 @@ namespace {
                 Bar("Bruise", st.bruise);
                 Bar("Swelling", st.swell);
                 if (st.schlong > 0.01f) Bar("Schlong shine", st.schlong);
-                ImGuiMCP::Text("This round: %d partner(s), %.0f s", st.partners, st.secs);
+                Tr::Text("This round: %d partner(s), %.0f s", st.partners, st.secs);
                 if (const auto dn = Engine::DuringOf(a->GetFormID()); dn.depth > -50.0f)
                 {
-                    ImGuiMCP::Text("Being taken: tip %.1f units in | inside %.0f%% | rim %+.2f%s", dn.depth, dn.hole * 100.0f, dn.ring, dn.held ? " | held" : "");
+                    Tr::Text("Being taken: tip %.1f units in | inside %.0f%% | rim %+.2f%s", dn.depth, dn.hole * 100.0f, dn.ring, dn.held ? " | held" : "");
                 }
-                ImGuiMCP::TextUnformatted(Drip::Status(a).c_str());
-                ImGuiMCP::TextUnformatted(Virgin::Status(a).c_str());
+                Tr::TextUnformatted(Drip::Status(a).c_str());
+                Tr::TextUnformatted(Virgin::Status(a).c_str());
             }
             if (moving) {
                 ImGuiMCP::Separator();
-                ImGuiMCP::TextDisabled("Drag the title bar to move it.");
-                if (ImGuiMCP::Button("Lock in place")) { g_winMove = false; ApplyWindowState(); }
+                Tr::TextDisabled("Drag the title bar to move it.");
+                if (Tr::Button("Lock in place")) { g_winMove = false; ApplyWindowState(); }
                 ImGuiMCP::SameLine();
-                if (ImGuiMCP::Button("Close")) open = false;
+                if (Tr::Button("Close")) open = false;
             }
         }
         ImGuiMCP::End();
@@ -2216,7 +2217,7 @@ namespace {
     // ---- menu helpers -------------------------------------------------------------------------
     bool ComboValue(const char* label, int* value, int offset, const char* const items[], int count) {
         int idx = *value + offset;
-        if (ImGuiMCP::Combo(label, &idx, items, count)) {
+        if (Tr::Combo(label, &idx, items, count)) {
             *value = idx - offset;
             return true;
         }
@@ -2224,18 +2225,18 @@ namespace {
     }
     void Help(const char* text) {
         ImGuiMCP::SameLine();
-        ImGuiMCP::TextDisabled("(?)");
+        Tr::TextDisabled("(?)");
         if (ImGuiMCP::IsItemHovered()) {
             ImGuiMCP::BeginTooltip();
             ImGuiMCP::PushTextWrapPos(ImGuiMCP::GetFontSize() * 30.0f);
-            ImGuiMCP::TextUnformatted(text);
+            Tr::TextUnformatted(text);
             ImGuiMCP::PopTextWrapPos();
             ImGuiMCP::EndTooltip();
         }
     }
     bool Pct(const char* label, float* v) {
         float p = *v * 100.0f;
-        if (ImGuiMCP::SliderFloat(label, &p, 0.0f, 100.0f, "%.0f%%")) {
+        if (Tr::SliderFloat(label, &p, 0.0f, 100.0f, "%.0f%%")) {
             *v = p / 100.0f;
             return true;
         }
@@ -2246,7 +2247,7 @@ namespace {
         bool changed = false;
         auto box = [&](const char* label, int bit) {
             bool on = (bits & (1 << bit)) != 0;
-            if (ImGuiMCP::Checkbox(label, &on)) {
+            if (Tr::Checkbox(label, &on)) {
                 bits = on ? (bits | (1 << bit)) : (bits & ~(1 << bit));
                 if (bits == 0) bits = 1 << bit;   // keep at least one
                 changed = true;
@@ -2257,12 +2258,12 @@ namespace {
             if (i != 2 && i != kCustom) ImGuiMCP::SameLine();
         }
         box("Skin-fit colour (follows Skin rules)", kSmartBit);
-        ImGuiMCP::TextDisabled("Your colours (tick to use, click a swatch for the colour wheel):");
+        Tr::TextDisabled("Your colours (tick to use, click a swatch for the colour wheel):");
         for (int i = 0; i < kPaletteSize; ++i) {
             ImGuiMCP::PushID(i);
             box("##use", kPaletteBit + i);
             ImGuiMCP::SameLine();
-            changed |= ImGuiMCP::ColorEdit3("##col", palette[i], kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
+            changed |= Tr::ColorEdit3("##col", palette[i], kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
             ImGuiMCP::PopID();
             if (i < kPaletteSize - 1) ImGuiMCP::SameLine();
         }
@@ -2270,7 +2271,7 @@ namespace {
     }
     bool Minutes(const char* label, float* seconds, float lo, float hi) {
         float m = *seconds / 60.0f;
-        if (ImGuiMCP::SliderFloat(label, &m, lo, hi, "%.1f min")) {
+        if (Tr::SliderFloat(label, &m, lo, hi, "%.1f min")) {
             *seconds = m * 60.0f;
             return true;
         }
@@ -2354,18 +2355,18 @@ namespace Colour {
     bool ConfirmButton(const char* label) {
         static std::string pending;
         if (pending == label) {
-            ImGuiMCP::TextUnformatted("Are you sure?");
+            Tr::TextUnformatted("Are you sure?");
             ImGuiMCP::SameLine();
             const std::string yes = std::string("Yes##") + label, no = std::string("No##") + label;
-            if (ImGuiMCP::Button(yes.c_str())) {
+            if (Tr::Button(yes.c_str())) {
                 pending.clear();
                 return true;
             }
             ImGuiMCP::SameLine();
-            if (ImGuiMCP::Button(no.c_str())) pending.clear();
+            if (Tr::Button(no.c_str())) pending.clear();
             return false;
         }
-        if (ImGuiMCP::Button(label)) pending = label;
+        if (Tr::Button(label)) pending = label;
         return false;
     }
 
@@ -2402,22 +2403,22 @@ namespace Colour {
         if (!g_loaded) LoadIni();
         BuildRaces();
         bool changed = false;
-        changed |= ImGuiMCP::Checkbox("The wetness colour (After sex page) follows the giver's race too", &g.cumByRace);
+        changed |= Tr::Checkbox("The wetness colour (After sex page) follows the giver's race too", &g.cumByRace);
         Help("With the wetness colour switched on, the gloss on his anus takes the cum colour of the man who gave.");
-        ImGuiMCP::TextDisabled(kCum ? "Tick a race to give it its own cum colour (used for his drips, squirts, puddles, the film on the rim, ...)"
+        Tr::TextDisabled(kCum ? "Tick a race to give it its own cum colour (used for his drips, squirts, puddles, the film on the rim, ...)"
                                     : "Tick a race to give it its own cum colour (the cum in the wetness, and the cum on his schlong - After sex page)");
-        if (g_raceRows.empty()) ImGuiMCP::TextDisabled("Races appear here once a game is loaded.");
-        if (!g_raceRows.empty() && ImGuiMCP::TreeNode("Cum colour per race")) {
+        if (g_raceRows.empty()) Tr::TextDisabled("Races appear here once a game is loaded.");
+        if (!g_raceRows.empty() && Tr::TreeNode("Cum colour per race")) {
             for (const auto& r : g_raceRows) {
                 auto& rs = g_races[r.key];
                 ImGuiMCP::PushID(r.key.c_str());
-                if (ImGuiMCP::Checkbox("##own", &rs.cumOwn)) changed = true;
+                if (Tr::Checkbox("##own", &rs.cumOwn)) changed = true;
                 ImGuiMCP::SameLine();
                 if (rs.cumOwn) {
-                    changed |= ImGuiMCP::ColorEdit3("##cum", rs.cum, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
+                    changed |= Tr::ColorEdit3("##cum", rs.cum, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
                     ImGuiMCP::SameLine();
                 }
-                ImGuiMCP::TextUnformatted(r.name.c_str());
+                Tr::TextUnformatted(r.name.c_str());
                 ImGuiMCP::PopID();
             }
             if (ConfirmButton("Clear all race cum colours")) {
@@ -2486,18 +2487,18 @@ namespace Colour {
         std::lock_guard lk(g_lock);
         if (!g_loaded) LoadIni();
         bool changed = false;
-        ImGuiMCP::TextWrapped("Anus colour per character, applied to nearby men with RaceMenu and kept with your save "
+        Tr::TextWrapped("Anus colour per character, applied to nearby men with RaceMenu and kept with your save "
                               "(needs RaceMenu and AnatomicaGape.esp).");
         ImGuiMCP::Separator();
-        changed |= ImGuiMCP::Checkbox("Colour picker on", &g.enabled);
+        changed |= Tr::Checkbox("Colour picker on", &g.enabled);
         Help("Off = everyone goes back to the colour you picked in the installer. After-sex wetness and reddening "
              "(After sex page) still work.");
-        changed |= ImGuiMCP::SliderFloat("Check every", &g.interval, 1.0f, 180.0f, "%.0f s", ImGuiMCP::ImGuiSliderFlags_Logarithmic);
+        changed |= Tr::SliderFloat("Check every", &g.interval, 1.0f, 180.0f, "%.0f s", ImGuiMCP::ImGuiSliderFlags_Logarithmic);
         Help("How often nearby men are checked (1 s - 3 min). Shorter = new men and after-sex looks show up sooner; longer = "
              "less script work. A man who already looks right costs almost nothing, so 3 s is fine for most games.");
         {
             float m = g.radius / 70.0f;
-            if (ImGuiMCP::SliderFloat("Distance", &m, 1.0f, 100.0f, "%.0f m")) {
+            if (Tr::SliderFloat("Distance", &m, 1.0f, 100.0f, "%.0f m")) {
                 g.radius = m * 70.0f;
                 changed = true;
             }
@@ -2512,47 +2513,47 @@ namespace Colour {
         if (g.method == 0) {
             changed |= Pct(g.randStrength ? "Colour strength from" : "Colour strength", &g.strength);
             Help("100% = the full picked colour. 0% = the character's own skin tone (no pink). Values between blend the two.");
-            changed |= ImGuiMCP::Checkbox("Random strength per man", &g.randStrength);
+            changed |= Tr::Checkbox("Random strength per man", &g.randStrength);
             Help("Each man gets his own strength somewhere between the two values (fixed per man, changes with re-roll).");
             if (g.randStrength) changed |= Pct("Colour strength to", &g.strengthMax);
         } else {
-            ImGuiMCP::TextDisabled("Colour strength: tint method only.");
+            Tr::TextDisabled("Colour strength: tint method only.");
         }
         changed |= Pct("Skin tone on the rim", &g.skinOnRim);
         Help("How much of each man's own skin tone is mixed into the rim colour. 100% = it always sits in his skin "
              "(a blue anus on red skin comes out dark); lower = picked colours show truer on strongly coloured skin "
              "(argonians, khajiit, dunmer).");
-        changed |= ImGuiMCP::ColorEdit3("Custom colour", g.custom, kWheel);
+        changed |= Tr::ColorEdit3("Custom colour", g.custom, kWheel);
         Help("Used wherever \"Custom\" is picked (always tinted, in both methods). Pick the colour you want the anus to be; "
              "it is still shaded by the skin tone.");
-        changed |= ImGuiMCP::Checkbox("Skin-blend overlay matches the colour", &g.blendMatch);
+        changed |= Tr::Checkbox("Skin-blend overlay matches the colour", &g.blendMatch);
         Help("The RaceMenu \"Anatomica Blend\" body paint (the soft ring around the anus) takes the same colour.");
-        changed |= ImGuiMCP::Checkbox("Stronger skin-blend ring (x2)", &g.ringStrong);
+        changed |= Tr::Checkbox("Stronger skin-blend ring (x2)", &g.ringStrong);
         Help("The ring Anatomica colours is twice as strong: it shows more and reaches a little further out before it fades "
              "into the skin. Applies as each man's ring colour is next made (a moment after ticking it).");
-        changed |= ImGuiMCP::Checkbox("Give NPCs the skin-blend ring", &g.autoRing);
+        changed |= Tr::Checkbox("Give NPCs the skin-blend ring", &g.autoRing);
         Help("Men who don't have the \"Anatomica Blend\" paint get it automatically (one free RaceMenu body-overlay slot), "
              "coloured to match, so the anus fades into the skin instead of having a hard edge.");
-        changed |= ImGuiMCP::Checkbox("Give you the skin-blend ring too", &g.playerRing);
+        changed |= Tr::Checkbox("Give you the skin-blend ring too", &g.playerRing);
         Help("The same for you, in a free RaceMenu body-paint slot - no need to add Anatomica Blend in RaceMenu yourself. "
              "Off: only the ring you painted on yourself in RaceMenu (if any) is coloured.");
         {
             static const char* res[] = {"2048 (5.5 MB each)", "1024 (1.4 MB each)", "512 (0.35 MB each)"};
-            changed |= ImGuiMCP::Combo("Ring colour texture size", &g.ringRes, res, 3);
+            changed |= Tr::Combo("Ring colour texture size", &g.ringRes, res, 3);
             Help("Each ring colour is saved as its own texture. The ring is a soft fade, so 1024 looks the same in game "
                  "at a quarter of the size; 512 is smaller still, slightly softer. Applies to colours made from now on.");
-            changed |= ImGuiMCP::SliderInt("Made textures may take up (MB)", &g.genBudget, 20, 2000);
+            changed |= Tr::SliderInt("Made textures may take up (MB)", &g.genBudget, 20, 2000);
             g_genBudgetMB = g.genBudget;
             static std::string sz;
-            if (ImGuiMCP::Button("Check size")) sz = std::format("{:.0f} MB now", GenFolderBytes() / 1048576.0);
+            if (Tr::Button("Check size")) sz = std::format("{:.0f} MB now", GenFolderBytes() / 1048576.0);
             ImGuiMCP::SameLine();
-            if (ImGuiMCP::Button("Tidy now")) sz = CleanGenFolder(g.genBudget, true);   // (the page holds g_lock)
+            if (Tr::Button("Tidy now")) sz = CleanGenFolder(g.genBudget, true);   // (the page holds g_lock)
             ImGuiMCP::SameLine();
             if (ConfirmButton("Delete them all")) {   // a fresh start: everything is made again as it is needed
                 sz = CleanGenFolder(g.genBudget, true, true);
                 g_sent.clear();   // every man's look is sent again, so the textures he needs are remade
             }
-            if (!sz.empty()) { ImGuiMCP::SameLine(); ImGuiMCP::TextUnformatted(sz.c_str()); }
+            if (!sz.empty()) { ImGuiMCP::SameLine(); Tr::TextUnformatted(sz.c_str()); }
             Help("Anatomica makes textures for itself as it goes (rims, ring colours, glossy skin) and keeps them in "
                  "textures\\actors\\character\\male\\Anatomica\\gen (MO2: in overwrite). They are a cache - anything "
                  "deleted is made again when needed. Over this size the oldest are removed at the next game start "
@@ -2563,7 +2564,7 @@ namespace Colour {
         changed |= ComboValue("Everyone (default)", &g.def, 1, kDefaultItems, 9);
         changed |= ComboValue("You (player)", &g.player, 2, kPlayerItems, 10);
         changed |= ComboValue("Your followers", &g.follower, 2, kFollowerItems, 10);
-        ImGuiMCP::TextDisabled("Per-race picks: Per race page.");
+        Tr::TextDisabled("Per-race picks: Per race page.");
 
         }
         if (Section("Random picks from")) {
@@ -2571,11 +2572,11 @@ namespace Colour {
 
         }
         if (Section("Skin-fit colour")) {
-        ImGuiMCP::TextWrapped("Skin-fit is a colour choice (pick it for everyone, a race, a man, or in a Random list). For each "
+        Tr::TextWrapped("Skin-fit is a colour choice (pick it for everyone, a race, a man, or in a Random list). For each "
                               "Skin-fit man Anatomica:");
-        ImGuiMCP::BulletText("1. uses a matching rule from the Skin rules page if there is one (the menu below is ignored for him);");
-        ImGuiMCP::BulletText("2. if no rule matches him, makes a colour from his skin colour - the menu below says how.");
-        ImGuiMCP::TextDisabled("Only used for Skin-fit men without a matching skin rule. Fixed per man (Re-roll gives a new one).");
+        Tr::BulletText("1. uses a matching rule from the Skin rules page if there is one (the menu below is ignored for him);");
+        Tr::BulletText("2. if no rule matches him, makes a colour from his skin colour - the menu below says how.");
+        Tr::TextDisabled("Only used for Skin-fit men without a matching skin rule. Fixed per man (Re-roll gives a new one).");
         changed |= ComboValue("No matching skin rule: colour the anus", &g.harmony, 0, kHarmonyItems, 3);
         Help("Skin-fit first follows your Skin rules page (e.g. red argonian -> blue anus). With no matching rule it "
              "reads his skin colour and picks an anus colour around it. Same family = his own hue, "
@@ -2583,13 +2584,13 @@ namespace Colour {
              "never green). Contrasting = the opposite side of the wheel, for bold looks.");
         }
         if (Section("Inside colour (the canal)")) {
-        ImGuiMCP::TextWrapped("The inside of the anus - the canal you see when he gapes - has its own colour, separate from the "
+        Tr::TextWrapped("The inside of the anus - the canal you see when he gapes - has its own colour, separate from the "
                               "rim. Installed it goes from pink at the entrance to deep red further in. Here it can be recoloured "
                               "(it keeps its shading and still gets darker further in).");
         static const char* modes[] = {"Installed (pink to deep red, never recoloured)",
                                       "A deeper shade of his anus colour (follows each man's anus colour)",
                                       "One colour for everyone (pick it below)"};
-        changed |= ImGuiMCP::Combo("Inside colour", &g.innerMode, modes, 3);
+        changed |= Tr::Combo("Inside colour", &g.innerMode, modes, 3);
         Help("Installed: the inside stays as the mod ships it.\n"
              "Deeper shade: each man's inside takes his own anus colour (whatever gave it - his race, Random, Skin-fit, his own "
              "colour), made richer and a little darker, as real tissue is further in. A blue anus gets a deep blue inside.\n"
@@ -2601,12 +2602,12 @@ namespace Colour {
             Help("0% = the inside is the same colour as his rim. 100% = much richer and darker.");
         }
         if (g.innerMode == 2) {
-            changed |= ImGuiMCP::ColorEdit3("Inside colour for everyone", g.innerCol, kWheel);
+            changed |= Tr::ColorEdit3("Inside colour for everyone", g.innerCol, kWheel);
             Help("The colour at the entrance of the canal; deeper in it darkens as the installed one does. #823840 (the "
                  "starting colour) is the installed inside. The game still shades it with each man's skin tone.");
         }
-        ImGuiMCP::TextDisabled("Made once per colour as a texture (in the gen folder, size as \"Ring colour texture size\": 1024, or 512).");
-        ImGuiMCP::TextDisabled("Shine / moistness of the inside: After sex page > Wetness.");
+        Tr::TextDisabled("Made once per colour as a texture (in the gen folder, size as \"Ring colour texture size\": 1024, or 512).");
+        Tr::TextDisabled("Shine / moistness of the inside: After sex page > Wetness.");
         }
 
         if (ConfirmButton("Re-roll everyone")) {
@@ -2620,7 +2621,7 @@ namespace Colour {
             auto sel = RE::Console::GetSelectedRef();
             auto* act = sel ? sel->As<RE::Actor>() : nullptr;
             const std::string lbl = act ? std::format("Re-roll {}", act->GetName()) : std::string("Re-roll selected man");
-            if (ImGuiMCP::Button(lbl.c_str()) && act) {
+            if (Tr::Button(lbl.c_str()) && act) {
                 ++g_reroll[RefKey(act)];
                 g_ringReset.insert(act->GetFormID());
                 changed = true;
@@ -2654,9 +2655,9 @@ namespace Colour {
         }
         if (changed) SaveIni();
         ImGuiMCP::Spacing();
-        ImGuiMCP::TextDisabled("Save size: a few small RaceMenu entries per coloured man (well under 1 KB each).");
+        Tr::TextDisabled("Save size: a few small RaceMenu entries per coloured man (well under 1 KB each).");
         ImGuiMCP::Spacing();
-        ImGuiMCP::TextWrapped("Note: Random and Skin-fit picks are fixed per man. After changing the random colours, "
+        Tr::TextWrapped("Note: Random and Skin-fit picks are fixed per man. After changing the random colours, "
                               "Skin rules or the Skin-fit setting, press Re-roll everyone (or Re-roll one man) to see the "
                               "new picks.");
     }
@@ -2665,20 +2666,21 @@ namespace Colour {
         std::lock_guard lk(g_lock);
         if (!g_loaded) LoadIni();
         bool changed = false;
-        ImGuiMCP::TextWrapped("Settings for all of Anatomica's script: the gape, movement, colours, wetness and reddening.");
+        Tr::TextWrapped("Settings for all of Anatomica's script: the gape, movement, colours, wetness and reddening.");
         ImGuiMCP::Separator();
-        changed |= ImGuiMCP::SliderFloat("Wait after loading screens", &g.loadDelay, 0.0f, 30.0f, "%.0f s");
+        changed |= Tr::SliderFloat("Wait after loading screens", &g.loadDelay, 0.0f, 30.0f, "%.0f s");
         Help("After every loading screen (loading a save, going through a door, fast travel) Anatomica's script waits this "
              "long before doing anything, so other mods' scripts get the busy first seconds. 0 = no wait.");
+        Lang::RenderGeneral();   // 2.5v: menu language and the translation template
         if (Section("Presets")) {
-        ImGuiMCP::TextWrapped("Save every Anatomica setting (all pages) to a slot, and load it again later - or share the "
+        Tr::TextWrapped("Save every Anatomica setting (all pages) to a slot, and load it again later - or share the "
                               "file (Data\\SKSE\\Plugins\\AnatomicaMenu\\Presets\\SlotN.ini).");
         for (int slot = 1; slot <= 5; ++slot) {
             ImGuiMCP::PushID(slot);
             const std::filesystem::path f = std::format("Data/SKSE/Plugins/AnatomicaMenu/Presets/Slot{}.ini", slot);
             std::error_code ec;
             const bool has = std::filesystem::exists(f, ec);
-            ImGuiMCP::Text("Slot %d%s", slot, has ? "" : " (empty)");
+            Tr::Text("Slot %d%s", slot, has ? "" : " (empty)");
             ImGuiMCP::SameLine();
             if (ConfirmButton(std::format("Save##s{}", slot).c_str())) {
                 SaveIni();
@@ -2722,13 +2724,13 @@ namespace Colour {
         BuildRaces();
         bool changed = false;
         if (!g_raceDefaults.empty())
-            ImGuiMCP::TextDisabled("Races set in the installer start with that colour; Reset all races goes back to them.");
-        ImGuiMCP::TextDisabled(kCum ? "Cum colours per race are on the Cum & drips page." : "Cum colours per race are at the bottom of this page.");
-        ImGuiMCP::TextWrapped("Colour per playable race. \"Use the default\" follows Everyone on the Colours page. "
+            Tr::TextDisabled("Races set in the installer start with that colour; Reset all races goes back to them.");
+        Tr::TextDisabled(kCum ? "Cum colours per race are on the Cum & drips page." : "Cum colours per race are at the bottom of this page.");
+        Tr::TextWrapped("Colour per playable race. \"Use the default\" follows Everyone on the Colours page. "
                               "Custom (and Random, when it lands on Custom) uses this race's own colour - click the "
                               "swatch for the colour wheel. Own colour strength only applies with the Tint method.");
         ImGuiMCP::Separator();
-        if (g_raceRows.empty()) ImGuiMCP::TextDisabled("Races appear here once a game is loaded.");
+        if (g_raceRows.empty()) Tr::TextDisabled("Races appear here once a game is loaded.");
         for (const auto& r : g_raceRows) {
             auto& rs = g_races[r.key];
             ImGuiMCP::PushID(r.key.c_str());
@@ -2739,14 +2741,14 @@ namespace Colour {
             if (rs.choice != kUseDefault && rs.choice != kInstalled) {
                 ImGuiMCP::Indent();
                 if (rs.choice == kCustom || rs.choice == kRandom) {
-                    if (ImGuiMCP::ColorEdit3("Custom colour for this race", rs.rgb, kWheel)) {
+                    if (Tr::ColorEdit3("Custom colour for this race", rs.rgb, kWheel)) {
                         g_raceTouched[r.key] = true;
                         changed = true;
                     }
                 }
                 if (rs.choice == kRandom) {
                     bool ownPool = rs.pool > 0;
-                    if (ImGuiMCP::Checkbox("Own random colours", &ownPool)) {
+                    if (Tr::Checkbox("Own random colours", &ownPool)) {
                         rs.pool = ownPool ? g.pool : -1;
                         if (ownPool) std::copy(&g.palette[0][0], &g.palette[0][0] + 18, &rs.palette[0][0]);
                         changed = true;
@@ -2756,7 +2758,7 @@ namespace Colour {
                 }
                 if (g.method == 0) {
                     bool own = rs.strength >= 0.0f;
-                    if (ImGuiMCP::Checkbox("Own colour strength", &own)) {
+                    if (Tr::Checkbox("Own colour strength", &own)) {
                         rs.strength = own ? g.strength : -1.0f;
                         rs.strengthMax = own ? (g.randStrength ? g.strengthMax : g.strength) : -1.0f;
                         changed = true;
@@ -2787,24 +2789,24 @@ namespace Colour {
         if (!g_loaded) LoadIni();
         BuildRaces();
         bool changed = false;
-        ImGuiMCP::TextColored(ImGuiMCP::ImVec4{0.55f, 0.85f, 1.0f, 1.0f},
+        Tr::TextColored(ImGuiMCP::ImVec4{0.55f, 0.85f, 1.0f, 1.0f},
                               "Tip: colours can be dragged and dropped - drag any colour swatch onto another to copy it across.");
         ImGuiMCP::Separator();
         {
             static const char* modes[] = {"Closest skin colour wins", "His race's rules first, then the closest", "Any matching rule, at random"};
-            changed |= ImGuiMCP::Combo("When several rules match", &g.ruleMode, modes, 3);
+            changed |= Tr::Combo("When several rules match", &g.ruleMode, modes, 3);
             Help("Closest (recommended): of the rules that match him, the one whose skin colour is nearest to his wins - a red "
                  "skin takes the red rule, not an orange one that is just inside its range. Rules with the same skin colour share "
                  "him at random (fixed per man), so you still get variety by adding several rules for one skin colour.\n"
                  "His race first: as Closest, but a rule for his own race always beats \"All races\" rules.\n"
                  "Any at random: every rule whose range he falls into counts, near or not - the most variety, the least exact.");
         }
-        ImGuiMCP::TextWrapped("Skin rules decide the anus colour from the man's skin colour. They are used by Smart random "
+        Tr::TextWrapped("Skin rules decide the anus colour from the man's skin colour. They are used by Smart random "
                               "(pick it for Everyone, a race, or tick Smart in a Random list). Example: race Argonian, "
                               "skin red within 35 degrees -> blue anus; skin blue -> purple anus. If several rules match "
                               "one man he gets one of them (fixed per man; which ones count is set above). No match = the "
                               "normal Smart colour.");
-        ImGuiMCP::TextDisabled("Skin colour is read from the character's skin tone (RaceMenu / CK tint). Skins coloured only "
+        Tr::TextDisabled("Skin colour is read from the character's skin tone (RaceMenu / CK tint). Skins coloured only "
                                "by a texture, not a tint, read as plain.");
         ImGuiMCP::Separator();
         std::vector<const char*> items{"All races"};
@@ -2823,66 +2825,66 @@ namespace Colour {
             const Pick pk = PickFor(who);
             smart = pk.active && pk.ruleIdx >= 0;
             const char* nm = who->GetDisplayFullName();
-            if (hits.empty()) ImGuiMCP::TextDisabled("%s: no rule matches his skin - he gets the normal Smart colour.", nm ? nm : "?");
-            else if (smart) ImGuiMCP::TextColored(ImGuiMCP::ImVec4{0.5f, 0.95f, 0.5f, 1.0f}, "%s: the rule marked APPLIED is his colour now (%d match).", nm ? nm : "?", static_cast<int>(hits.size()));
-            else ImGuiMCP::TextColored(ImGuiMCP::ImVec4{1.0f, 0.8f, 0.35f, 1.0f}, "%s: %d rule(s) match, but his colour is not Smart random - skin rules are not used for him.", nm ? nm : "?", static_cast<int>(hits.size()));
+            if (hits.empty()) Tr::TextDisabled("%s: no rule matches his skin - he gets the normal Smart colour.", nm ? nm : "?");
+            else if (smart) Tr::TextColored(ImGuiMCP::ImVec4{0.5f, 0.95f, 0.5f, 1.0f}, "%s: the rule marked APPLIED is his colour now (%d match).", nm ? nm : "?", static_cast<int>(hits.size()));
+            else Tr::TextColored(ImGuiMCP::ImVec4{1.0f, 0.8f, 0.35f, 1.0f}, "%s: %d rule(s) match, but his colour is not Smart random - skin rules are not used for him.", nm ? nm : "?", static_cast<int>(hits.size()));
         }
         if (!g_rules.empty())
-            ImGuiMCP::TextDisabled("On | Race | Skin colour | matches within | Anus colour | Anus blend (ring) - tick for its own | "
+            Tr::TextDisabled("On | Race | Skin colour | matches within | Anus colour | Anus blend (ring) - tick for its own | "
                                    "Inside (canal) - tick for its own | OR - a second anus / blend / inside set");
         for (size_t i = 0; i < g_rules.size(); ++i) {
             auto& r = g_rules[i];
             ImGuiMCP::PushID(static_cast<int>(i));
-            changed |= ImGuiMCP::Checkbox("##on", &r.on);
+            changed |= Tr::Checkbox("##on", &r.on);
             ImGuiMCP::SameLine();
             int sel = 0;
             for (size_t k = 0; k < g_raceRows.size(); ++k)
                 if (g_raceRows[k].key == r.race) sel = static_cast<int>(k) + 1;
             ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 9.0f);
-            if (ImGuiMCP::Combo("##race", &sel, items.data(), static_cast<int>(items.size()))) {
+            if (Tr::Combo("##race", &sel, items.data(), static_cast<int>(items.size()))) {
                 r.race = sel == 0 ? std::string() : g_raceRows[sel - 1].key;
                 changed = true;
             }
             ImGuiMCP::SameLine();
-            changed |= ImGuiMCP::ColorEdit3("skin##s", r.skin, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
+            changed |= Tr::ColorEdit3("skin##s", r.skin, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
             ImGuiMCP::SameLine();
             ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 7.0f);
-            changed |= ImGuiMCP::SliderFloat("##tol", &r.tol, 5.0f, 90.0f, "+-%.0f deg");
+            changed |= Tr::SliderFloat("##tol", &r.tol, 5.0f, 90.0f, "+-%.0f deg");
             ImGuiMCP::SameLine();
-            changed |= ImGuiMCP::ColorEdit3("anus##a", r.anus, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
+            changed |= Tr::ColorEdit3("anus##a", r.anus, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
             ImGuiMCP::SameLine();
-            changed |= ImGuiMCP::Checkbox("##bo", &r.blendOwn);
+            changed |= Tr::Checkbox("##bo", &r.blendOwn);
             ImGuiMCP::SameLine();
-            if (r.blendOwn) changed |= ImGuiMCP::ColorEdit3("anus blend##b", r.blend, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
-            else ImGuiMCP::TextDisabled("anus blend: follows the anus");
+            if (r.blendOwn) changed |= Tr::ColorEdit3("anus blend##b", r.blend, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
+            else Tr::TextDisabled("anus blend: follows the anus");
             ImGuiMCP::SameLine();
-            changed |= ImGuiMCP::Checkbox("##io", &r.innerOwn);
+            changed |= Tr::Checkbox("##io", &r.innerOwn);
             ImGuiMCP::SameLine();
-            if (r.innerOwn) changed |= ImGuiMCP::ColorEdit3("inside##i", r.inner, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
-            else ImGuiMCP::TextDisabled("inside: Colours page");
+            if (r.innerOwn) changed |= Tr::ColorEdit3("inside##i", r.inner, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
+            else Tr::TextDisabled("inside: Colours page");
             ImGuiMCP::SameLine();
-            changed |= ImGuiMCP::Checkbox("OR##alt", &r.alt);
+            changed |= Tr::Checkbox("OR##alt", &r.alt);
             if (r.alt) {   // a second pair: each man gets one of the two
                 ImGuiMCP::SameLine();
-                changed |= ImGuiMCP::ColorEdit3("anus##a2", r.anus2, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
+                changed |= Tr::ColorEdit3("anus##a2", r.anus2, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
                 if (r.blendOwn) {
                     ImGuiMCP::SameLine();
-                    changed |= ImGuiMCP::ColorEdit3("anus blend##b2", r.blend2, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
+                    changed |= Tr::ColorEdit3("anus blend##b2", r.blend2, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
                 }
                 if (r.innerOwn) {
                     ImGuiMCP::SameLine();
-                    changed |= ImGuiMCP::ColorEdit3("inside##i2", r.inner2, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
+                    changed |= Tr::ColorEdit3("inside##i2", r.inner2, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
                 }
             }
             ImGuiMCP::SameLine();
-            if (ImGuiMCP::Button("Remove")) del = static_cast<int>(i);
+            if (Tr::Button("Remove")) del = static_cast<int>(i);
             if (static_cast<int>(i) == chosen) {
                 ImGuiMCP::SameLine();
-                if (smart) ImGuiMCP::TextColored(ImGuiMCP::ImVec4{0.5f, 0.95f, 0.5f, 1.0f}, r.alt ? (RuleAlt(who, r) ? "<< APPLIED (the OR pair)" : "<< APPLIED (the first pair)") : "<< APPLIED");
-                else ImGuiMCP::TextColored(ImGuiMCP::ImVec4{1.0f, 0.8f, 0.35f, 1.0f}, "<< his pick (if he were Smart random)");
+                if (smart) Tr::TextColored(ImGuiMCP::ImVec4{0.5f, 0.95f, 0.5f, 1.0f}, r.alt ? (RuleAlt(who, r) ? "<< APPLIED (the OR pair)" : "<< APPLIED (the first pair)") : "<< APPLIED");
+                else Tr::TextColored(ImGuiMCP::ImVec4{1.0f, 0.8f, 0.35f, 1.0f}, "<< his pick (if he were Smart random)");
             } else if (std::find(hits.begin(), hits.end(), static_cast<int>(i)) != hits.end()) {
                 ImGuiMCP::SameLine();
-                ImGuiMCP::TextDisabled("< matches him too");
+                Tr::TextDisabled("< matches him too");
             }
             ImGuiMCP::PopID();
         }
@@ -2890,14 +2892,14 @@ namespace Colour {
             g_rules.erase(g_rules.begin() + del);
             changed = true;
         }
-        if (g_rules.empty()) ImGuiMCP::TextDisabled("No rules yet.");
+        if (g_rules.empty()) Tr::TextDisabled("No rules yet.");
         ImGuiMCP::Spacing();
-        if (static_cast<int>(g_rules.size()) < kMaxRules && ImGuiMCP::Button("Add rule")) {
+        if (static_cast<int>(g_rules.size()) < kMaxRules && Tr::Button("Add rule")) {
             g_rules.push_back({});
             changed = true;
         }
         ImGuiMCP::SameLine();
-        if (static_cast<int>(g_rules.size()) < kMaxRules && ImGuiMCP::Button("Add a rule for the selected man's skin")) {
+        if (static_cast<int>(g_rules.size()) < kMaxRules && Tr::Button("Add a rule for the selected man's skin")) {
             if (RE::Actor* who = TestWho()) {
                 Rule r;
                 r.race = RaceKey(who->GetRace());
@@ -2920,7 +2922,7 @@ namespace Colour {
         }
         Help("The man you click in the console (~), or you: a new rule for his race and his exact skin tone, starting with "
              "the anus and anus blend (ring) colours he has now - pick the colours you want for skins like his.");
-        if (!g_ruleNote.empty()) ImGuiMCP::TextDisabled("%s", g_ruleNote.c_str());
+        if (!g_ruleNote.empty()) Tr::TextDisabled("%s", g_ruleNote.c_str());
         ImGuiMCP::SameLine();
         if (ConfirmButton("Load the default rules")) {
             g_rules = DefaultRules();
@@ -2953,18 +2955,18 @@ namespace Colour {
         // hotkeys: bound by pressing them (any key or mouse button, with Ctrl / Shift / Alt if you like)
         auto bindRow = [&](const char* what, int which, int& key, int& mods) {
             ImGuiMCP::PushID(which);
-            ImGuiMCP::Text("%s:", what);
+            Tr::Text("%s:", what);
             ImGuiMCP::SameLine();
             if (g_capture == which) {
-                ImGuiMCP::TextColored(ImGuiMCP::ImVec4{1.0f, 0.85f, 0.3f, 1.0f}, "press the keys now... (Esc = cancel)");
+                Tr::TextColored(ImGuiMCP::ImVec4{1.0f, 0.85f, 0.3f, 1.0f}, "press the keys now... (Esc = cancel)");
                 ImGuiMCP::SameLine();
-                if (ImGuiMCP::Button("Cancel")) g_capture = 0;
+                if (Tr::Button("Cancel")) g_capture = 0;
             } else {
-                ImGuiMCP::TextUnformatted(KeyLabel(key, mods).c_str());
+                Tr::TextUnformatted(KeyLabel(key, mods).c_str());
                 ImGuiMCP::SameLine();
-                if (ImGuiMCP::Button("Set")) g_capture = which;
+                if (Tr::Button("Set")) g_capture = which;
                 ImGuiMCP::SameLine();
-                if (ImGuiMCP::Button("Clear")) { key = 0; mods = 0; changed = true; }
+                if (Tr::Button("Clear")) { key = 0; mods = 0; changed = true; }
             }
             ImGuiMCP::PopID();
         };
@@ -2975,10 +2977,10 @@ namespace Colour {
         bindRow("Move the window", 2, g.moveKey, g.moveMods);
         Help("While the window is open: press it to unlock the window (mouse cursor, game paused for input), drag it by "
              "its title bar, then press it again or click Lock in place. The position is remembered.");
-        changed |= ImGuiMCP::Checkbox("Also show a one-line message when the hotkey is pressed", &g.statusMsg);
+        changed |= Tr::Checkbox("Also show a one-line message when the hotkey is pressed", &g.statusMsg);
         {
             bool open = g_winOpen;
-            if (ImGuiMCP::Checkbox("Show the status window now", &open)) {
+            if (Tr::Checkbox("Show the status window now", &open)) {
                 if (open) PickInspect();
                 g_winOpen = open; g_winMove = false; ApplyWindowState();
             }
@@ -2988,33 +2990,33 @@ namespace Colour {
         if (auto sel = RE::Console::GetSelectedRef()) a = sel->As<RE::Actor>();
         if (!a && g_inspect) a = RE::TESForm::LookupByID<RE::Actor>(g_inspect);
         if (!a) {
-            ImGuiMCP::TextWrapped("Open the console (~) and click a man (or use the hotkey on him), then come back here.");
+            Tr::TextWrapped("Open the console (~) and click a man (or use the hotkey on him), then come back here.");
             if (changed) SaveIni();
             return;
         }
         const Status st = StatusOf(a);
-        ImGuiMCP::SeparatorText(st.name.c_str());
-        ImGuiMCP::Text("Race: %s", st.race.c_str());
-        ImGuiMCP::Text("Colour pick: %s%s", st.colour.c_str(), st.own ? " (his own)" : "");
+        Tr::SeparatorText(st.name.c_str());
+        Tr::Text("Race: %s", st.race.c_str());
+        Tr::Text("Colour pick: %s%s", st.colour.c_str(), st.own ? " (his own)" : "");
         ColourRows(st);
         Help("Skin colour: his skin tone as the game tints it. Anus colour: the rim as Anatomica colours it (before "
              "reddening, bruising and wetness). Ring colour: the soft skin-blend ring around it (RaceMenu paint). Inside colour: the canal you see when he "
              "gapes, at the entrance (it gets darker further in).");
-        ImGuiMCP::Text("Wet %.0f%%   Red %.0f%%   Bruise %.0f%%   Swelling %.0f%%", st.wet * 100, st.tender * 100, st.bruise * 100, st.swell * 100);
-        ImGuiMCP::Text("Gape %.0f%%   Looseness %.0f%%   Schlong shine %.0f%%", st.gape * 100, st.loose * 100, st.schlong * 100);
-        ImGuiMCP::Text("This round: %d partner(s), %.0f s of penetration", st.partners, st.secs);
+        Tr::Text("Wet %.0f%%   Red %.0f%%   Bruise %.0f%%   Swelling %.0f%%", st.wet * 100, st.tender * 100, st.bruise * 100, st.swell * 100);
+        Tr::Text("Gape %.0f%%   Looseness %.0f%%   Schlong shine %.0f%%", st.gape * 100, st.loose * 100, st.schlong * 100);
+        Tr::Text("This round: %d partner(s), %.0f s of penetration", st.partners, st.secs);
         if (const auto dn = Engine::DuringOf(a->GetFormID()); dn.depth > -50.0f)
         {
-            ImGuiMCP::Text("Being taken: the tip is %.1f units in, the inside opened %.0f%%, the rim %+.2f units out%s", dn.depth, dn.hole * 100.0f, dn.ring,
+            Tr::Text("Being taken: the tip is %.1f units in, the inside opened %.0f%%, the rim %+.2f units out%s", dn.depth, dn.hole * 100.0f, dn.ring,
                            dn.held ? " (held in: the bones alone lost him)" : "");
         }
-        ImGuiMCP::TextUnformatted(Drip::Status(a).c_str());
-        ImGuiMCP::TextUnformatted(Virgin::Status(a).c_str());
+        Tr::TextUnformatted(Drip::Status(a).c_str());
+        Tr::TextUnformatted(Virgin::Status(a).c_str());
 
-        ImGuiMCP::SeparatorText("His own colour");
+        Tr::SeparatorText("His own colour");
         const std::string key = RefKey(a);
         bool own = g_perMan.count(key) > 0;
-        if (ImGuiMCP::Checkbox("Give him his own colour", &own)) {
+        if (Tr::Checkbox("Give him his own colour", &own)) {
             if (own) g_perMan[key] = ManSet{};
             else g_perMan.erase(key);
             changed = true;
@@ -3023,12 +3025,12 @@ namespace Colour {
         if (auto it = g_perMan.find(key); it != g_perMan.end()) {
             ImGuiMCP::Indent();
             changed |= ComboValue("Colour##man", &it->second.choice, 1, kDefaultItems, 9);
-            if (it->second.choice == kCustom) changed |= ImGuiMCP::ColorEdit3("His colour", it->second.rgb, kWheel);
+            if (it->second.choice == kCustom) changed |= Tr::ColorEdit3("His colour", it->second.rgb, kWheel);
             ImGuiMCP::Unindent();
         }
         if (changed) SaveIni();
         ImGuiMCP::Spacing();
-        ImGuiMCP::TextDisabled("Values update every \"Check every\" seconds (Colours page).");
+        Tr::TextDisabled("Values update every \"Check every\" seconds (Colours page).");
     }
 
     // ---------------------------------------------------------------- Testing page: make anything happen now
@@ -3092,7 +3094,7 @@ namespace Colour {
         RE::Actor* a = TestWho();
         static std::string last;
         auto act = [&](const char* label, auto&& fn) {
-            if (ImGuiMCP::Button(label)) last = std::string(label) + ": " + fn();
+            if (Tr::Button(label)) last = std::string(label) + ": " + fn();
         };
         // a test can only show what is switched on: say which of the features it needs are off (and where)
         auto off = [](std::initializer_list<std::pair<bool, const char*>> need) {
@@ -3107,20 +3109,20 @@ namespace Colour {
         };
         const bool gapeOn = gapeGlob(0x806), clenchOn = gapeGlob(0x80D);
         const bool picker = g.enabled, inScope = InScope(a);
-        ImGuiMCP::TextWrapped("Everything here happens to the man you click in the console (~), or to you if nobody is "
+        Tr::TextWrapped("Everything here happens to the man you click in the console (~), or to you if nobody is "
                               "selected. Close the menu to see it. Looks (colour, wetness, redness...) appear on the next "
                               "check (Colours page, \"Check every\").");
         {
             const double ago = g_lastLook > 0.0 ? Now() - g_lastLook : -1.0;
             float iv; { std::lock_guard lk(g_lock); iv = g.interval; }
-            if (ago < 0.0) ImGuiMCP::TextColored(ImGuiMCP::ImVec4{1, 0.5f, 0.4f, 1}, "The Anatomica script has not asked for any looks since loading.");
-            else if (ago > iv * 2.0 + 15.0) ImGuiMCP::TextColored(ImGuiMCP::ImVec4{1, 0.5f, 0.4f, 1}, "The Anatomica script last checked %.0f s ago - it looks stopped.", ago);
-            else ImGuiMCP::TextDisabled("The Anatomica script is running (last check %.0f s ago, %d men checked since loading).", ago, g_looks.load());
+            if (ago < 0.0) Tr::TextColored(ImGuiMCP::ImVec4{1, 0.5f, 0.4f, 1}, "The Anatomica script has not asked for any looks since loading.");
+            else if (ago > iv * 2.0 + 15.0) Tr::TextColored(ImGuiMCP::ImVec4{1, 0.5f, 0.4f, 1}, "The Anatomica script last checked %.0f s ago - it looks stopped.", ago);
+            else Tr::TextDisabled("The Anatomica script is running (last check %.0f s ago, %d men checked since loading).", ago, g_looks.load());
             ImGuiMCP::SameLine();
             act("Restart the script", [&] { KickScript(); return std::string("asked the gape script to start again"); });
-            ImGuiMCP::TextDisabled("%s", Engine::Status().c_str());
+            Tr::TextDisabled("%s", Engine::Status().c_str());
         }
-        ImGuiMCP::SeparatorText(a ? a->GetName() : "nobody");
+        Tr::SeparatorText(a ? a->GetName() : "nobody");
         if (!a) return;
 
         if (Section("Colour and ring")) {
@@ -3161,13 +3163,13 @@ namespace Colour {
             return std::string("tight again"); });
 
         if (kCum) {
-            ImGuiMCP::SeparatorText("Cum");
+            Tr::SeparatorText("Cum");
             Drip::RenderTests(a);
         }
 
         }
         if (Section("During sex")) {
-        ImGuiMCP::TextDisabled("Shows the belly bulge on him for 8 s, moving up and down (During sex page sliders not needed).");
+        Tr::TextDisabled("Shows the belly bulge on him for 8 s, moving up and down (During sex page sliders not needed).");
         for (int i = 1; i < During::kShapeCount; ++i) {
             if ((i - 1) % 4) ImGuiMCP::SameLine();
             act(std::format("Bulge: {}", During::ShapeName(i)).c_str(),
@@ -3190,7 +3192,7 @@ namespace Colour {
         }
 
         }
-        if (!last.empty()) { ImGuiMCP::Spacing(); ImGuiMCP::TextDisabled("Last: %s", last.c_str()); }
+        if (!last.empty()) { ImGuiMCP::Spacing(); Tr::TextDisabled("Last: %s", last.c_str()); }
     }
 
     void RegisterWindow() {
@@ -3209,37 +3211,37 @@ namespace Colour {
             body();
             ImGuiMCP::Unindent();
         };
-        ImGuiMCP::TextWrapped("Looks that follow anal sex and fade afterwards. Longer and rougher sex = stronger effect "
+        Tr::TextWrapped("Looks that follow anal sex and fade afterwards. Longer and rougher sex = stronger effect "
                               "(up to the strength set here). Every part can be switched off on its own.");
 
         // ---------------------------------------------------------------- wetness
         if (Section("Wetness")) {
-        changed |= ImGuiMCP::Checkbox("Wet shine after sex", &g.wet);
+        changed |= Tr::Checkbox("Wet shine after sex", &g.wet);
         Indented(g.wet, [&] {
             changed |= Pct("Shine strength", &g.wetStrength);
             Help("How wet he gets: a glassy, water-like shine on the rim and a clear wet layer over it. (The glossy skin "
                  "around the hole and up the crevice is its own effect, further down.)");
             changed |= Minutes("Dries in", &g.wetTime, 0.5f, 30.0f);
-            changed |= ImGuiMCP::Checkbox("Builds up over rounds", &g.wetBuild);
+            changed |= Tr::Checkbox("Builds up over rounds", &g.wetBuild);
             Help("Another round before he has dried adds to the wetness instead of starting again - he stays wet longer.");
             if (g.wetBuild) {
                 ImGuiMCP::SameLine();
                 float pct = g.wetCap * 100.0f;
                 ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 8.0f);
-                if (ImGuiMCP::SliderFloat("up to##cap", &pct, 100.0f, 300.0f, "%.0f%%")) {
+                if (Tr::SliderFloat("up to##cap", &pct, 100.0f, 300.0f, "%.0f%%")) {
                     g.wetCap = pct / 100.0f;
                     changed = true;
                 }
             }
             if (kLube) {   // coloured lube: switched off (it did not show well on the rim)
-            changed |= ImGuiMCP::Checkbox("Anus wear colour (outer rim)", &g.wetColourOn);
+            changed |= Tr::Checkbox("Anus wear colour (outer rim)", &g.wetColourOn);
             Help("Colours the clear wet layer over the outside of the rim (and tints the rim a little) while he is wet - "
                  "lube, cum, anything you like - fading as he dries.");
             Indented(g.wetColourOn, [&] {
-                changed |= ImGuiMCP::ColorEdit3("Wetness colour", g.wetColour, kWheel);
+                changed |= Tr::ColorEdit3("Wetness colour", g.wetColour, kWheel);
                 changed |= Pct("Colour amount", &g.wetColourAmt);
                 auto preset = [&](const char* label, float r, float gg, float b, float amt) {
-                    if (ImGuiMCP::Button(label)) {
+                    if (Tr::Button(label)) {
                         g.wetColour[0] = r, g.wetColour[1] = gg, g.wetColour[2] = b, g.wetColourAmt = amt;
                         changed = true;
                     }
@@ -3253,43 +3255,43 @@ namespace Colour {
                 preset("Blue lube", 0.45f, 0.65f, 0.95f, 0.35f);
             });
             }
-            changed |= ImGuiMCP::Checkbox("Extra gloss right after", &g.wetBurst);
+            changed |= Tr::Checkbox("Extra gloss right after", &g.wetBurst);
             Help("For the first moments after the last stroke he is glossier than the slider says, then settles.");
             Indented(g.wetBurst, [&] {
-                changed |= ImGuiMCP::SliderFloat("for##burst", &g.wetBurstSecs, 5.0f, 120.0f, "%.0f s");
+                changed |= Tr::SliderFloat("for##burst", &g.wetBurstSecs, 5.0f, 120.0f, "%.0f s");
                 changed |= Pct("extra##burst", &g.wetBurstBoost);
             });
-            changed |= ImGuiMCP::Checkbox("Anus wear colour (inner rim)", &g.wetCumOn);
+            changed |= Tr::Checkbox("Anus wear colour (inner rim)", &g.wetCumOn);
             Help("Separate from the outer rim colour above: colours the inner part of the rim - where it is worked - in its own "
                  "colour and opacity (cum, soreness, anything you like), fading as he dries.");
             Indented(g.wetCumOn, [&] {
-                changed |= ImGuiMCP::ColorEdit3("Wear colour##wc", g.wetCum, kWheel);
+                changed |= Tr::ColorEdit3("Wear colour##wc", g.wetCum, kWheel);
                 changed |= Pct("Wear opacity##wc", &g.wetCumAmt);
                 if (kCum) {   // per-race cum colours: only with the cum system (Features.h)
-                    changed |= ImGuiMCP::Checkbox("The giver's race colour when it has one##wc", &g.cumByRace);
+                    changed |= Tr::Checkbox("The giver's race colour when it has one##wc", &g.cumByRace);
                     Help("Per race page: races with a cum colour of their own use it here (also for the lube colour above).");
                 }
             });
-            changed |= ImGuiMCP::Checkbox("Wet shine colour", &g.shineColOn);
+            changed |= Tr::Checkbox("Wet shine colour", &g.shineColOn);
             Help("The wet highlights (the glints of light on the wet rim and inside) take a colour - pink, blue, gold... - as "
                  "if the wetness itself were coloured. Off = clear, like water. Fades with the wetness.");
             Indented(g.shineColOn, [&] {
-                changed |= ImGuiMCP::ColorEdit3("Shine colour", g.shineCol, kWheel);
+                changed |= Tr::ColorEdit3("Shine colour", g.shineCol, kWheel);
                 changed |= Pct("How strongly##shc", &g.shineColAmt);
             });
             {
                 float pct = g.innerWet * 100.0f;
-                if (ImGuiMCP::SliderFloat("Inside wetter than the rim", &pct, 0.0f, 300.0f, "%.0f%%")) { g.innerWet = pct / 100.0f; changed = true; }
+                if (Tr::SliderFloat("Inside wetter than the rim", &pct, 0.0f, 300.0f, "%.0f%%")) { g.innerWet = pct / 100.0f; changed = true; }
                 Help("While he is wet the inside (the canal) shines this much compared to the rim: 100% = the same, 200% = "
                      "twice as glassy, 0% = the inside does not get wetter after sex.");
             }
             Fluid::RenderWetSettings();
-            changed |= ImGuiMCP::Checkbox("Water dries it faster", &g.waterDry);
+            changed |= Tr::Checkbox("Water dries it faster", &g.waterDry);
             Help("Swimming, or standing outside in the rain, dries him faster.");
             if (g.waterDry) {
                 ImGuiMCP::SameLine();
                 ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 8.0f);
-                changed |= ImGuiMCP::SliderFloat("x faster##water", &g.waterDryMul, 1.0f, 10.0f, "x%.1f");
+                changed |= Tr::SliderFloat("x faster##water", &g.waterDryMul, 1.0f, 10.0f, "x%.1f");
             }
         });
         changed |= Pct("Always moist inside", &g.innerMoist);
@@ -3299,23 +3301,23 @@ namespace Colour {
         }
         if (Section("Wet schlong")) {
         if (kCum) {
-            ImGuiMCP::TextWrapped("The giver's schlong coming out wet with cum (gloss, streaks, a drip from the tip) is on the "
+            Tr::TextWrapped("The giver's schlong coming out wet with cum (gloss, streaks, a drip from the tip) is on the "
                                   "Cum & drips page now: \"His schlong comes out wet with cum\".");
         } else {
-            changed |= ImGuiMCP::Checkbox("The giver's schlong comes out wet", &g.schlongWet);
+            changed |= Tr::Checkbox("The giver's schlong comes out wet", &g.schlongWet);
             Help("After a round the partner's glans glistens wet (the skin itself, nothing on top), drying off over the "
                  "time set here.");
             Indented(g.schlongWet, [&] {
                 changed |= Pct("Shine strength##sw", &g.schlongStrength);
                 changed |= Minutes("Dries in##sw", &g.schlongTime, 0.5f, 60.0f);
                 if (kCum) {   // cum streaks: off for now with the rest of Anatomica's cum (Features.h); a fluid mod may do it later
-                changed |= ImGuiMCP::Checkbox("Cum on it (streaks)", &g.schlongCum);
+                changed |= Tr::Checkbox("Cum on it (streaks)", &g.schlongCum);
                 Help("Cum streaks running down his schlong in the colour and opacity set here, fading with the shine.");
                 Indented(g.schlongCum, [&] {
-                    if (kCum) changed |= ImGuiMCP::Checkbox("A drip from the tip now and then", &g.schlongDrip);
-                    changed |= ImGuiMCP::ColorEdit3("Cum colour##sc", g.schlongCumCol, kWheel);
+                    if (kCum) changed |= Tr::Checkbox("A drip from the tip now and then", &g.schlongDrip);
+                    changed |= Tr::ColorEdit3("Cum colour##sc", g.schlongCumCol, kWheel);
                     changed |= Pct("Cum opacity##sc", &g.schlongCumAmt);
-                    changed |= ImGuiMCP::Checkbox("His race's cum colour when it has one##sc", &g.schlongCumRace);
+                    changed |= Tr::Checkbox("His race's cum colour when it has one##sc", &g.schlongCumRace);
                 });
                 }
             });
@@ -3324,33 +3326,33 @@ namespace Colour {
         // ---------------------------------------------------------------- reddening
         }
         if (Section("Tender reddening")) {
-        changed |= ImGuiMCP::Checkbox("Tender reddening after sex", &g.tender);
+        changed |= Tr::Checkbox("Tender reddening after sex", &g.tender);
         Indented(g.tender, [&] {
             changed |= Pct("Reddening strength", &g.tenderStrength);
             changed |= Minutes("Fades in", &g.tenderTime, 0.5f, 60.0f);
-            changed |= ImGuiMCP::Checkbox("Also redden the skin-blend ring", &g.tenderBlend);
-            changed |= ImGuiMCP::Checkbox("Colour changes as it fades", &g.tenderStages);
+            changed |= Tr::Checkbox("Also redden the skin-blend ring", &g.tenderBlend);
+            changed |= Tr::Checkbox("Colour changes as it fades", &g.tenderStages);
             Help("Starts as the first colour, turns into the second, then fades back to normal.");
             Indented(g.tenderStages, [&] {
-                changed |= ImGuiMCP::ColorEdit3("Fresh", g.tenderCol1, kWheel);
-                changed |= ImGuiMCP::ColorEdit3("Later", g.tenderCol2, kWheel);
+                changed |= Tr::ColorEdit3("Fresh", g.tenderCol1, kWheel);
+                changed |= Tr::ColorEdit3("Later", g.tenderCol2, kWheel);
                 changed |= Pct("Turns to \"Later\" after (part of the fade time)", &g.tenderSplit);
             });
-            changed |= ImGuiMCP::Checkbox("More partners = redder", &g.tenderPartners);
+            changed |= Tr::Checkbox("More partners = redder", &g.tenderPartners);
             if (g.tenderPartners) {
                 ImGuiMCP::SameLine();
                 ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 8.0f);
                 changed |= Pct("per extra partner##pp", &g.tenderPerPartner);
             }
-            changed |= ImGuiMCP::Checkbox("Bruising after very long sex or many partners", &g.bruise);
+            changed |= Tr::Checkbox("Bruising after very long sex or many partners", &g.bruise);
             Indented(g.bruise, [&] {
-                changed |= ImGuiMCP::SliderInt("Partners in a row", &g.bruisePartners, 2, 6);
+                changed |= Tr::SliderInt("Partners in a row", &g.bruisePartners, 2, 6);
                 changed |= Minutes("or penetration lasting", &g.bruiseLong, 0.5f, 30.0f);
-                changed |= ImGuiMCP::ColorEdit3("Bruise colour", g.bruiseCol, kWheel);
+                changed |= Tr::ColorEdit3("Bruise colour", g.bruiseCol, kWheel);
                 changed |= Pct("Bruise strength", &g.bruiseStrength);
                 Help("A faint tint toward the outer edge of the rim. Lasts a little longer than the redness.");
             });
-            changed |= ImGuiMCP::Checkbox("Glossy skin round the hole and up the crevice", &g.glossy);
+            changed |= Tr::Checkbox("Glossy skin round the hole and up the crevice", &g.glossy);
             Help("After sex the skin around his hole and up the crevice has a clear, glassy wet layer, fading over its own "
                  "time - apart from the wetness of the hole itself (above).");
             Indented(g.glossy, [&] {
@@ -3358,34 +3360,34 @@ namespace Colour {
                 changed |= Minutes("Fades in##glossy", &g.glossyTime, 0.5f, 120.0f);
                 Fluid::RenderGlossSettings();
             });
-            changed |= ImGuiMCP::Checkbox("Swelling (puffy rim)", &g.swell);
+            changed |= Tr::Checkbox("Swelling (puffy rim)", &g.swell);
             Help("Needs the body built in BodySlide with \"Build Morphs\" ticked (Anatomica Swell / Anatomica Ring).");
             if (g.swell) {
                 ImGuiMCP::SameLine();
                 ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 8.0f);
                 changed |= Pct("##swell", &g.swellStrength);
                 ImGuiMCP::Indent();
-                changed |= ImGuiMCP::Checkbox("Ring-shaped (a raised ring round the hole)", &g.swellRing);
+                changed |= Tr::Checkbox("Ring-shaped (a raised ring round the hole)", &g.swellRing);
                 Help("On: the rim swells up into a raised ring with the hole sunk in the middle (Anatomica Ring). Off: a soft, even "
                      "puff of the whole rim (Anatomica Swell).");
                 ImGuiMCP::Unindent();
             }
-            changed |= ImGuiMCP::Checkbox("First time in a while = redder", &g.rested);
+            changed |= Tr::Checkbox("First time in a while = redder", &g.rested);
             Indented(g.rested, [&] {
                 changed |= Minutes("\"A while\" is", &g.restedMinutes, 5.0f, 600.0f);
                 changed |= Pct("extra redness##rested", &g.restedExtra);
             });
-            changed |= ImGuiMCP::Checkbox("Gape closes slower while tender", &g.slowClose);
+            changed |= Tr::Checkbox("Gape closes slower while tender", &g.slowClose);
             if (g.slowClose) {
                 ImGuiMCP::SameLine();
                 ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 8.0f);
                 float pct = g.slowCloseAmt * 100.0f;
-                if (ImGuiMCP::SliderFloat("longer##slow", &pct, 0.0f, 200.0f, "+%.0f%%")) {
+                if (Tr::SliderFloat("longer##slow", &pct, 0.0f, 200.0f, "+%.0f%%")) {
                     g.slowCloseAmt = pct / 100.0f;
                     changed = true;
                 }
             }
-            changed |= ImGuiMCP::Checkbox("Sensitive while tender", &g.sensitive);
+            changed |= Tr::Checkbox("Sensitive while tender", &g.sensitive);
             Help("While he is still red, the clenches are sharper and the breathing slower (Movement page).");
             Indented(g.sensitive, [&] {
                 changed |= Pct("Sharper clenches", &g.sensClench);
@@ -3396,7 +3398,7 @@ namespace Colour {
         // ---------------------------------------------------------------- looseness
         }
         if (Section("Lasting looseness")) {
-        changed |= ImGuiMCP::Checkbox("Each round leaves him a little looser", &g.loose);
+        changed |= Tr::Checkbox("Each round leaves him a little looser", &g.loose);
         Help("A small gape that stays after the after-sex gape has closed and heals over game days. Saved with each "
              "man (RaceMenu body morph). Turning this off lets every man heal back over the next minutes.");
         Indented(g.loose, [&] {
@@ -3406,31 +3408,31 @@ namespace Colour {
         });
 
         if (kCum) {
-            ImGuiMCP::SeparatorText("Drips");
-            ImGuiMCP::TextDisabled("Strands, squirts, puddles and the leg trail have their own page: Cum & drips.");
+            Tr::SeparatorText("Drips");
+            Tr::TextDisabled("Strands, squirts, puddles and the leg trail have their own page: Cum & drips.");
         }
 
         // ---------------------------------------------------------------- healing
         }
         if (Section("Healing")) {
-        changed |= ImGuiMCP::Checkbox("Sleeping or waiting clears everything", &g.healSleep);
-        changed |= ImGuiMCP::Checkbox("Health potions heal redness, bruising and swelling (a bit at a time)", &g.healMagic);
+        changed |= Tr::Checkbox("Sleeping or waiting clears everything", &g.healSleep);
+        changed |= Tr::Checkbox("Health potions heal redness, bruising and swelling (a bit at a time)", &g.healMagic);
         Help("A health potion heals by how much health it gives back. Several in a row add up. Only health potions count "
              "unless you switch the others on below - NPCs get all kinds of effects from other mods.");
         Indented(g.healMagic, [&] {
-            changed |= ImGuiMCP::SliderFloat("Per point of health", &g.healPotion, 0.0f, 5.0f, "%.2f%%");
+            changed |= Tr::SliderFloat("Per point of health", &g.healPotion, 0.0f, 5.0f, "%.2f%%");
             Help("A potion that restores 50 health heals 25% at 0.5%; an ultimate one (100+) about half or more.");
-            changed |= ImGuiMCP::Checkbox("Food and drink count too", &g.healFoodOn);
+            changed |= Tr::Checkbox("Food and drink count too", &g.healFoodOn);
             if (g.healFoodOn) {
                 ImGuiMCP::SameLine();
                 ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 8.0f);
-                changed |= ImGuiMCP::SliderFloat("per point##food", &g.healFood, 0.0f, 2.0f, "%.2f%%");
+                changed |= Tr::SliderFloat("per point##food", &g.healFood, 0.0f, 2.0f, "%.2f%%");
             }
-            changed |= ImGuiMCP::Checkbox("Healing spells count too", &g.healSpellOn);
+            changed |= Tr::Checkbox("Healing spells count too", &g.healSpellOn);
             if (g.healSpellOn) {
                 ImGuiMCP::SameLine();
                 ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 8.0f);
-                changed |= ImGuiMCP::SliderFloat("per cast##spell", &g.healSpell, 0.0f, 100.0f, "%.0f%%");
+                changed |= Tr::SliderFloat("per cast##spell", &g.healSpell, 0.0f, 100.0f, "%.0f%%");
             }
         });
 
@@ -3469,6 +3471,6 @@ namespace Colour {
         }
         if (changed) SaveIni();
         ImGuiMCP::Spacing();
-        ImGuiMCP::TextDisabled("Updates every \"Check every\" seconds (Colours page). Nothing extra is saved: it fades on its own.");
+        Tr::TextDisabled("Updates every \"Check every\" seconds (Colours page). Nothing extra is saved: it fades on its own.");
     }
 }

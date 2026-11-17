@@ -1,4 +1,6 @@
 #include "During.h"
+#include "Align.h"
+#include "Lang.h"
 #include "Colour.h"
 #include "SKSEMenuFramework.h"
 #include "Mnc.h"
@@ -79,9 +81,10 @@ namespace {
         const auto a = s.find_first_not_of(" \t\r\n"), b = s.find_last_not_of(" \t\r\n");
         return a == std::string::npos ? std::string() : s.substr(a, b - a + 1);
     }
-    std::vector<std::string> Lines() {
+    constexpr const char* kTomlBottom = "Data/SKSE/Plugins/ppa-override-configs/anatomica_bottom.toml";   // 2.5v: its anus copy follows
+    std::vector<std::string> Lines(const char* path = kToml) {
         std::vector<std::string> out;
-        std::ifstream f(kToml);
+        std::ifstream f(path);
         for (std::string l; std::getline(f, l);) out.push_back(l);
         return out;
     }
@@ -120,8 +123,16 @@ namespace {
             for (const auto& kk : kKeys) if (k == kk.name) g_t.*kk.v = v;
         }
     }
+    bool WriteTomlTo(const char* path);
     bool WriteToml() {
-        auto L = Lines();
+        if (!WriteTomlTo(kToml)) return false;
+        std::error_code ec;
+        if (std::filesystem::exists(kTomlBottom, ec)) WriteTomlTo(kTomlBottom);   // the bottom's copy of the same settings
+        return true;
+    }
+    bool WriteTomlTo(const char* path) {
+        const std::string kTomlP = path;
+        auto L = Lines(path);
         size_t a = 0, b = 0;
         if (!Section(L, a, b)) return false;
         for (const auto& kk : kKeys) {
@@ -133,7 +144,7 @@ namespace {
             }
             if (!done) { L.insert(L.begin() + static_cast<std::ptrdiff_t>(a), line); ++b; }
         }
-        const std::string tmp = std::string(kToml) + ".tmp";
+        const std::string tmp = kTomlP + ".tmp";
         {
             std::ofstream o(tmp, std::ios::trunc);
             if (!o) return false;
@@ -141,10 +152,10 @@ namespace {
             if (!o) return false;
         }
         std::error_code ec;
-        std::filesystem::rename(tmp, kToml, ec);
+        std::filesystem::rename(tmp, kTomlP, ec);
         if (ec) {   // some setups cannot replace the file: write it in place
             std::filesystem::remove(tmp, ec);
-            std::ofstream o(kToml, std::ios::trunc);
+            std::ofstream o(kTomlP, std::ios::trunc);
             if (!o) return false;
             for (const auto& l : L) o << l << "\n";
             return static_cast<bool>(o);
@@ -154,11 +165,11 @@ namespace {
 
     void Help(const char* t) {
         ImGuiMCP::SameLine();
-        ImGuiMCP::TextDisabled("(?)");
+        Tr::TextDisabled("(?)");
         if (ImGuiMCP::IsItemHovered()) {
             ImGuiMCP::BeginTooltip();
             ImGuiMCP::PushTextWrapPos(ImGuiMCP::GetFontSize() * 30.0f);
-            ImGuiMCP::TextUnformatted(t);
+            Tr::TextUnformatted(t);
             ImGuiMCP::PopTextWrapPos();
             ImGuiMCP::EndTooltip();
         }
@@ -243,6 +254,7 @@ namespace During {
         if (save) ini.SetLongValue(S, "BulgeWho", g_bulgeWho);
         else g_bulgeWho = std::clamp(static_cast<int>(ini.GetLongValue(S, "BulgeWho", g_bulgeWho)), 0, 2);
         Mnc::Ini(ini, save);
+        Align::Ini(ini, save);   // 2.5v [BottomAlign]
     }
     const char* ShapeName(int shape) {
         static const char* n[kShapeCount] = {"From his schlong", "A bump at the tip", "The whole shaft", "Horse (flared head)",
@@ -257,30 +269,30 @@ namespace During {
         for (int i = 1; i < kShapeCount; ++i) opts[i] = ShapeName(i);
         bool c = false;
         ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 13.0f);
-        c |= ImGuiMCP::Combo(std::format("Bulge shape##bs_{}", id).c_str(), &shape, opts, kShapeCount);
+        c |= Tr::Combo(std::format("Bulge shape##bs_{}", id).c_str(), &shape, opts, kShapeCount);
         bool k1 = k.mask & 1, k2 = k.mask & 2, kc = false;
-        ImGuiMCP::SameLine(); kc |= ImGuiMCP::Checkbox(std::format("Knot 1##k1_{}", id).c_str(), &k1);
-        ImGuiMCP::SameLine(); kc |= ImGuiMCP::Checkbox(std::format("Knot 2##k2_{}", id).c_str(), &k2);
+        ImGuiMCP::SameLine(); kc |= Tr::Checkbox(std::format("Knot 1##k1_{}", id).c_str(), &k1);
+        ImGuiMCP::SameLine(); kc |= Tr::Checkbox(std::format("Knot 2##k2_{}", id).c_str(), &k2);
         if (kc) { k.mask = (k1 ? 1 : 0) | (k2 ? 2 : 0); c = true; }
         const bool show1 = k1 || shape == kKnot || shape == kDoubleKnot, show2 = k2 || shape == kDoubleKnot;
         if (show1) {
             float v = k.k1 * 100.0f;
             ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 10.0f);
-            if (ImGuiMCP::SliderFloat(std::format("Knot 1 strength##s1_{}", id).c_str(), &v, 0.0f, 200.0f, "%.0f%%")) { k.k1 = v / 100.0f; c = true; }
+            if (Tr::SliderFloat(std::format("Knot 1 strength##s1_{}", id).c_str(), &v, 0.0f, 200.0f, "%.0f%%")) { k.k1 = v / 100.0f; c = true; }
         }
         if (show2) {
             float v = k.k2 * 100.0f;
             if (show1) ImGuiMCP::SameLine();
             ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 10.0f);
-            if (ImGuiMCP::SliderFloat(std::format("Knot 2 strength##s2_{}", id).c_str(), &v, 0.0f, 200.0f, "%.0f%%")) { k.k2 = v / 100.0f; c = true; }
+            if (Tr::SliderFloat(std::format("Knot 2 strength##s2_{}", id).c_str(), &v, 0.0f, 200.0f, "%.0f%%")) { k.k2 = v / 100.0f; c = true; }
         }
         {   // 2.5s: this schlong's own shaft / head strength (on top of the During sex page's)
             float sv = k.shaftK * 100.0f, hv = k.headK * 100.0f;
             ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 10.0f);
-            if (ImGuiMCP::SliderFloat(std::format("Shaft##sk_{}", id).c_str(), &sv, 0.0f, 200.0f, "%.0f%%")) { k.shaftK = sv / 100.0f; c = true; }
+            if (Tr::SliderFloat(std::format("Shaft##sk_{}", id).c_str(), &sv, 0.0f, 200.0f, "%.0f%%")) { k.shaftK = sv / 100.0f; c = true; }
             ImGuiMCP::SameLine();
             ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 10.0f);
-            if (ImGuiMCP::SliderFloat(std::format("Head##hk_{}", id).c_str(), &hv, 0.0f, 200.0f, "%.0f%%")) { k.headK = hv / 100.0f; c = true; }
+            if (Tr::SliderFloat(std::format("Head##hk_{}", id).c_str(), &hv, 0.0f, 200.0f, "%.0f%%")) { k.headK = hv / 100.0f; c = true; }
             Help("This schlong's own bulge strength: the shaft (the sections up his belly) and the head at the front. 100% = no "
                  "change; they multiply the Shaft / Head strength on the During sex page, which set it for everyone.");
         }
@@ -300,7 +312,7 @@ namespace During {
         bool ch = false;
         static const char* szn[3] = {"XS / S / M, or size not known", "L", "XL"};
         for (int i = 0; i < 3; ++i) {
-            ImGuiMCP::TextUnformatted(szn[i]);
+            Tr::TextUnformatted(szn[i]);
             int v = g_sizeShape[i];
             if (BulgeChoice(v, g_sizeKnots[i], std::format("sz{}", i), "A bump at the tip")) { g_sizeShape[i] = std::max(1, v); ch = true; }
         }
@@ -398,22 +410,22 @@ namespace During {
     void __stdcall RenderPage() {
         if (!g_read) ReadToml();
         bool changed = false;
-        ImGuiMCP::TextWrapped("How he looks and how tight he is while he is being taken. (What happens after the scene is on the "
+        Tr::TextWrapped("How he looks and how tight he is while he is being taken. (What happens after the scene is on the "
                               "Gape, Movement and After sex pages.)");
         ImGuiMCP::Separator();
 
-        if (ImGuiMCP::CollapsingHeader("How tight he is (PPA)###tight")) {
+        if (Tr::CollapsingHeader("How tight he is (PPA)###tight")) {
             if (!g_found) {
-                ImGuiMCP::TextColored(ImGuiMCP::ImVec4{1.0f, 0.45f, 0.4f, 1.0f},
+                Tr::TextColored(ImGuiMCP::ImVec4{1.0f, 0.45f, 0.4f, 1.0f},
                                       "Needs the installer's \"PPA integration\" option (and Penetration Physics / PPA): its file "
                                       "SKSE\\Plugins\\ppa-override-configs\\anatomica.toml was not found.");
                 ImGuiMCP::BeginDisabled();
             }
-            ImGuiMCP::TextWrapped("PPA (Penetration Physics) places the schlong in him and grips it. These are PPA's settings for "
+            Tr::TextWrapped("PPA (Penetration Physics) places the schlong in him and grips it. These are PPA's settings for "
                                   "Anatomica's anus - every man with Anatomica's skeleton bones.");
             static const char* presets[] = {"Choose a preset...", "Very tight", "Tight", "Anatomica default", "Loose", "Very loose"};
             static int pick = 0;
-            if (ImGuiMCP::Combo("Preset", &pick, presets, 6) && pick > 0) {
+            if (Tr::Combo("Preset", &pick, presets, 6) && pick > 0) {
                 constexpr float sc[5][2] = {{0.25f, 0.80f}, {0.32f, 0.95f}, {0.40f, 1.10f}, {0.55f, 1.50f}, {0.70f, 2.00f}};
                 g_t.scale = sc[pick - 1][0];
                 g_t.scaleMax = sc[pick - 1][1];
@@ -422,85 +434,85 @@ namespace During {
                 changed = true;
             }
             Help("Sets how far and how wide he opens. \"Anatomica default\" puts every setting below back to what the mod ships.");
-            changed |= ImGuiMCP::SliderFloat("How far he opens around the schlong", &g_t.scale, 0.0f, 1.5f, "%.2f");
+            changed |= Tr::SliderFloat("How far he opens around the schlong", &g_t.scale, 0.0f, 1.5f, "%.2f");
             Help("PPA \"Scale\": how far the ring spreads for a schlong. Lower = tighter, he grips the shaft; higher = he opens "
                  "wider. Anatomica ships 0.40 (PPA's own default, 2.0, tears the cleft open on this mesh).");
-            changed |= ImGuiMCP::SliderFloat("The widest he can open", &g_t.scaleMax, 0.3f, 3.0f, "%.2f");
+            changed |= Tr::SliderFloat("The widest he can open", &g_t.scaleMax, 0.3f, 3.0f, "%.2f");
             Help("PPA \"ScaleMax\": a cap for big schlongs. Lower = even a huge one only opens him so far.");
-            changed |= ImGuiMCP::SliderFloat("Grip on the shaft (drag)", &g_t.grip, 0.0f, 2.0f, "%.2f");
+            changed |= Tr::SliderFloat("Grip on the shaft (drag)", &g_t.grip, 0.0f, 2.0f, "%.2f");
             Help("PPA \"GripStrength\": how hard the rim holds onto the shaft - drawn in on the push, pulled out (a small pucker) "
                  "on the withdraw. 0 = no drag.");
-            changed |= ImGuiMCP::SliderFloat("Drawn in on the push", &g_t.fwd, 0.0f, 3.0f, "%.2f");
+            changed |= Tr::SliderFloat("Drawn in on the push", &g_t.fwd, 0.0f, 3.0f, "%.2f");
             Help("PPA \"GripClampForward\": how far the grip may pull the rim into his body.");
-            changed |= ImGuiMCP::SliderFloat("Pulled out on the withdraw", &g_t.back, 0.0f, 1.5f, "%.2f");
+            changed |= Tr::SliderFloat("Pulled out on the withdraw", &g_t.back, 0.0f, 1.5f, "%.2f");
             Help("PPA \"GripClampBackward\": how far the grip may pull the rim out of his body (the pucker). Over 0.6 can look "
                  "extreme.");
-            changed |= ImGuiMCP::SliderFloat("Rubbing", &g_t.rub, 0.0f, 3.0f, "%.2f");
+            changed |= Tr::SliderFloat("Rubbing", &g_t.rub, 0.0f, 3.0f, "%.2f");
             Help("PPA \"RubIntensity\": how much the rim moves with each stroke.");
             if (changed) g_note = "Not saved yet - press Save to PPA.";
-            if (ImGuiMCP::Button("Save to PPA")) {
+            if (Tr::Button("Save to PPA")) {
                 g_note = WriteToml() ? "Saved. Press F5 in game (PPA's reload key) to use it now, or it applies at the next game start."
                                      : "Could not write anatomica.toml (is the PPA integration option installed?).";
                 if (g_note[0] == 'S') logger::info("Anatomica: PPA tightness saved (Scale {:.2f}, ScaleMax {:.2f}, Grip {:.2f})", g_t.scale, g_t.scaleMax, g_t.grip);
             }
             ImGuiMCP::SameLine();
-            if (ImGuiMCP::Button("Read again")) { ReadToml(); g_note = "Read from anatomica.toml."; }
-            if (!g_note.empty()) ImGuiMCP::TextWrapped("%s", g_note.c_str());
-            ImGuiMCP::TextDisabled("PPA's settings are for every man at once. Saved in PPA's file, not in your Anatomica presets.");
+            if (Tr::Button("Read again")) { ReadToml(); g_note = "Read from anatomica.toml."; }
+            if (!g_note.empty()) Tr::TextWrapped("%s", g_note.c_str());
+            Tr::TextDisabled("PPA's settings are for every man at once. Saved in PPA's file, not in your Anatomica presets.");
             if (!g_found) ImGuiMCP::EndDisabled();
         }
 
-        if (ImGuiMCP::CollapsingHeader("The hole, the rim and the inside###inside")) {
-            ImGuiMCP::TextDisabled("These use Anatomica's own sliders (Anatomica Gape / Canal / Pout / Bulge 1-5): rebuild the body in "
+        if (Tr::CollapsingHeader("The hole, the rim and the inside###inside")) {
+            Tr::TextDisabled("These use Anatomica's own sliders (Anatomica Gape / Canal / Pout / Bulge 1-5): rebuild the body in "
                                    "BodySlide with \"Build Morphs\" ticked after updating Anatomica.");
             bool ch = false;
             std::lock_guard lk(g_wmx);
-            ch |= ImGuiMCP::Checkbox("Open the inside round the schlong", &g_canalOn);
+            ch |= Tr::Checkbox("Open the inside round the schlong", &g_canalOn);
             Help("While a schlong is in him the canal opens along its length, so the shaft no longer pushes through the inside "
                  "walls, opened by his partner's size. Recommended on.");
             if (g_canalOn) {
                 float pct = g_w.canal * 100.0f;
-                if (ImGuiMCP::SliderFloat("How wide inside", &pct, 0.0f, 150.0f, "%.0f%%")) { g_w.canal = pct / 100.0f; ch = true; }
+                if (Tr::SliderFloat("How wide inside", &pct, 0.0f, 150.0f, "%.0f%%")) { g_w.canal = pct / 100.0f; ch = true; }
             }
-            ch |= ImGuiMCP::Checkbox("The rim follows the shaft", &g_w.ring);
+            ch |= Tr::Checkbox("The rim follows the shaft", &g_w.ring);
             Help("The whole anus - the rim, the skin round it and the first part of the inside - moves with the shaft: drawn into "
                  "him on each push, pulled out with it on each withdraw, settling back as the strokes stop. Each way has its own "
                  "limit.");
             if (g_w.ring) {
                 float gp = g_w.grip * 100.0f;
-                if (ImGuiMCP::SliderFloat("Grip on the shaft", &gp, 0.0f, 150.0f, "%.0f%%")) { g_w.grip = gp / 100.0f; ch = true; }
+                if (Tr::SliderFloat("Grip on the shaft", &gp, 0.0f, 150.0f, "%.0f%%")) { g_w.grip = gp / 100.0f; ch = true; }
                 Help("How much of each stroke the anus follows: 100% = it moves almost as far as the shaft does (up to the limits "
                      "below), 30% = a light tug.");
-                ch |= ImGuiMCP::SliderFloat("Most it is pulled out", &g_w.maxOut, 0.0f, 3.0f, "%.2f units");
+                ch |= Tr::SliderFloat("Most it is pulled out", &g_w.maxOut, 0.0f, 3.0f, "%.2f units");
                 Help("The farthest it may stick out of him on a withdraw (game units, about 1.4 cm each). 0.5 is natural, 1.0 a big "
                      "pout, 2-3 extreme.");
-                ch |= ImGuiMCP::SliderFloat("Most it is drawn in", &g_w.maxIn, 0.0f, 3.0f, "%.2f units");
+                ch |= Tr::SliderFloat("Most it is drawn in", &g_w.maxIn, 0.0f, 3.0f, "%.2f units");
                 Help("The farthest it may be drawn into him on a push.");
                 float gr = g_w.grow * 100.0f;
-                if (ImGuiMCP::SliderFloat("Pull-out grows as he is worked", &gr, 0.0f, 200.0f, "+%.0f%%")) { g_w.grow = gr / 100.0f; ch = true; }
+                if (Tr::SliderFloat("Pull-out grows as he is worked", &gr, 0.0f, 200.0f, "+%.0f%%")) { g_w.grow = gr / 100.0f; ch = true; }
                 Help("The pull-out limit grows over the scene as he is worked open, by up to this much (+100% = twice as far by the "
                      "end, +200% = three times). 0% = it never grows. It goes back with the gape after the scene.");
             }
-            ch |= ImGuiMCP::Checkbox("Belly bulge", &g_bulgeOn);
+            ch |= Tr::Checkbox("Belly bulge", &g_bulgeOn);
             Help("When the tip is deep in him his lower belly bulges where it is, and the bump moves up and down with each "
                  "stroke. Off by default.");
             if (g_bulgeOn) {
                 float pct = g_w.bulge * 100.0f;
-                if (ImGuiMCP::SliderFloat("Bulge strength", &pct, 0.0f, 200.0f, "%.0f%%")) { g_w.bulge = pct / 100.0f; ch = true; }
+                if (Tr::SliderFloat("Bulge strength", &pct, 0.0f, 200.0f, "%.0f%%")) { g_w.bulge = pct / 100.0f; ch = true; }
                 Help("The bulge shapes are built extreme, so 100% is the full, very obvious shape: 20-40% is a natural bump, "
                      "100% extreme, more than that exaggerated.");
                 {
                     float sk = g_w.shaftK * 100.0f, hk = g_w.headK * 100.0f;
-                    if (ImGuiMCP::SliderFloat("Shaft strength", &sk, 0.0f, 200.0f, "%.0f%%")) { g_w.shaftK = sk / 100.0f; ch = true; }
+                    if (Tr::SliderFloat("Shaft strength", &sk, 0.0f, 200.0f, "%.0f%%")) { g_w.shaftK = sk / 100.0f; ch = true; }
                     Help("Only the shaft part (the sections up his belly, the Long tentacle too), on top of Bulge strength. 100% = as built. "
                          "For everyone: each schlong type can add its own on top (Integrations page).");
-                    if (ImGuiMCP::SliderFloat("Head strength", &hk, 0.0f, 200.0f, "%.0f%%")) { g_w.headK = hk / 100.0f; ch = true; }
+                    if (Tr::SliderFloat("Head strength", &hk, 0.0f, 200.0f, "%.0f%%")) { g_w.headK = hk / 100.0f; ch = true; }
                     Help("Only the head at the front (round, flared, colossal or hooked), on top of Bulge strength. For everyone: each "
                          "schlong type can add its own on top (Integrations page).");
-                    ImGuiMCP::TextDisabled("How strong it ends up: Bulge strength x Shaft / Head strength here x that schlong's own Shaft / "
+                    Tr::TextDisabled("How strong it ends up: Bulge strength x Shaft / Head strength here x that schlong's own Shaft / "
                                            "Head (Integrations page, 100%% = no change). Knots: that schlong's Knot 1 / 2 strength.");
                 }
-                ch |= ImGuiMCP::Checkbox("Super deep", &g_w.deep);
+                ch |= Tr::Checkbox("Super deep", &g_w.deep);
                 Help("Some scenes go further: two more sections up his belly, almost to his chest, with the head at the end. "
                      "Rolled at the start of each scene. Works with every shape (rebuild the body with Build Morphs: the "
                      "Anatomica Bulge Deep sliders). The head travels the whole longer path, so it reaches the top only at "
@@ -508,89 +520,89 @@ namespace During {
                 if (g_w.deep) {
                     float dc = g_w.deepChance * 100.0f;
                     ImGuiMCP::Indent();
-                    if (ImGuiMCP::SliderFloat("Chance per scene", &dc, 0.0f, 100.0f, "%.0f%%")) { g_w.deepChance = dc / 100.0f; ch = true; }
+                    if (Tr::SliderFloat("Chance per scene", &dc, 0.0f, 100.0f, "%.0f%%")) { g_w.deepChance = dc / 100.0f; ch = true; }
                     Help("Rolled once when a scene's bulge first shows (after half a minute without one). 100% = every scene.");
                     const std::string last = Engine::LastDeepRoll();
-                    ImGuiMCP::TextDisabled("%s", last.empty() ? "No scene rolled yet this session." : last.c_str());
+                    Tr::TextDisabled("%s", last.empty() ? "No scene rolled yet this session." : last.c_str());
                     ImGuiMCP::Unindent();
                 }
-                if (ImGuiMCP::TreeNode("Stomach###stomach")) {
+                if (Tr::TreeNode("Stomach###stomach")) {
                     float b = g_w.belly * 100.0f, r = g_w.bellyRandom * 100.0f;
-                    if (ImGuiMCP::SliderFloat("Stomach strength", &b, 0.0f, 200.0f, "%.0f%%")) { g_w.belly = b / 100.0f; ch = true; }
+                    if (Tr::SliderFloat("Stomach strength", &b, 0.0f, 200.0f, "%.0f%%")) { g_w.belly = b / 100.0f; ch = true; }
                     Help("The whole lower belly rounds out around the shaft (Anatomica Bulge Belly), on top of Bulge strength. 0% = off.");
-                    ch |= ImGuiMCP::SliderFloat("Stomach rises over", &g_w.bellyTime, 1.0f, 180.0f, "%.0f s");
+                    ch |= Tr::SliderFloat("Stomach rises over", &g_w.bellyTime, 1.0f, 180.0f, "%.0f s");
                     Help("How long it takes to rise to its full size while he is taken. It goes back down after, more slowly.");
-                    if (ImGuiMCP::SliderFloat("Stomach randomness", &r, 0.0f, 100.0f, "%.0f%%")) { g_w.bellyRandom = r / 100.0f; ch = true; }
+                    if (Tr::SliderFloat("Stomach randomness", &r, 0.0f, 100.0f, "%.0f%%")) { g_w.bellyRandom = r / 100.0f; ch = true; }
                     Help("How much it swells and settles from stroke to stroke. 0% = it rises evenly.");
                     ImGuiMCP::TreePop();
                 }
-                ImGuiMCP::TextDisabled("The bulge's shape (and knots) comes from his partner's schlong: set for each schlong type and "
+                Tr::TextDisabled("The bulge's shape (and knots) comes from his partner's schlong: set for each schlong type and "
                                        "size on the Integrations page, under Partner size and shape%s.", Mnc::Active() ? " (creatures: More Nasty Critters)" : "");
-                if (ImGuiMCP::TreeNode("Movement for each shape###moves")) {
-                    ImGuiMCP::TextDisabled("Travelling: the head runs up and back down by itself, at its own pace (speed below).");
-                    ImGuiMCP::TextDisabled("Twitching: small, sudden jumps now and then.");
-                    ImGuiMCP::TextDisabled("Build-up: grows to the full shape over time instead of at once.");
+                if (Tr::TreeNode("Movement for each shape###moves")) {
+                    Tr::TextDisabled("Travelling: the head runs up and back down by itself, at its own pace (speed below).");
+                    Tr::TextDisabled("Twitching: small, sudden jumps now and then.");
+                    Tr::TextDisabled("Build-up: grows to the full shape over time instead of at once.");
                     if (ImGuiMCP::BeginTable("##mv", 4)) {
                         for (int i = 1; i < kShapeCount; ++i) {
                             ImGuiMCP::TableNextRow();
-                            ImGuiMCP::TableNextColumn(); ImGuiMCP::TextUnformatted(ShapeName(i));
-                            ImGuiMCP::TableNextColumn(); ch |= ImGuiMCP::Checkbox(std::format("Travelling##tr{}", i).c_str(), &g_w.travel[i]);
-                            ImGuiMCP::TableNextColumn(); ch |= ImGuiMCP::Checkbox(std::format("Twitching##tw{}", i).c_str(), &g_w.twitch[i]);
-                            ImGuiMCP::TableNextColumn(); ch |= ImGuiMCP::Checkbox(std::format("Build-up##bu{}", i).c_str(), &g_w.build[i]);
+                            ImGuiMCP::TableNextColumn(); Tr::TextUnformatted(ShapeName(i));
+                            ImGuiMCP::TableNextColumn(); ch |= Tr::Checkbox(std::format("Travelling##tr{}", i).c_str(), &g_w.travel[i]);
+                            ImGuiMCP::TableNextColumn(); ch |= Tr::Checkbox(std::format("Twitching##tw{}", i).c_str(), &g_w.twitch[i]);
+                            ImGuiMCP::TableNextColumn(); ch |= Tr::Checkbox(std::format("Build-up##bu{}", i).c_str(), &g_w.build[i]);
                         }
                         ImGuiMCP::EndTable();
                     }
                     {
                         float ts = g_w.travelSpeed * 100.0f;
-                        if (ImGuiMCP::SliderFloat("Travelling speed", &ts, 10.0f, 200.0f, "%.0f%%")) { g_w.travelSpeed = ts / 100.0f; ch = true; }
+                        if (Tr::SliderFloat("Travelling speed", &ts, 10.0f, 200.0f, "%.0f%%")) { g_w.travelSpeed = ts / 100.0f; ch = true; }
                         Help("100% = once up and back for each of his thrusts (as fast as he is going); 50% = every other "
                              "thrust; 200% = twice per thrust. When he is still it keeps the pace of his last strokes.");
                     }
-                    ch |= ImGuiMCP::SliderFloat("Build-up time", &g_w.buildTime, 1.0f, 60.0f, "%.0f s");
+                    ch |= Tr::SliderFloat("Build-up time", &g_w.buildTime, 1.0f, 60.0f, "%.0f s");
                     Help("How long the build-up takes to reach the full shape. It still moves in and out with his strokes while it grows.");
-                    ch |= ImGuiMCP::Checkbox("Hold the shape when full", &g_w.holdFull);
+                    ch |= Tr::Checkbox("Hold the shape when full", &g_w.holdFull);
                     Help("Build-up: once it is full the shaft stays where it got to and only the head keeps moving.");
                     ImGuiMCP::TreePop();
                 }
                 float rnd = g_w.bulgeRandom * 100.0f;
-                if (ImGuiMCP::SliderFloat("Randomness", &rnd, 0.0f, 100.0f, "%.0f%%")) { g_w.bulgeRandom = rnd / 100.0f; ch = true; }
+                if (Tr::SliderFloat("Randomness", &rnd, 0.0f, 100.0f, "%.0f%%")) { g_w.bulgeRandom = rnd / 100.0f; ch = true; }
                 Help("Each stroke is a little different - how high it rises and how big it gets. 0% = the same every stroke.");
-                ch |= ImGuiMCP::SliderFloat("Shows from this deep", &g_w.bulgeStart, 2.0f, 30.0f, "%.0f units");
+                ch |= Tr::SliderFloat("Shows from this deep", &g_w.bulgeStart, 2.0f, 30.0f, "%.0f units");
                 Help("How far in the tip has to be (game units, about 1.4 cm each) before the bulge starts. Then it fills up his "
                      "belly over the rest of each stroke (as deep as his strokes have been reaching, at least 10 units): section by "
                      "section from the bottom, the head running up ahead of it and back down as he pulls out. Lower = even average "
                      "schlongs show; higher = only very long ones.");
-                ch |= ImGuiMCP::Checkbox("Only from big partners (L and XL)", &g_w.bulgeBig);
+                ch |= Tr::Checkbox("Only from big partners (L and XL)", &g_w.bulgeBig);
                 Help("Needs The New Gentleman for the size.");
                 {
                     float o = g_w.outline * 100.0f;
                     {
-                        if (ImGuiMCP::SliderFloat("Trail under the bump", &o, 0.0f, 100.0f, "%.0f%%")) { g_w.outline = o / 100.0f; ch = true; }
+                        if (Tr::SliderFloat("Trail under the bump", &o, 0.0f, 100.0f, "%.0f%%")) { g_w.outline = o / 100.0f; ch = true; }
                         Help("For schlongs whose shape is \"A bump at the tip\": a fainter trail below it, where the shaft is. 0% = only the bump.");
                     }
                     float pu = g_w.pulse * 100.0f;
-                    if (ImGuiMCP::SliderFloat("Thrust pulse", &pu, 0.0f, 100.0f, "%.0f%%")) { g_w.pulse = pu / 100.0f; ch = true; }
+                    if (Tr::SliderFloat("Thrust pulse", &pu, 0.0f, 100.0f, "%.0f%%")) { g_w.pulse = pu / 100.0f; ch = true; }
                     Help("Each fast push gives a quick extra bump that dies away at once - it reacts to the thrusts. 0% = smooth.");
-                    ch |= ImGuiMCP::SliderFloat("Goes down over", &g_w.linger, 0.5f, 30.0f, "%.1f s");
+                    ch |= Tr::SliderFloat("Goes down over", &g_w.linger, 0.5f, 30.0f, "%.1f s");
                     Help("After he pulls out the bump eases down over this long (up to half as long again after a long, hard "
                          "round) instead of vanishing at once.");
-                    ch |= ImGuiMCP::Checkbox("Imprint after sex", &g_w.imprint);
+                    ch |= Tr::Checkbox("Imprint after sex", &g_w.imprint);
                     Help("After it goes down a faint copy of the last shape stays on his belly for a while, so what he was with "
                          "can still be seen, then fades away.");
                     if (g_w.imprint) {
                         float ia = g_w.imprintAmt * 100.0f;
-                        if (ImGuiMCP::SliderFloat("Imprint strength", &ia, 0.0f, 50.0f, "%.0f%%")) { g_w.imprintAmt = ia / 100.0f; ch = true; }
+                        if (Tr::SliderFloat("Imprint strength", &ia, 0.0f, 50.0f, "%.0f%%")) { g_w.imprintAmt = ia / 100.0f; ch = true; }
                         Help("Of the full shape (at the bulge strength). 10-20% is a faint ghost.");
-                        ch |= ImGuiMCP::SliderFloat("Imprint lasts", &g_w.imprintMin, 0.5f, 15.0f, "%.1f min");
+                        ch |= Tr::SliderFloat("Imprint lasts", &g_w.imprintMin, 0.5f, 15.0f, "%.1f min");
                     }
                     static const char* thr[] = {"Nothing - only when he is bare", "Clothes, but not armour", "Clothes and armour"};
-                    ch |= ImGuiMCP::Combo("Shows through", &g_w.bulgeThrough, thr, 3);
+                    ch |= Tr::Combo("Shows through", &g_w.bulgeThrough, thr, 3);
                     Help("What the bulge may show through. Nothing: only when nothing covers his body (revealing armour, "
                          "Integrations page, counts as bare). Clothes: also through robes, shirts and other clothing. Clothes and "
                          "armour: always - it can poke through a stiff cuirass.");
                 }
                 static const char* who[] = {"Everyone", "You and your followers", "Only you"};
-                ch |= ImGuiMCP::Combo("Who gets the bulge", &g_bulgeWho, who, 3);
+                ch |= Tr::Combo("Who gets the bulge", &g_bulgeWho, who, 3);
             }
             if (ch) {
                 g_wmx.unlock();
@@ -600,11 +612,11 @@ namespace During {
             }
         }
 
-        if (ImGuiMCP::CollapsingHeader("Shape while he is taken###shape")) {
+        if (Tr::CollapsingHeader("Shape while he is taken###shape")) {
             bool on = g_donutOn;
             float amt = g_donutAmt;
             bool ch = false;
-            ch |= ImGuiMCP::Checkbox("Puffy ring (donut) while he is taken", &on);
+            ch |= Tr::Checkbox("Puffy ring (donut) while he is taken", &on);
             Help("The rim swells up into a raised ring round the hole as he is worked open - more the longer it goes on - and "
                  "settles a few seconds after the schlong leaves him (the after-sex swelling, After sex page, carries on from there). "
                  "Uses the Anatomica Ring slider: rebuild the body with \"Build Morphs\" in BodySlide.");
@@ -612,17 +624,17 @@ namespace During {
                 int st = g_donutStyle;
                 static const char* styles[] = {"Puffy ring (a raised band)", "Donut (a full, round ring)", "Rosebud (the inside rolls out)",
                                                "Pout lips (fuller above and below)", "Pucker (drawn in, deep folds)"};
-                if (ImGuiMCP::Combo("Ring shape", &st, styles, 5)) { g_donutStyle = st; ch = true; }
+                if (Tr::Combo("Ring shape", &st, styles, 5)) { g_donutStyle = st; ch = true; }
                 Help("Puffy ring: a raised band round the hole (Anatomica Ring). Donut: the rim rolls up into a fat, round ring "
                      "round an open hole (Anatomica Donut). Rosebud: the inner wall rolls out past the rim in a smooth, rounded bud "
                      "(Anatomica Rosebud). Pout lips: the rim swells into two soft lips above and below the hole (Anatomica Lips). "
                      "Pucker: the rim draws in round the hole in deep folds (Anatomica Pucker).");
                 float sp = g_styleAmt[st] * 100.0f;
-                if (ImGuiMCP::SliderFloat("This shape's strength", &sp, 0.0f, 200.0f, "%.0f%%")) { g_styleAmt[st] = sp / 100.0f; ch = true; }
+                if (Tr::SliderFloat("This shape's strength", &sp, 0.0f, 200.0f, "%.0f%%")) { g_styleAmt[st] = sp / 100.0f; ch = true; }
                 Help("Each ring shape keeps its own strength (on top of \"How puffy, at most\"), so switching shapes keeps how "
                      "strong you set each one.");
                 float pct = amt * 100.0f;
-                if (ImGuiMCP::SliderFloat("How puffy, at most", &pct, 0.0f, 200.0f, "%.0f%%")) { amt = pct / 100.0f; ch = true; }
+                if (Tr::SliderFloat("How puffy, at most", &pct, 0.0f, 200.0f, "%.0f%%")) { amt = pct / 100.0f; ch = true; }
             }
             if (ch) {
                 g_donutOn = on;
@@ -630,5 +642,7 @@ namespace During {
                 Colour::SaveNow();
             }
         }
+
+        Align::RenderSection();   // 2.5v: men and futas as the bottom (saves itself)
     }
 }

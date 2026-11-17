@@ -1,0 +1,320 @@
+#include "Align.h"
+#include "Lang.h"
+#include "Engine.h"
+#include "Size.h"
+#include "Colour.h"
+
+#include <algorithm>
+#include <cmath>
+#include <format>
+#include <fstream>
+#include <mutex>
+#include <set>
+#include <sstream>
+#include <unordered_map>
+
+// See Align.h.
+namespace {
+    struct Settings {
+        bool move = true;          // move a male / futa bottom so his anus is where the animation aims
+        float strength = 1.0f;     // of the vagina -> anus gap (0.5 - 1.5)
+        float speed = 8.0f;        // units a second it eases in / out
+        int futa = 0;              // 0 follow PPA (FutasUseAnus), 1 always, 2 never
+        int bottom = 0;            // his own schlong in PPA while he is taken: 0 automatic, 1 always on, 2 always off
+        std::set<std::string> letWork;   // OStim scenes where the bottom's schlong always works
+    } g;
+    std::mutex g_mx;   // g, the states (menu thread vs main thread)
+
+    constexpr const char* kMorph = "Anatomica PPA Bottom";
+    constexpr const char* kKey = "Anatomica";
+    constexpr const char* kPpaMain = "Data/SKSE/Plugins/accurate-penetration.toml";
+
+    // where PPA puts the holes (its pelvis-bone offsets): the vagina (PPA's own), the anus (Anatomica's for men, PPA's for women)
+    const RE::NiPoint3 kVagina{0.0736564f, -1.36951f, -3.33551f};
+    const RE::NiPoint3 kAnusMan{-0.0012f, -4.5148f, -5.9643f};
+    const RE::NiPoint3 kAnusWoman{0.0f, -4.95285f, -1.17131f};
+
+    // OStim's action factions (OStim.esp): who is doing what right now
+    RE::TESFaction* g_vagT = nullptr;      // target of vaginal sex / vaginal tail sex
+    RE::TESFaction* g_vagTailT = nullptr;
+    std::vector<RE::TESFaction*> g_takenF;  // target of anal / vaginal (tail) sex: he is the bottom
+    std::vector<RE::TESFaction*> g_usedF;   // his schlong has a job: he penetrates, he is sucked / stroked / ridden...
+    bool g_facTried = false, g_facOk = false;
+    int g_futasUseAnus = -1;                // PPA's FutasUseAnus: -1 not read, 0 no, 1 yes
+
+    void Factions() {
+        if (g_facTried) return;
+        g_facTried = true;
+        auto* dh = RE::TESDataHandler::GetSingleton();
+        if (!dh || !dh->LookupModByName("OStim.esp")) return;
+        auto F = [&](RE::FormID id) { return dh->LookupForm<RE::TESFaction>(id, "OStim.esp"); };
+        g_vagT = F(0xE91);
+        g_vagTailT = F(0xF87);
+        for (RE::FormID id : {0xE50u, 0xE91u, 0xF83u, 0xF87u}) if (auto* f = F(id)) g_takenF.push_back(f);
+        // actor of anal / vaginal sex, facial / rubbing on the face; target of blowjob (and deepthroat), boobjob, buttjob, footjob,
+        // grinding (penis), handjob, penile licking, tailjob, thighjob
+        for (RE::FormID id : {0xE4Fu, 0xE90u, 0xE84u, 0xE53u, 0xE56u, 0xE59u, 0xE60u, 0xE65u, 0xE71u, 0xE7Au, 0xF7Fu, 0xE89u})
+            if (auto* f = F(id)) g_usedF.push_back(f);
+        g_facOk = g_vagT && !g_takenF.empty();
+        logger::info("Anatomica: bottoms - OStim action factions {}", g_facOk ? "found" : "not found (needs OStim Standalone)");
+    }
+    bool FutasUseAnus() {
+        if (g_futasUseAnus < 0) {
+            g_futasUseAnus = 0;
+            std::ifstream in(kPpaMain);
+            std::string line;
+            while (std::getline(in, line)) {
+                auto p = line.find("FutasUseAnus");
+                if (p == std::string::npos || line.find('#') < p) continue;
+                g_futasUseAnus = line.find("true", p) != std::string::npos ? 1 : 0;
+                break;
+            }
+        }
+        return g_futasUseAnus == 1;
+    }
+    bool In(RE::Actor* a, RE::TESFaction* f) { return f && a->IsInFaction(f); }
+    bool InAny(RE::Actor* a, const std::vector<RE::TESFaction*>& fs) { for (auto* f : fs) if (a->IsInFaction(f)) return true; return false; }
+
+    struct St {
+        RE::NiPoint3 cur{}, tgt{};       // the offset now (eased) and where it is heading (world units)
+        RE::NiPoint3 applied{};          // the part of cur already in his position
+        RE::NiPoint3 expect{};           // where we last put him
+        bool haveExpect = false;
+        int resets = 0;                  // times something else put him back (OStim aligning)
+        bool morph = false;              // his schlong is switched off in PPA
+        std::string scene;               // his OStim scene ("" = not known)
+        double asked = -10.0;
+    };
+    std::unordered_map<RE::FormID, St> g_st;
+    std::string g_lastScene;             // the last bottom's scene (the "let it work here" button)
+    std::string g_lastWho;
+
+    // his OStim scene, asked in the background: OActor.GetThreadID -> OThread.GetScene
+    struct SceneCb : RE::BSScript::IStackCallbackFunctor {
+        RE::FormID id = 0;
+        void operator()(RE::BSScript::Variable r) override {
+            std::lock_guard lk(g_mx);
+            if (auto it = g_st.find(id); it != g_st.end()) it->second.scene = r.IsString() ? std::string(r.GetString()) : std::string();
+        }
+        void SetObject(const RE::BSTSmartPointer<RE::BSScript::Object>&) override {}
+    };
+    struct ThreadCb : RE::BSScript::IStackCallbackFunctor {
+        RE::FormID id = 0;
+        void operator()(RE::BSScript::Variable r) override {
+            const int tid = r.IsInt() ? r.GetSInt() : -1;
+            if (tid < 0) return;
+            auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+            if (!vm) return;
+            auto* cb = new SceneCb;
+            cb->id = id;
+            RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> p(cb);
+            vm->DispatchStaticCall("OThread", "GetScene", RE::MakeFunctionArguments(static_cast<std::int32_t>(tid)), p);
+        }
+        void SetObject(const RE::BSTSmartPointer<RE::BSScript::Object>&) override {}
+    };
+    void AskScene(RE::Actor* a) {
+        auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+        if (!vm) return;
+        auto* cb = new ThreadCb;
+        cb->id = a->GetFormID();
+        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> p(cb);
+        vm->DispatchStaticCall("OActor", "GetThreadID", RE::MakeFunctionArguments(static_cast<RE::Actor*>(a)), p);
+    }
+
+    RE::NiPoint3 Sub(const RE::NiPoint3& a, const RE::NiPoint3& b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
+    RE::NiPoint3 Add(const RE::NiPoint3& a, const RE::NiPoint3& b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
+    RE::NiPoint3 Mul(const RE::NiPoint3& a, float s) { return {a.x * s, a.y * s, a.z * s}; }
+    float Length(const RE::NiPoint3& a) { return std::sqrt(a.x * a.x + a.y * a.y + a.z * a.z); }
+    RE::NiPoint3 Rot(const RE::NiMatrix3& m, const RE::NiPoint3& v) {   // NiMatrix3 rows times v
+        return {m.entry[0][0] * v.x + m.entry[0][1] * v.y + m.entry[0][2] * v.z,
+                m.entry[1][0] * v.x + m.entry[1][1] * v.y + m.entry[1][2] * v.z,
+                m.entry[2][0] * v.x + m.entry[2][1] * v.y + m.entry[2][2] * v.z};
+    }
+    // the move that puts his anus where a vagina would be (world units), from his pelvis as it is now
+    bool Gap(RE::Actor* a, bool man, float strength, RE::NiPoint3& out) {
+        auto* root = a->Get3D(false);
+        auto* pel = root ? root->GetObjectByName(RE::BSFixedString("NPC Pelvis [Pelv]")) : nullptr;
+        if (!pel) return false;
+        const RE::NiPoint3 d = Sub(kVagina, man ? kAnusMan : kAnusWoman);
+        out = Rot(pel->world.rotate, Mul(d, pel->world.scale * strength));
+        return true;
+    }
+}
+
+namespace Align {
+    void Tick(const std::vector<RE::Actor*>& all, float dt, double now) {
+        Factions();
+        if (!g_facOk) return;
+        std::lock_guard lk(g_mx);
+        std::set<RE::FormID> seen;
+        for (auto* a : all) {
+            if (!a || a->IsDead() || !a->Is3DLoaded()) continue;
+            const bool taken = InAny(a, g_takenF);
+            auto it = g_st.find(a->GetFormID());
+            if (!taken && it == g_st.end()) continue;   // nothing to do and nothing to undo
+            const auto* npc = a->GetActorBase();
+            const bool man = npc && npc->GetSex() == RE::SEX::kMale;
+            const bool schlong = man || (taken && Size::HasSchlong(a));
+            St& s = it != g_st.end() ? it->second : g_st[a->GetFormID()];
+            seen.insert(a->GetFormID());
+
+            // his scene (for the "let it work here" list)
+            if (taken && now - s.asked > 1.5) { s.asked = now; AskScene(a); }
+            if (taken && schlong) {
+                g_lastScene = s.scene;
+                const char* nm = a->GetDisplayFullName();
+                g_lastWho = nm ? nm : "";
+            }
+
+            // 1. the move: a man / futa as the target of vaginal sex
+            const bool vag = In(a, g_vagT) || In(a, g_vagTailT);
+            const bool futaOk = !man && schlong && (g.futa == 1 || (g.futa == 0 && FutasUseAnus()));
+            RE::NiPoint3 want{};
+            if (g.move && vag && (man || futaOk)) {
+                if (!Gap(a, man, g.strength, want)) want = {};
+            }
+            // follow the pelvis gently (it turns with every thrust), then ease the offset at most speed units a second
+            const float k = std::min(1.0f, dt * 2.0f);
+            s.tgt = Add(s.tgt, Mul(Sub(want, s.tgt), k));
+            RE::NiPoint3 step = Sub(s.tgt, s.cur);
+            const float len = Length(step), maxStep = g.speed * dt;
+            if (len > maxStep && len > 1e-4f) step = Mul(step, maxStep / len);
+            s.cur = Add(s.cur, step);
+            if (Length(want) < 1e-3f && Length(s.cur) < 0.02f) s.cur = {};
+            // put it into his position; if something else moved him (OStim lining the actors up), it starts again from there
+            RE::NiPoint3 pos = a->GetPosition();
+            if (s.haveExpect && Length(Sub(pos, s.expect)) > 0.25f) { s.applied = {}; if (Length(s.cur) > 0.05f) ++s.resets; }
+            const RE::NiPoint3 d = Sub(s.cur, s.applied);
+            if (Length(d) > 0.01f) {
+                pos = Add(pos, d);
+                a->SetPosition(pos, true);
+                s.applied = s.cur;
+            }
+            s.expect = pos;
+            s.haveExpect = Length(s.cur) > 0.0f || Length(s.applied) > 0.0f;
+
+            // 2. his own schlong in PPA
+            bool off = false;
+            if (taken && schlong) {
+                if (g.bottom == 2) off = true;
+                else if (g.bottom == 0) off = !InAny(a, g_usedF) && !(s.scene.size() && g.letWork.count(s.scene));
+            }
+            if (off != s.morph) {
+                Engine::BodyMorph(a, kMorph, kKey, off ? 1.0f : 0.0f);
+                s.morph = off;
+                logger::info("Anatomica: {}'s schlong {} in PPA (scene {})", a->GetDisplayFullName() ? a->GetDisplayFullName() : "?",
+                             off ? "off" : "on again", s.scene.empty() ? "?" : s.scene);
+            }
+        }
+        // gone (unloaded, out of range): their morph back to 0, forget them
+        for (auto it = g_st.begin(); it != g_st.end();) {
+            if (seen.count(it->first)) { ++it; continue; }
+            const bool active = Length(it->second.cur) > 0.0f || it->second.morph;
+            if (active) {
+                if (auto* a = RE::TESForm::LookupByID<RE::Actor>(it->first)) {
+                    if (it->second.morph) Engine::BodyMorph(a, kMorph, kKey, 0.0f);
+                    // a scene that ended: OStim has put him somewhere new already; nothing to move back
+                }
+            }
+            it = g_st.erase(it);
+        }
+    }
+
+    bool RenderSection() {
+        if (!Tr::CollapsingHeader("Men and futas as the bottom###bottoms")) return false;
+        bool ch = false;
+        std::lock_guard lk(g_mx);
+        Factions();
+        if (!g_facOk) Tr::TextColored(ImGuiMCP::ImVec4{1.0f, 0.45f, 0.4f, 1.0f}, "Needs OStim Standalone (it says who does what in a scene).");
+        Tr::TextWrapped("Animations made for a woman aim the top's schlong at a vagina. A man has none, so it ends up between his "
+                        "thighs. These fix that, and keep the bottom's own schlong out of the way.");
+        ch |= Tr::Checkbox("Move him so the animation finds his anus", &g.move);
+        auto help = [](const char* t) {
+            ImGuiMCP::SameLine();
+            Tr::TextDisabled("(?)");
+            if (ImGuiMCP::IsItemHovered()) {
+                ImGuiMCP::BeginTooltip();
+                ImGuiMCP::PushTextWrapPos(ImGuiMCP::GetFontSize() * 30.0f);
+                Tr::TextUnformatted(t);
+                ImGuiMCP::PopTextWrapPos();
+                ImGuiMCP::EndTooltip();
+            }
+        };
+        help("While OStim has him as the one taken in vaginal sex, his body is moved by the gap between where a vagina would "
+             "be and his anus (a few units, eased in and out), so his anus is where the animation aims and PPA takes him "
+             "anally.");
+        if (g.move) {
+            ImGuiMCP::Indent();
+            float pct = g.strength * 100.0f;
+            if (Tr::SliderFloat("How far", &pct, 50.0f, 150.0f, "%.0f%%")) { g.strength = pct / 100.0f; ch = true; }
+            help("100% = exactly the gap between the two. More if the schlong still lands a little in front of him, less if "
+                 "it goes past.");
+            ch |= Tr::SliderFloat("How fast it eases in", &g.speed, 2.0f, 30.0f, "%.0f units/s");
+            static const char* fu[] = {"Like PPA (when it sends futas to the anus)", "Always", "Never"};
+            ch |= Tr::Combo("Futas", &g.futa, fu, 3);
+            help("A futa has a vagina, so only move her when PPA uses her anus (PPA's \"Futas use anus\").");
+            ImGuiMCP::Unindent();
+        }
+        static const char* bo[] = {"Off while he is taken, unless the scene uses it", "Always on (as before)", "Always off while he is taken"};
+        ch |= Tr::Combo("The bottom's schlong in PPA", &g.bottom, bo, 3);
+        help("With a wider PPA angle the bottom's own schlong can catch on the top and open him. Off while he is taken: PPA "
+             "leaves it alone - unless the scene gives it something to do (he penetrates someone, he is sucked or stroked), "
+             "or the scene is on the list below. Needs anatomica_bottom.toml (PPA integration option); F5 reloads PPA.");
+        if (g.bottom == 0) {
+            ImGuiMCP::Indent();
+            if (!g_lastScene.empty()) {
+                const bool listed = g.letWork.count(g_lastScene) > 0;
+                Tr::Text("Current scene: %s (%s)", g_lastScene.c_str(), g_lastWho.c_str());
+                if (Tr::Button(listed ? "Stop letting his schlong work in this scene" : "Let his schlong work in this scene")) {
+                    if (listed) g.letWork.erase(g_lastScene); else g.letWork.insert(g_lastScene);
+                    ch = true;
+                }
+            } else Tr::TextDisabled("Start a scene with a man as the bottom to pick it here.");
+            if (!g.letWork.empty()) {
+                Tr::TextDisabled("%d scenes on the list.", static_cast<int>(g.letWork.size()));
+                ImGuiMCP::SameLine();
+                if (Tr::SmallButton("Clear the list")) { g.letWork.clear(); ch = true; }
+            }
+            ImGuiMCP::Unindent();
+        }
+        // what it is doing now
+        for (auto& [id, s] : g_st) {
+            auto* a = RE::TESForm::LookupByID<RE::Actor>(id);
+            if (!a) continue;
+            const char* nm = a->GetDisplayFullName();
+            if (Length(s.cur) > 0.01f || s.morph)
+                Tr::TextDisabled("%s: moved %.1f units%s%s", nm ? nm : "?", Length(s.cur), s.morph ? ", schlong off in PPA" : "",
+                                 s.resets > 20 ? " - OStim keeps putting him back" : "");
+        }
+        if (ch) {
+            g_mx.unlock();
+            Colour::SaveNow();
+            g_mx.lock();
+        }
+        return ch;
+    }
+
+    void Ini(CSimpleIniA& ini, bool save) {
+        constexpr const char* S = "BottomAlign";
+        std::lock_guard lk(g_mx);
+        if (save) {
+            ini.SetBoolValue(S, "Move", g.move);
+            ini.SetDoubleValue(S, "Strength", g.strength);
+            ini.SetDoubleValue(S, "Speed", g.speed);
+            ini.SetLongValue(S, "Futa", g.futa);
+            ini.SetLongValue(S, "BottomSchlong", g.bottom);
+            std::string l;
+            for (auto& sc : g.letWork) l += (l.empty() ? "" : ",") + sc;
+            ini.SetValue(S, "LetWorkScenes", l.c_str());
+        } else {
+            g.move = ini.GetBoolValue(S, "Move", g.move);
+            g.strength = std::clamp(static_cast<float>(ini.GetDoubleValue(S, "Strength", g.strength)), 0.5f, 1.5f);
+            g.speed = std::clamp(static_cast<float>(ini.GetDoubleValue(S, "Speed", g.speed)), 2.0f, 30.0f);
+            g.futa = std::clamp(static_cast<int>(ini.GetLongValue(S, "Futa", g.futa)), 0, 2);
+            g.bottom = std::clamp(static_cast<int>(ini.GetLongValue(S, "BottomSchlong", g.bottom)), 0, 2);
+            g.letWork.clear();
+            std::stringstream ss(ini.GetValue(S, "LetWorkScenes", ""));
+            for (std::string t; std::getline(ss, t, ',');) if (!t.empty()) g.letWork.insert(t);
+        }
+    }
+}

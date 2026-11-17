@@ -1,4 +1,5 @@
 #include "Fluid.h"
+#include "Lang.h"
 #include "Extras.h"
 #include "Colour.h"
 #include "Drip.h"
@@ -2180,8 +2181,8 @@ namespace {
 
     void Help(const char* t) {
         ImGuiMCP::SameLine();
-        ImGuiMCP::TextDisabled("(?)");
-        if (ImGuiMCP::IsItemHovered()) { ImGuiMCP::BeginTooltip(); ImGuiMCP::PushTextWrapPos(420.0f); ImGuiMCP::TextUnformatted(t); ImGuiMCP::PopTextWrapPos(); ImGuiMCP::EndTooltip(); }
+        Tr::TextDisabled("(?)");
+        if (ImGuiMCP::IsItemHovered()) { ImGuiMCP::BeginTooltip(); ImGuiMCP::PushTextWrapPos(420.0f); Tr::TextUnformatted(t); ImGuiMCP::PopTextWrapPos(); ImGuiMCP::EndTooltip(); }
     }
 }
 
@@ -2370,61 +2371,61 @@ namespace Fluid {
     // the wet rim (After sex page, under Wetness)
     void RenderWetSettings() {
         bool ch = false;
-        ch |= ImGuiMCP::SliderFloat("Wet rim shine", &g.rimShine, 0.5f, 5.0f, "x%.1f");
+        ch |= Tr::SliderFloat("Wet rim shine", &g.rimShine, 0.5f, 5.0f, "x%.1f");
         Help("How glassy the rim gets while he is wet: higher = a sharper, brighter, more water-like shine.");
         if (ch) Colour::SaveNow();
     }
     // the glossy skin's reach (After sex page, glossy skin)
     void RenderGlossSettings() {
         bool ch = false;
-        ch |= ImGuiMCP::SliderFloat("How far it reaches", &g.cleftSize, 0.5f, 2.0f, "x%.2f");
+        ch |= Tr::SliderFloat("How far it reaches", &g.cleftSize, 0.5f, 2.0f, "x%.2f");
         Help("Around the hole and how far up the crevice. A new size is drawn the next time he gets glossy.");
         if (ch) Colour::SaveNow();
     }
 
     void RenderSettings() {
         bool ch = false;
-        ch |= ImGuiMCP::Checkbox("Simulated cum (strands, streams, drops, running down him)", &g.on);
+        ch |= Tr::Checkbox("Simulated cum (strands, streams, drops, running down him)", &g.on);
         Help("Everything here is simulated by the DLL every frame: it hangs from the real edge of his hole, runs down his "
              "actual body (OBody / BodySlide shape included) and drops to the floor. Off = none of it is shown.");
         if (!g.on) { if (ch) Colour::SaveNow(); return; }
-        ImGuiMCP::SeparatorText("Look");
-        ch |= ImGuiMCP::SliderFloat("Thickness", &g.thick, 0.4f, 2.5f, "x%.2f");
-        ch |= ImGuiMCP::SliderFloat("Opacity", &g.opacity, 0.2f, 1.0f, "%.2f");
+        Tr::SeparatorText("Look");
+        ch |= Tr::SliderFloat("Thickness", &g.thick, 0.4f, 2.5f, "x%.2f");
+        ch |= Tr::SliderFloat("Opacity", &g.opacity, 0.2f, 1.0f, "%.2f");
         Help("How see-through it is (the colour itself is on this page: per race or your own).");
-        ch |= ImGuiMCP::SliderFloat("Shine", &g.shine, 0.0f, 2.0f, "%.2f");
-        ch |= ImGuiMCP::SliderFloat("Gloss", &g.gloss, 20.0f, 1000.0f, "%.0f");
+        ch |= Tr::SliderFloat("Shine", &g.shine, 0.0f, 2.0f, "%.2f");
+        ch |= Tr::SliderFloat("Gloss", &g.gloss, 20.0f, 1000.0f, "%.0f");
         Help("Higher = a smaller, sharper highlight, like a wet glassy surface. Also used for the wet look on his anus.");
-        ImGuiMCP::SeparatorText("How it moves");
-        ch |= ImGuiMCP::SliderFloat("Thickness of the fluid (viscosity)", &g.viscosity, 0.0f, 1.0f, "%.2f");
+        Tr::SeparatorText("How it moves");
+        ch |= Tr::SliderFloat("Thickness of the fluid (viscosity)", &g.viscosity, 0.0f, 1.0f, "%.2f");
         Help("0 = runny: falls fast, strands snap back. 1 = thick and gooey: stretches slowly, clings, drips late.");
-        ch |= ImGuiMCP::SliderFloat("Stickiness on skin", &g.stick, 0.0f, 1.0f, "%.2f");
-        ch |= ImGuiMCP::SliderFloat("Runs down the skin", &g.flow, 0.2f, 3.0f, "x%.1f");
-        ch |= ImGuiMCP::SliderFloat("Gravity", &g.gravity, 100.0f, 1200.0f, "%.0f");
-        ch |= ImGuiMCP::SliderFloat("Longest strand before it drips", &g.maxLen, 2.0f, 30.0f, "%.1f");
-        ch |= ImGuiMCP::SliderFloat("String to him snaps at", &g.breakDist, 2.0f, 40.0f, "%.1f");
+        ch |= Tr::SliderFloat("Stickiness on skin", &g.stick, 0.0f, 1.0f, "%.2f");
+        ch |= Tr::SliderFloat("Runs down the skin", &g.flow, 0.2f, 3.0f, "x%.1f");
+        ch |= Tr::SliderFloat("Gravity", &g.gravity, 100.0f, 1200.0f, "%.0f");
+        ch |= Tr::SliderFloat("Longest strand before it drips", &g.maxLen, 2.0f, 30.0f, "%.1f");
+        ch |= Tr::SliderFloat("String to him snaps at", &g.breakDist, 2.0f, 40.0f, "%.1f");
         Help("When he pulls out a string can stretch between his hole and the tip of the partner's schlong. It thins as "
              "it gets longer and snaps around this distance (+-30%): one half springs back and hangs from the hole, the "
              "other stays on his tip and drips.");
-        ch |= ImGuiMCP::Checkbox("Collides with the body", &g.collide);
-        ImGuiMCP::SeparatorText("Wet and leftovers");
-        ch |= ImGuiMCP::Checkbox("Water beads around his hole while he is wet", &g.wetFilm);
+        ch |= Tr::Checkbox("Collides with the body", &g.collide);
+        Tr::SeparatorText("Wet and leftovers");
+        ch |= Tr::Checkbox("Water beads around his hole while he is wet", &g.wetFilm);
         Help("Like water on skin: fine droplets when he is barely wet, more and bigger beads the wetter he gets. They keep "
              "gathering while he stays wet, run together when they touch, and one too heavy for the skin runs down as a "
              "trickle. As he dries they shrink and go. Clear water, or the wetness colour (After sex page) when that is on.");
         if (g.wetFilm) {
             ImGuiMCP::Indent();
-            ch |= ImGuiMCP::SliderInt("Most beads", &g.beadMax, 8, 64);
-            ch |= ImGuiMCP::SliderFloat("Bead size", &g.beadSize, 0.3f, 3.0f, "x%.2f");
-            ImGuiMCP::TextDisabled("How long the skin holds a bead before it runs: Stickiness on skin (above).");
+            ch |= Tr::SliderInt("Most beads", &g.beadMax, 8, 64);
+            ch |= Tr::SliderFloat("Bead size", &g.beadSize, 0.3f, 3.0f, "x%.2f");
+            Tr::TextDisabled("How long the skin holds a bead before it runs: Stickiness on skin (above).");
             ImGuiMCP::Unindent();
         }
-        ch |= ImGuiMCP::Checkbox("The giver's schlong glistens while coated", &g.coatShine);
-        ch |= ImGuiMCP::SliderFloat("Drying time", &g.dry, 20.0f, 1200.0f, "%.0f s");
+        ch |= Tr::Checkbox("The giver's schlong glistens while coated", &g.coatShine);
+        ch |= Tr::SliderFloat("Drying time", &g.dry, 20.0f, 1200.0f, "%.0f s");
         Help("How long trails on the skin, beads and streaks take to dry off.");
-        ImGuiMCP::SeparatorText("Performance");
-        ch |= ImGuiMCP::SliderInt("Pieces drawn per man", &g.maxPieces, 4, 48);
-        ch |= ImGuiMCP::SliderInt("Simulation quality", &g.quality, 1, 3);
+        Tr::SeparatorText("Performance");
+        ch |= Tr::SliderInt("Pieces drawn per man", &g.maxPieces, 4, 48);
+        ch |= Tr::SliderInt("Simulation quality", &g.quality, 1, 3);
         if (ch) Colour::SaveNow();
     }
 

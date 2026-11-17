@@ -5,12 +5,14 @@
 #include "Engine.h"
 #include "Bridge.h"
 #include "Colour.h"
+#include "Lang.h"
 
 void OnMessage(SKSE::MessagingInterface::Message* message) {
     switch (message->type) {
         case SKSE::MessagingInterface::kDataLoaded:
+            Lang::Refresh();      // 2.5v: the game's language is known now
             Colour::TidyMade();   // the folder of textures Anatomica makes: under its size budget before anything uses it
-            During::SyncPPA();    // the hole follows the schlong: PPA's own opening kept at almost none
+            During::SyncPPA();    // puts PPA's own opening back if a test build had turned it down
             break;
         case SKSE::MessagingInterface::kPostPostLoad:
             Engine::Connect();   // RaceMenu's interfaces (it answers from its PostLoad on)

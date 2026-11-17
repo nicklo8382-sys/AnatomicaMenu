@@ -4,6 +4,8 @@
 #include "Extras.h"
 #include "SoftButt.h"
 #include "Engine.h"
+#include "Align.h"
+#include "Mu.h"
 #include "Virgin.h"
 #include "Size.h"
 #include "Bridge.h"
@@ -1073,6 +1075,8 @@ namespace {
                 Process(a, g_st[a->GetFormID()], dt, now, all, player);
             }
         }
+        Align::Tick(all, dt, now);   // 2.5v: male / futa bottoms in vaginal animations, the bottom's schlong in PPA
+        Mu::Tick(all, now);          // 2.5v: MuDynamicNormalMap updates when the bulge / gape has really changed
         Bridge::Tick(player, all);   // other mods: arousal, SkyrimNet (paces itself)
         // men out of reach: forget them (their morph stays as it is, saved by RaceMenu)
         for (auto it = g_st.begin(); it != g_st.end();) {
@@ -1111,6 +1115,7 @@ namespace Engine {
     // the fit outline over the game (During sex page > Show the fit outline)
 
     void Install() { std::thread(Loop).detach(); }
+    void BodyMorph(RE::Actor* a, const char* name, const char* key, float v) { if (g_morph && a) g_morph->SetMorph(a, name, key, v); }
 
     void Connect() {
         if (g_asked) return;

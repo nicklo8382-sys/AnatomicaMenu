@@ -1,4 +1,5 @@
 #include "Extras.h"
+#include "Lang.h"
 #include "Virgin.h"
 #include "Colour.h"
 #include "SKSEMenuFramework.h"
@@ -125,11 +126,11 @@ namespace {
     struct Cached { Extras::How how = Extras::How::normal; double at = 0.0; RE::FormID partner = 0; };
     std::unordered_map<RE::FormID, Cached> g_how;
 
-    bool Section(const char* title) { return ImGuiMCP::CollapsingHeader(title); }
+    bool Section(const char* title) { return Tr::CollapsingHeader(title); }
     void Help(const char* t) {
         ImGuiMCP::SameLine();
-        ImGuiMCP::TextDisabled("(?)");
-        if (ImGuiMCP::IsItemHovered()) { ImGuiMCP::BeginTooltip(); ImGuiMCP::PushTextWrapPos(420.0f); ImGuiMCP::TextUnformatted(t); ImGuiMCP::PopTextWrapPos(); ImGuiMCP::EndTooltip(); }
+        Tr::TextDisabled("(?)");
+        if (ImGuiMCP::IsItemHovered()) { ImGuiMCP::BeginTooltip(); ImGuiMCP::PushTextWrapPos(420.0f); Tr::TextUnformatted(t); ImGuiMCP::PopTextWrapPos(); ImGuiMCP::EndTooltip(); }
     }
 
     std::string SNLot(RE::StaticFunctionTag*, RE::Actor* a) { return Extras::Lot(a); }
@@ -219,11 +220,11 @@ namespace Extras {
         if (!Section(none ? "Revealing armour  (no keyword mod found)###reveal" : "Revealing armour###reveal")) return false;
         bool ch = false;
         if (none)
-            ImGuiMCP::TextColored(ImGuiMCP::ImVec4{1.0f, 0.45f, 0.4f, 1.0f}, "None of the %d revealing keywords exist in your game (needs Advanced Nudity Detection "
+            Tr::TextColored(ImGuiMCP::ImVec4{1.0f, 0.45f, 0.4f, 1.0f}, "None of the %d revealing keywords exist in your game (needs Advanced Nudity Detection "
                                   "or SexLab Aroused keywords on armour) - only being naked counts.", listed);
-        else ImGuiMCP::TextDisabled("%d of %d listed keywords found in your mods (Data\\SKSE\\Plugins\\AnatomicaMenu\\Revealing.ini).", found, listed);
+        else Tr::TextDisabled("%d of %d listed keywords found in your mods (Data\\SKSE\\Plugins\\AnatomicaMenu\\Revealing.ini).", found, listed);
         ImGuiMCP::BeginDisabled(none);
-        ch |= ImGuiMCP::Checkbox("Armour that leaves his backside bare counts as naked", &g.revealing);
+        ch |= Tr::Checkbox("Armour that leaves his backside bare counts as naked", &g.revealing);
         Help("Thongs, C-strings, loincloths open at the back, harnesses, \"nearly naked\" sets (Advanced Nudity Detection and "
              "SexLab Aroused keywords). People then see the state he is in (SkyrimNet), NPCs can inspect him, and the glossy skin "
              "after sex shows.");
@@ -233,29 +234,29 @@ namespace Extras {
 
     void __stdcall RenderPage() {
         bool ch = false;
-        ImGuiMCP::TextWrapped("Extras from the separate Anatomica Extras mod. The keyword and faction lists are in "
+        Tr::TextWrapped("Extras from the separate Anatomica Extras mod. The keyword and faction lists are in "
                               "Data\\SKSE\\Plugins\\AnatomicaMenu\\Extras.ini.");
         {
             std::lock_guard lk(g_mx);
             LoadLists();
-            ImGuiMCP::TextDisabled("Found: %d restraint keywords; factions %d captive, %d paid, %d client, %d auction (%d listed for mods you do not have).",
+            Tr::TextDisabled("Found: %d restraint keywords; factions %d captive, %d paid, %d client, %d auction (%d listed for mods you do not have).",
                                    static_cast<int>(L.captiveKw.size()), static_cast<int>(L.captive.size()),
                                    static_cast<int>(L.paid.size()), static_cast<int>(L.paidPartner.size()), static_cast<int>(L.lot.size()), L.missing);
         }
         if (Section("How it happened")) {
-            ch |= ImGuiMCP::Checkbox("Captive or paid: memories and reactions say so", &g.how);
+            ch |= Tr::Checkbox("Captive or paid: memories and reactions say so", &g.how);
             Help("Taken while a captive (enslaved, jailed, bound, up for auction) or for money (Public Whore clients, "
                  "working for The Ancient Profession): what he and his partner remember, and what is said after his first time, "
                  "reflect it.");
-            ch |= ImGuiMCP::Checkbox("A captive is left sorer, for longer", &g.captiveSore);
+            ch |= Tr::Checkbox("A captive is left sorer, for longer", &g.captiveSore);
             if (g.captiveSore) {
                 ImGuiMCP::Indent();
-                ch |= ImGuiMCP::SliderFloat("Soreness", &g.captiveTender, 1.0f, 3.0f, "x%.2f");
-                ch |= ImGuiMCP::SliderFloat("Takes longer to fade", &g.captiveTime, 1.0f, 4.0f, "x%.2f");
+                ch |= Tr::SliderFloat("Soreness", &g.captiveTender, 1.0f, 3.0f, "x%.2f");
+                ch |= Tr::SliderFloat("Takes longer to fade", &g.captiveTime, 1.0f, 4.0f, "x%.2f");
                 ImGuiMCP::Unindent();
             }
             static std::string shown;
-            if (ImGuiMCP::Button("Check the selected man")) {
+            if (Tr::Button("Check the selected man")) {
                 RE::Actor* a = nullptr;
                 if (auto sel = RE::Console::GetSelectedRef()) a = sel->As<RE::Actor>();
                 if (!a) a = RE::PlayerCharacter::GetSingleton();
@@ -265,14 +266,14 @@ namespace Extras {
                                     Exposed(a) ? ", backside bare" : ", covered");
             }
             Help("The man you click in the console (~), or you. Paying clients are checked on the partner when it happens.");
-            if (!shown.empty()) { ImGuiMCP::SameLine(); ImGuiMCP::TextUnformatted(shown.c_str()); }
+            if (!shown.empty()) { ImGuiMCP::SameLine(); Tr::TextUnformatted(shown.c_str()); }
         }
         bool noSA = false;
         { std::lock_guard lk(g_mx); noSA = L.lot.empty(); }
         if (Section(noSA ? "SkyrimNet Slave Auction  (not installed)###sa" : "SkyrimNet Slave Auction###sa")) {
-            if (noSA) ImGuiMCP::TextColored(ImGuiMCP::ImVec4{1.0f, 0.45f, 0.4f, 1.0f}, "SkyrimNet Slave Auction is not installed - this does nothing until it is (kept).");
+            if (noSA) Tr::TextColored(ImGuiMCP::ImVec4{1.0f, 0.45f, 0.4f, 1.0f}, "SkyrimNet Slave Auction is not installed - this does nothing until it is (kept).");
             ImGuiMCP::BeginDisabled(noSA);
-            ch |= ImGuiMCP::Checkbox("The house knows what it is selling", &g.lot);
+            ch |= Tr::Checkbox("The house knows what it is selling", &g.lot);
             Help("A man up for sale: the auctioneer and buyers are told whether he is an anal virgin, and how experienced he is.");
             ImGuiMCP::EndDisabled();
         }

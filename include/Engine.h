@@ -25,5 +25,6 @@ namespace Engine {
     // RaceMenu node overrides (no Papyrus); false = not available, use the old way
     bool NodeFloat(RE::Actor* a, const char* node, int key, float value);
     bool NodeRemove(RE::Actor* a, const char* node, int key, int index);
-    bool RingDirect();                    // the skin-blend ring is coloured here, straight on its material
+    bool RingDirect();
+    void BodyMorph(RE::Actor* a, const char* name, const char* key, float v);   // 2.5v: a RaceMenu body morph (no model update)                    // the skin-blend ring is coloured here, straight on its material
 }

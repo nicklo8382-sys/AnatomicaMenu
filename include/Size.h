@@ -25,7 +25,8 @@ namespace Size {
     std::string ShapeKey(int shape);         // its table key ("cut", "knotted"...); "" when not known
     std::vector<std::pair<std::string, std::string>> ShapeList();   // every type in the table: key, menu name (2.5: bulge per type)
     std::vector<std::pair<std::string, std::string>> CreatureTypeList();   // every type, creature types included (MNC section)
-    bool IsCreatureActor(RE::Actor* a);      // by race (not an NPC race; werewolves / vampire lords count)
+    bool IsCreatureActor(RE::Actor* a);
+    bool HasSchlong(RE::Actor* a);           // 2.5v: wears a schlong (SOS item or TNG) - futa bottoms      // by race (not an NPC race; werewolves / vampire lords count)
     std::string Describe(RE::Actor* partner);   // "huge, knotted" / "uncut" / "" (for memories and reactions)
 
     struct K { float open = 1.0f, build = 1.0f, loose = 1.0f, tender = 1.0f; };

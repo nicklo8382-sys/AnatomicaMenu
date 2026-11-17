@@ -1,4 +1,5 @@
 #include "Virgin.h"
+#include "Lang.h"
 #include "Colour.h"
 #include "Bridge.h"
 #include "SKSEMenuFramework.h"
@@ -327,11 +328,11 @@ namespace {
         return "well used";
     }
 
-    bool Section(const char* title) { return ImGuiMCP::CollapsingHeader(title); }   // a drop-down section
+    bool Section(const char* title) { return Tr::CollapsingHeader(title); }   // a drop-down section
     void Help(const char* t) {
         ImGuiMCP::SameLine();
-        ImGuiMCP::TextDisabled("(?)");
-        if (ImGuiMCP::IsItemHovered()) { ImGuiMCP::BeginTooltip(); ImGuiMCP::PushTextWrapPos(420.0f); ImGuiMCP::TextUnformatted(t); ImGuiMCP::PopTextWrapPos(); ImGuiMCP::EndTooltip(); }
+        Tr::TextDisabled("(?)");
+        if (ImGuiMCP::IsItemHovered()) { ImGuiMCP::BeginTooltip(); ImGuiMCP::PushTextWrapPos(420.0f); Tr::TextUnformatted(t); ImGuiMCP::PopTextWrapPos(); ImGuiMCP::EndTooltip(); }
     }
 }
 
@@ -592,18 +593,18 @@ namespace Virgin {
     void __stdcall RenderPage() {
         bool ch = false;
         Settings& s = g;   // the menu runs on the render thread; plain reads/writes of these flags are fine
-        ch |= ImGuiMCP::Checkbox("Anal virginity and experience", &s.on);
+        ch |= Tr::Checkbox("Anal virginity and experience", &s.on);
         Help("Each man is a virgin or not, and gains experience every time he is taken. The first time and his experience "
              "show in how tight he is, how his rim looks, how he reacts and how much he clenches (each can be switched off below).");
         if (!s.on) { if (ch) Colour::SaveNow(); return; }
 
         if (Section(OVQuest() ? "OVirginity###ov" : "OVirginity  (not installed)###ov")) {
         if (OVQuest()) {
-            ch |= ImGuiMCP::Checkbox("Use OVirginity", &s.useOV);
+            ch |= Tr::Checkbox("Use OVirginity", &s.useOV);
             Help("OVirginity is installed: its chances and its always / never virgin lists decide who starts a virgin, and "
                  "it is told when a man loses his virginity or gets it back (so ORomance, OProstitution and other mods see "
                  "it). When you are the one taking it, he goes on its \"virginities taken\" list.");
-        } else ImGuiMCP::TextColored(ImGuiMCP::ImVec4{1.0f, 0.45f, 0.4f, 1.0f}, "OVirginity is not installed - Anatomica's own virginity is used: the chances below decide who starts a virgin.");
+        } else Tr::TextColored(ImGuiMCP::ImVec4{1.0f, 0.45f, 0.4f, 1.0f}, "OVirginity is not installed - Anatomica's own virginity is used: the chances below decide who starts a virgin.");
         }
         {
 
@@ -611,15 +612,15 @@ namespace Virgin {
             GroupSet& gs = s.grp[i];
             if (!Section(kGroupName[i])) continue;   // closed drop-down
             ImGuiMCP::PushID(i);
-            ch |= ImGuiMCP::Checkbox("On", &gs.on);
+            ch |= Tr::Checkbox("On", &gs.on);
             if (gs.on) {
                 float pct = gs.chance * 100.0f;
-                if (ImGuiMCP::SliderFloat(i == kPlayer ? "Chance you start a virgin" : "Chance a man starts a virgin", &pct, 0.0f, 100.0f, "%.0f%%")) {
+                if (Tr::SliderFloat(i == kPlayer ? "Chance you start a virgin" : "Chance a man starts a virgin", &pct, 0.0f, 100.0f, "%.0f%%")) {
                     gs.chance = pct / 100.0f; ch = true;
                 }
                 if (OVOn()) Help("With OVirginity in use this is only for men it has no answer for yet.");
                 const char* modes[] = {"One and done (never comes back)", "Comes back after a set time", "Smart (comes back as he tightens up again)"};
-                ch |= ImGuiMCP::Combo("Virginity comes back", &gs.ret, modes, 3);
+                ch |= Tr::Combo("Virginity comes back", &gs.ret, modes, 3);
                 Help("One and done: once it is gone it stays gone.\n"
                      "After a set time: he is a virgin again once that long passes (in days or hours) without anyone taking him.\n"
                      "Smart: after a day's rest his experience wears off, slower the more often he has been taken; once it "
@@ -629,7 +630,7 @@ namespace Virgin {
                     int unit = gs.inHours ? 1 : 0;
                     const char* units[] = {"Days", "Hours"};
                     ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 7.0f);
-                    if (ImGuiMCP::Combo("Count in", &unit, units, 2)) {
+                    if (Tr::Combo("Count in", &unit, units, 2)) {
                         const bool h = unit == 1;
                         if (h != gs.inHours) {   // keep about the same wait
                             gs.amount = h ? std::clamp(gs.amount * 24, 1, 72) : std::clamp((gs.amount + 12) / 24, 1, 30);
@@ -637,7 +638,7 @@ namespace Virgin {
                             ch = true;
                         }
                     }
-                    ch |= ImGuiMCP::SliderInt(gs.inHours ? "Hours" : "Days", &gs.amount, 1, gs.inHours ? 72 : 30);
+                    ch |= Tr::SliderInt(gs.inHours ? "Hours" : "Days", &gs.amount, 1, gs.inHours ? 72 : 30);
                 }
             }
             ImGuiMCP::PopID();
@@ -645,62 +646,62 @@ namespace Virgin {
 
         }
         if (Section("What his virginity and experience change")) {
-        ch |= ImGuiMCP::Checkbox("Tightness", &s.tight);
+        ch |= Tr::Checkbox("Tightness", &s.tight);
         Help("A virgin opens slowly, gapes less and snaps shut quickly; he loosens over his first few times instead of all at "
              "once. A well-used man opens easily, gapes wider and can keep more lasting looseness.");
-        ch |= ImGuiMCP::Checkbox("Rim look", &s.rim);
+        ch |= Tr::Checkbox("Rim look", &s.rim);
         Help("A virgin's rim is paler and tighter-looking; a well-used man's is darker and softer, and a little puffy "
              "(the puffiness needs Swelling on the After sex page).");
-        ch |= ImGuiMCP::Checkbox("First-time reaction", &s.first);
+        ch |= Tr::Checkbox("First-time reaction", &s.first);
         Help("His first time: stronger reddening that heals slower, more swelling, and more clenching afterwards. With "
              "\"Sensitive while tender\" (After sex page) he also twitches more at a touch.");
         if (s.first) {
             ImGuiMCP::Indent();
-            ch |= ImGuiMCP::SliderFloat("Lasts (game days)", &s.firstDays, 0.25f, 7.0f, "%.2f");
+            ch |= Tr::SliderFloat("Lasts (game days)", &s.firstDays, 0.25f, 7.0f, "%.2f");
             ImGuiMCP::Unindent();
         }
-        ch |= ImGuiMCP::Checkbox("Clenching", &s.clench);
+        ch |= Tr::Checkbox("Clenching", &s.clench);
         Help("A virgin clenches often; he relaxes as he gains experience.");
-        ch |= ImGuiMCP::Checkbox("Partner memory", &s.memory);
+        ch |= Tr::Checkbox("Partner memory", &s.memory);
         Help("A new man takes more out of him than a regular partner: rounds with a man who has had him a few times add less "
              "experience and less lasting looseness.");
 
         }
         if (Section("Healing potions and spells")) {
-        ImGuiMCP::TextDisabled("Each one takes time off his waits, as if he had rested that much longer.");
-        ch |= ImGuiMCP::Checkbox("Potions", &s.potions);
+        Tr::TextDisabled("Each one takes time off his waits, as if he had rested that much longer.");
+        ch |= Tr::Checkbox("Potions", &s.potions);
         if (s.potions) {
             ImGuiMCP::Indent();
-            ch |= ImGuiMCP::SliderFloat("Hours off per potion", &s.potionHours, 0.0f, 48.0f, "%.1f h");
-            ch |= ImGuiMCP::Checkbox("Stronger potions take more off", &s.potionScale);
+            ch |= Tr::SliderFloat("Hours off per potion", &s.potionHours, 0.0f, 48.0f, "%.1f h");
+            ch |= Tr::Checkbox("Stronger potions take more off", &s.potionScale);
             Help("Measured by how much health the potion gives back: a minor one counts half, a plentiful one as set, an "
                  "ultimate one double (up to three times).");
-            ch |= ImGuiMCP::Checkbox("Food that restores health counts too", &s.food);
+            ch |= Tr::Checkbox("Food that restores health counts too", &s.food);
             ImGuiMCP::Unindent();
         }
-        ch |= ImGuiMCP::Checkbox("Healing spells", &s.spells);
+        ch |= Tr::Checkbox("Healing spells", &s.spells);
         if (s.spells) {
             ImGuiMCP::Indent();
-            ch |= ImGuiMCP::SliderFloat("Hours off per spell", &s.spellHours, 0.0f, 48.0f, "%.1f h");
+            ch |= Tr::SliderFloat("Hours off per spell", &s.spellHours, 0.0f, 48.0f, "%.1f h");
             ImGuiMCP::Unindent();
         }
         if (s.potions || s.spells) {
-            ch |= ImGuiMCP::SliderFloat("Wait before the next one counts", &s.cooldown, 0.0f, 300.0f, "%.0f s");
-            ImGuiMCP::TextUnformatted("Takes time off:");
+            ch |= Tr::SliderFloat("Wait before the next one counts", &s.cooldown, 0.0f, 300.0f, "%.0f s");
+            Tr::TextUnformatted("Takes time off:");
             ImGuiMCP::Indent();
-            ch |= ImGuiMCP::Checkbox("His virginity coming back", &s.healVirgin);
+            ch |= Tr::Checkbox("His virginity coming back", &s.healVirgin);
             Help("After a set time: the wait gets shorter. Smart: counts as rest, so his experience wears off sooner. "
                  "One and done: no effect.");
-            ch |= ImGuiMCP::Checkbox("Lasting looseness healing", &s.healLoose);
+            ch |= Tr::Checkbox("Lasting looseness healing", &s.healLoose);
             Help("Lasting looseness (After sex page) heals a little every game day. A potion or spell counts as that many "
                  "extra hours of healing: with \"Heals per game day\" at 5%, a potion taking 6 hours off heals about "
                  "1.25% of looseness on top. It never adds looseness, only takes it away faster.");
-            ch |= ImGuiMCP::Checkbox("The first-time reaction", &s.healFirst);
+            ch |= Tr::Checkbox("The first-time reaction", &s.healFirst);
             Help("After losing his virginity he is redder, more swollen and clenches more for a while (\"Lasts\", above, "
                  "in game days). A potion or spell makes that time run out sooner by the hours it takes off - it eases him "
                  "back to normal faster. His virginity stays lost either way.");
             ImGuiMCP::Unindent();
-            ImGuiMCP::TextDisabled("Redness, bruising and swelling: After sex page (healing clears them).");
+            Tr::TextDisabled("Redness, bruising and swelling: After sex page (healing clears them).");
         }
         }
         if (ch) Colour::SaveNow();
@@ -710,7 +711,7 @@ namespace Virgin {
         static std::string last;
         if (!a) return;
         auto act = [&](const char* label, auto fn) {
-            if (!ImGuiMCP::Button(label)) return;
+            if (!Tr::Button(label)) return;
             last = fn();
             if (!g.on) last += " - NOT used: virginity is off (Virginity page)";
             else if (!g.grp[GroupOf(a)].on) last += std::format(" - NOT used: virginity is off for {} (Virginity page)", kGroupName[GroupOf(a)]);
@@ -739,7 +740,7 @@ namespace Virgin {
         });
         ImGuiMCP::SameLine();
         act("Forget him", [&] { std::lock_guard lk(g_mx); g_men.erase(a->GetFormID()); return std::string("rolled again next time"); });
-        ImGuiMCP::TextUnformatted(Status(a).c_str());
-        if (!last.empty()) ImGuiMCP::TextDisabled("Virginity: %s", last.c_str());
+        Tr::TextUnformatted(Status(a).c_str());
+        if (!last.empty()) Tr::TextDisabled("Virginity: %s", last.c_str());
     }
 }

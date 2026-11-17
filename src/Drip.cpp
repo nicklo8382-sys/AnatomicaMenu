@@ -1,4 +1,5 @@
 #include "Drip.h"
+#include "Lang.h"
 #include "Virgin.h"
 #include "Kinds.h"
 #include "Fluid.h"
@@ -817,23 +818,23 @@ namespace {
     // ---------------------------------------------------------------- menu helpers
     void Help(const char* text) {
         ImGuiMCP::SameLine();
-        ImGuiMCP::TextDisabled("(?)");
+        Tr::TextDisabled("(?)");
         if (ImGuiMCP::IsItemHovered()) {
             ImGuiMCP::BeginTooltip();
             ImGuiMCP::PushTextWrapPos(ImGuiMCP::GetFontSize() * 30.0f);
-            ImGuiMCP::TextUnformatted(text);
+            Tr::TextUnformatted(text);
             ImGuiMCP::PopTextWrapPos();
             ImGuiMCP::EndTooltip();
         }
     }
     bool Pct(const char* label, float* v, float hi = 1.0f) {
         float p = *v * 100.0f;
-        if (ImGuiMCP::SliderFloat(label, &p, 0.0f, hi * 100.0f, "%.0f%%")) { *v = p / 100.0f; return true; }
+        if (Tr::SliderFloat(label, &p, 0.0f, hi * 100.0f, "%.0f%%")) { *v = p / 100.0f; return true; }
         return false;
     }
     bool Mins(const char* label, float* seconds, float lo, float hi) {
         float m = *seconds / 60.0f;
-        if (ImGuiMCP::SliderFloat(label, &m, lo, hi, "%.1f min")) { *seconds = m * 60.0f; return true; }
+        if (Tr::SliderFloat(label, &m, lo, hi, "%.1f min")) { *seconds = m * 60.0f; return true; }
         return false;
     }
     template <class F> void Indent(bool on, F&& body) {
@@ -1016,13 +1017,13 @@ namespace Drip {
         int n = 0;
         for (auto& t : tests) {
             if (n++ % 4) ImGuiMCP::SameLine();
-            if (ImGuiMCP::Button(t[0])) last = RunTest(who, t[1]);
-            if (ImGuiMCP::IsItemHovered()) { ImGuiMCP::BeginTooltip(); ImGuiMCP::TextUnformatted(t[2]); ImGuiMCP::EndTooltip(); }
+            if (Tr::Button(t[0])) last = RunTest(who, t[1]);
+            if (ImGuiMCP::IsItemHovered()) { ImGuiMCP::BeginTooltip(); Tr::TextUnformatted(t[2]); ImGuiMCP::EndTooltip(); }
         }
-        if (!last.empty()) ImGuiMCP::TextDisabled("Cum: %s", last.c_str());
+        if (!last.empty()) Tr::TextDisabled("Cum: %s", last.c_str());
         bool slow = Fluid::SlowMotion();
-        if (ImGuiMCP::Checkbox("Slow motion (to watch squirts, strings and drops)", &slow)) Fluid::SlowMotion(slow);
-        ImGuiMCP::TextDisabled("Console: cgf \"AnatomicaNative.DripTest\" \"squirt\"  (load fill squirt spray ooze gush string drip froth trail coat clear)");
+        if (Tr::Checkbox("Slow motion (to watch squirts, strings and drops)", &slow)) Fluid::SlowMotion(slow);
+        Tr::TextDisabled("Console: cgf \"AnatomicaNative.DripTest\" \"squirt\"  (load fill squirt spray ooze gush string drip froth trail coat clear)");
     }
 
     std::string Status(RE::Actor* a) {
@@ -1082,141 +1083,141 @@ namespace Drip {
         bool ch = false;
         Settings& s = g;   // the menu runs on the render thread; values are plain floats/bools
         if (!PluginPresent()) {
-            ImGuiMCP::TextWrapped("AnatomicaGape.esp (Lingering Gape) is not active - the drip meshes live in it.");
+            Tr::TextWrapped("AnatomicaGape.esp (Lingering Gape) is not active - the drip meshes live in it.");
             return;
         }
-        ch |= ImGuiMCP::Checkbox("Cum drips from the anus", &s.on);
+        ch |= Tr::Checkbox("Cum drips from the anus", &s.on);
         Help("Anatomica's own cum: strands hanging from his hole, squirts, oozing, a string to the partner, rivulets down "
              "his leg, puddles. Simulated by the DLL every frame against his real body shape - no SMP needed.");
         Indent(s.on, [&] {
-            ImGuiMCP::SeparatorText("When");
-            ch |= ImGuiMCP::Checkbox("OStim: each time a partner climaxes in him", &s.trigOStim);
-            ch |= ImGuiMCP::Checkbox("SexLab: each climax (Separate Orgasm supported)", &s.trigSexLab);
-            ch |= ImGuiMCP::Checkbox("End of a round, if no climax was counted (one load per partner)", &s.trigRound);
+            Tr::SeparatorText("When");
+            ch |= Tr::Checkbox("OStim: each time a partner climaxes in him", &s.trigOStim);
+            ch |= Tr::Checkbox("SexLab: each climax (Separate Orgasm supported)", &s.trigSexLab);
+            ch |= Tr::Checkbox("End of a round, if no climax was counted (one load per partner)", &s.trigRound);
             Help("Works without any framework: when the penetration stops for a few seconds. Also catches scenes where the "
                  "framework sends no climax.");
-            ch |= ImGuiMCP::Checkbox("Show it while still in the scene", &s.showDuring);
+            ch |= Tr::Checkbox("Show it while still in the scene", &s.showDuring);
             Help("Off = the loads are counted during the scene and the strands appear when the scene ends.");
 
-            ImGuiMCP::SeparatorText("How much");
-            ch |= ImGuiMCP::SliderInt("Loads he can hold", &s.loadCap, 1, 5);
+            Tr::SeparatorText("How much");
+            ch |= Tr::SliderInt("Loads he can hold", &s.loadCap, 1, 5);
             Help("Each climax is one load. Once he is full, the next ones come straight back out (squirt, if on).");
-            ch |= ImGuiMCP::SliderFloat("One load", &s.vol, 0.2f, 3.0f, "%.2f");
-            ch |= ImGuiMCP::SliderFloat("Each man: from", &s.manMin, 0.2f, 3.0f, "x%.2f");
-            ch |= ImGuiMCP::SliderFloat("Each man: to", &s.manMax, 0.2f, 3.0f, "x%.2f");
+            ch |= Tr::SliderFloat("One load", &s.vol, 0.2f, 3.0f, "%.2f");
+            ch |= Tr::SliderFloat("Each man: from", &s.manMin, 0.2f, 3.0f, "x%.2f");
+            ch |= Tr::SliderFloat("Each man: to", &s.manMax, 0.2f, 3.0f, "x%.2f");
             Help("Every man gets his own amount somewhere in this range (always the same for him).");
-            ch |= ImGuiMCP::Checkbox("First load in a while is bigger", &s.firstBig);
+            ch |= Tr::Checkbox("First load in a while is bigger", &s.firstBig);
             Indent(s.firstBig, [&] {
-                ch |= ImGuiMCP::SliderFloat("Bigger by", &s.firstMul, 1.0f, 5.0f, "x%.1f");
-                ch |= ImGuiMCP::SliderFloat("If he has not come for", &s.firstGap, 5.0f, 600.0f, "%.0f min");
+                ch |= Tr::SliderFloat("Bigger by", &s.firstMul, 1.0f, 5.0f, "x%.1f");
+                ch |= Tr::SliderFloat("If he has not come for", &s.firstGap, 5.0f, 600.0f, "%.0f min");
             });
-            ch |= ImGuiMCP::Checkbox("More partners = more", &s.multi);
+            ch |= Tr::Checkbox("More partners = more", &s.multi);
             Indent(s.multi, [&] { ch |= Pct("Extra per extra partner", &s.multiPer); });
 
-            ImGuiMCP::SeparatorText("While he is being filled");
-            ch |= ImGuiMCP::Checkbox("Some comes back out around his schlong", &s.overflow);
+            Tr::SeparatorText("While he is being filled");
+            ch |= Tr::Checkbox("Some comes back out around his schlong", &s.overflow);
             Help("While the partner is still inside: a ring of cum squeezes out around the shaft, runs down from the hole "
                  "and drips (puddle). Big loads and a fuller man make it more likely.");
             Indent(s.overflow, [&] {
                 ch |= Pct("Chance (one normal load, half full)", &s.overflowChance);
                 ch |= Pct("How much of the load comes out", &s.overflowOut, 0.9f);
-                ch |= ImGuiMCP::SliderFloat("Stays around the hole for", &s.overflowHold, 2.0f, 30.0f, "%.0f s");
+                ch |= Tr::SliderFloat("Stays around the hole for", &s.overflowHold, 2.0f, 30.0f, "%.0f s");
             });
 
-            ImGuiMCP::SeparatorText("Leaking");
+            Tr::SeparatorText("Leaking");
             ch |= Mins("A full load drains in", &s.leakTime, 0.5f, 30.0f);
             Help("A drip grows, falls (puddle) and the next one starts until he is empty. Bigger amounts = thicker strands, "
                  "more of them.");
-            ch |= ImGuiMCP::Checkbox("Squirt when he pulls out / the scene ends", &s.squirt);
+            ch |= Tr::Checkbox("Squirt when he pulls out / the scene ends", &s.squirt);
             Help("Pulses out of the open hole as a stream that pulls apart into drops; they splash on him or the floor "
                  "(puddles). While something is still inside him it never shoots out of an open hole: it sprays out around "
                  "his schlong instead (when he is already full, or with a big load).");
             Indent(s.squirt, [&] {
                 ch |= Pct("Chance", &s.squirtChance);
-                ch |= ImGuiMCP::SliderFloat("Only with at least", &s.squirtMin, 0.0f, 5.0f, "%.1f in him");
+                ch |= Tr::SliderFloat("Only with at least", &s.squirtMin, 0.0f, 5.0f, "%.1f in him");
             });
-            ch |= ImGuiMCP::Checkbox("When he is already full, it comes straight back out", &s.squirtOverflow);
+            ch |= Tr::Checkbox("When he is already full, it comes straight back out", &s.squirtOverflow);
             Help("Around the schlong while the partner is still in him, as a squirt otherwise.");
-            ch |= ImGuiMCP::Checkbox("Puddles on the floor", &s.puddles);
+            ch |= Tr::Checkbox("Puddles on the floor", &s.puddles);
             Indent(s.puddles, [&] {
                 ch |= Mins("Puddles stay", &s.puddleLife, 0.5f, 60.0f);
-                ch |= ImGuiMCP::SliderInt("At most", &s.puddleMax, 4, 60);
-                ch |= ImGuiMCP::Checkbox("Drops while he walks", &s.walkDrops);
-                Indent(s.walkDrops, [&] { ch |= ImGuiMCP::SliderFloat("A drop every", &s.walkEvery, 2.0f, 30.0f, "%.0f s"); });
+                ch |= Tr::SliderInt("At most", &s.puddleMax, 4, 60);
+                ch |= Tr::Checkbox("Drops while he walks", &s.walkDrops);
+                Indent(s.walkDrops, [&] { ch |= Tr::SliderFloat("A drop every", &s.walkEvery, 2.0f, 30.0f, "%.0f s"); });
             });
-            ch |= ImGuiMCP::Checkbox("Runs down his leg", &s.leg);
+            ch |= Tr::Checkbox("Runs down his leg", &s.leg);
             Help("Rivulets that run from the hole down the inside of one thigh over his actual body, more the more has "
                  "leaked, leaving a wet trail that dries (drying time: Look and physics). Gone when he dresses.");
             Indent(s.leg, [&] {
                 ch |= Mins("Stays after he is empty", &s.legStay, 0.5f, 120.0f);
             });
-            ch |= ImGuiMCP::Checkbox("A gush when he gets up", &s.gush);
+            ch |= Tr::Checkbox("A gush when he gets up", &s.gush);
             Help("A bigger amount runs out of him at once: around the hole and down, then a puddle.");
             Indent(s.gush, [&] {
-                ch |= ImGuiMCP::Checkbox("When a scene ends", &s.gushScene);
-                ch |= ImGuiMCP::Checkbox("After sitting or lying down", &s.gushStand);
-                ch |= ImGuiMCP::SliderFloat("Only with at least##gush", &s.gushMin, 0.0f, 5.0f, "%.1f in him");
+                ch |= Tr::Checkbox("When a scene ends", &s.gushScene);
+                ch |= Tr::Checkbox("After sitting or lying down", &s.gushStand);
+                ch |= Tr::SliderFloat("Only with at least##gush", &s.gushMin, 0.0f, 5.0f, "%.1f in him");
                 ch |= Pct("How much comes out", &s.gushFrac, 0.9f);
             });
-            ch |= ImGuiMCP::Checkbox("Swimming washes it all off", &s.wash);
-            ch |= ImGuiMCP::Checkbox("Bathing mods wash it off", &s.bath);
+            ch |= Tr::Checkbox("Swimming washes it all off", &s.wash);
+            ch |= Tr::Checkbox("Bathing mods wash it off", &s.bath);
             Help("Bathing in Skyrim (and its follower / wash rag bathing), or any mod whose bathing effect is called bath, "
                  "wash or soap. Also cleans the giver's tip.");
 
-            ImGuiMCP::SeparatorText("At the hole");
-            ch |= ImGuiMCP::Checkbox("Cum film over the rim while it is in him", &s.film);
+            Tr::SeparatorText("At the hole");
+            ch |= Tr::Checkbox("Cum film over the rim while it is in him", &s.film);
             Help("A thin glossy layer of cum lying on the inner edge of the rim, creeping further down at the bottom. A mesh "
                  "on top of the skin - the rim's own colour is never changed - and it opens with him when he gapes. The cum "
                  "pooled inside the canal shows whenever he gapes and hides while he is penetrated.");
-            ch |= ImGuiMCP::Checkbox("His clenches push it out", &s.clench);
+            ch |= Tr::Checkbox("His clenches push it out", &s.clench);
             Help("Each clench (Movement page) makes the drip grow faster and sometimes squeezes a little out.");
             Indent(s.clench, [&] {
                 ch |= Pct("Push per clench", &s.clenchPush);
                 ch |= Pct("Chance of a dribble", &s.clenchDribble);
-                ch |= ImGuiMCP::Checkbox("Only leaks when he clenches or walks (no timer)", &s.clenchOnly);
+                ch |= Tr::Checkbox("Only leaks when he clenches or walks (no timer)", &s.clenchOnly);
             });
-            ch |= ImGuiMCP::Checkbox("Froth at the rim after a long or rough round", &s.froth);
+            ch |= Tr::Checkbox("Froth at the rim after a long or rough round", &s.froth);
             Indent(s.froth, [&] {
-                ch |= ImGuiMCP::SliderFloat("Full froth after", &s.frothAfter, 10.0f, 300.0f, "%.0f s of penetration");
+                ch |= Tr::SliderFloat("Full froth after", &s.frothAfter, 10.0f, 300.0f, "%.0f s of penetration");
                 ch |= Mins("Froth stays", &s.frothTime, 0.5f, 20.0f);
             });
             Help("Little bubbles painted onto the rim texture, so they stay on the rim however wide he gapes. Rougher "
                  "(wider) rounds make more. Needs the colour feature on (Colours page).");
-            ch |= ImGuiMCP::Checkbox("A string to him when he pulls out", &s.string);
+            ch |= Tr::Checkbox("A string to him when he pulls out", &s.string);
             Indent(s.string, [&] { ch |= Pct("Chance##string", &s.stringChance); });
             Help("A string between his hole and the partner's tip as he pulls out: it thins as they part and snaps "
                  "(distance: Look and physics). One half springs back and hangs from the hole, the other stays on his tip.");
-            ch |= ImGuiMCP::Checkbox("The gape stays open longer while he is full", &s.fullOpen);
-            Indent(s.fullOpen, [&] { ch |= ImGuiMCP::SliderFloat("Slower by up to", &s.fullOpenAmt, 0.0f, 3.0f, "+%.1fx"); });
-            ch |= ImGuiMCP::Checkbox("A spurt when he lands from a jump or fall", &s.land);
+            ch |= Tr::Checkbox("The gape stays open longer while he is full", &s.fullOpen);
+            Indent(s.fullOpen, [&] { ch |= Tr::SliderFloat("Slower by up to", &s.fullOpenAmt, 0.0f, 3.0f, "+%.1fx"); });
+            ch |= Tr::Checkbox("A spurt when he lands from a jump or fall", &s.land);
             Indent(s.land, [&] { ch |= Pct("Chance##land", &s.landChance); });
 
-            ImGuiMCP::SeparatorText("The giver");
-            ch |= ImGuiMCP::Checkbox("His schlong comes out wet with cum", &s.tip);
+            Tr::SeparatorText("The giver");
+            ch |= Tr::Checkbox("His schlong comes out wet with cum", &s.tip);
             Help("When he pulls out his schlong glistens, streaks of cum run down it and now and then a drop hangs from "
                  "the tip and falls. Fades over the time below, or when he bathes.");
             Indent(s.tip, [&] {
                 ch |= Mins("Stays for", &s.tipTime, 0.25f, 10.0f);
-                if (ImGuiMCP::TreeNode("Tip position (only if his schlong mesh can't be read)")) {
-                    ch |= ImGuiMCP::SliderFloat("Along the schlong", &s.tipFwd, -3.0f, 5.0f, "%.1f");
-                    ch |= ImGuiMCP::SliderFloat("Toward the underside", &s.tipDown, -2.0f, 2.0f, "%.1f");
+                if (Tr::TreeNode("Tip position (only if his schlong mesh can't be read)")) {
+                    ch |= Tr::SliderFloat("Along the schlong", &s.tipFwd, -3.0f, 5.0f, "%.1f");
+                    ch |= Tr::SliderFloat("Toward the underside", &s.tipDown, -2.0f, 2.0f, "%.1f");
                     ImGuiMCP::TreePop();
                 }
             });
 
-            ImGuiMCP::SeparatorText("Look and physics");
+            Tr::SeparatorText("Look and physics");
             if (ch) { Colour::SaveNow(); ch = false; }
             Fluid::RenderSettings();
 
-            ImGuiMCP::SeparatorText("Colour");
-            ch |= ImGuiMCP::Checkbox("Colour by the giver's race (list below)", &s.raceColour);
-            ch |= ImGuiMCP::ColorEdit3("Colour", s.colour, ImGuiMCP::ImGuiColorEditFlags_PickerHueWheel);
+            Tr::SeparatorText("Colour");
+            ch |= Tr::Checkbox("Colour by the giver's race (list below)", &s.raceColour);
+            ch |= Tr::ColorEdit3("Colour", s.colour, ImGuiMCP::ImGuiColorEditFlags_PickerHueWheel);
             Help("Used when the giver's race has no cum colour of its own. Several men mix their colours.");
             if (ch) { Colour::SaveNow(); ch = false; }   // save before the race list (it saves on its own)
             Colour::RenderCumColours();
-            if (ImGuiMCP::Button("Back to defaults")) { s = Settings{}; ch = true; }
+            if (Tr::Button("Back to defaults")) { s = Settings{}; ch = true; }
 
-            ImGuiMCP::TextDisabled("Test every cum effect on the Testing page.");
+            Tr::TextDisabled("Test every cum effect on the Testing page.");
         });
         if (ch) Colour::SaveNow();
     }

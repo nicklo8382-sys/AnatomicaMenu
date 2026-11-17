@@ -1,6 +1,7 @@
 #include "Maker.h"
 
 #include <condition_variable>
+#include <filesystem>
 #include <deque>
 #include <mutex>
 #include <thread>
@@ -37,7 +38,15 @@ namespace Maker {
         auto it = g_state.find(key);
         return it == g_state.end() ? State::none : it->second;
     }
-    void MarkDone(const std::string& key) { std::lock_guard lk(g_mx); g_state[key] = State::done; }
+    void MarkDone(const std::string& key) {
+        // 2.5v: found on disk and used again - mark it as fresh, so the gen-folder tidy (oldest first) keeps textures
+        // that men are still wearing (a save that points at a removed one shows "invalid DDS" until it is remade)
+        std::error_code ec;
+        std::filesystem::last_write_time(std::filesystem::path("Data") / std::filesystem::path(key),
+                                         std::filesystem::file_time_type::clock::now(), ec);
+        std::lock_guard lk(g_mx);
+        g_state[key] = State::done;
+    }
     void ForgetDone() {
         std::lock_guard lk(g_mx);
         for (auto it = g_state.begin(); it != g_state.end();) it = it->second == State::done ? g_state.erase(it) : std::next(it);
