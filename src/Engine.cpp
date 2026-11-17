@@ -1116,6 +1116,7 @@ namespace Engine {
 
     void Install() { std::thread(Loop).detach(); }
     void BodyMorph(RE::Actor* a, const char* name, const char* key, float v) { if (g_morph && a) g_morph->SetMorph(a, name, key, v); }
+    float MorphSum(RE::Actor* a, const char* name) { return (g_morph && a) ? g_morph->GetBodyMorphs(a, name) : 0.0f; }
 
     void Connect() {
         if (g_asked) return;

@@ -16,6 +16,7 @@ namespace {
         float every = 2.5f;         // seconds between updates while the shape keeps changing
         float settle = 1.0f;        // the shape has stood still this long: one last update
         float change = 0.08f;       // how much the shape has to change (0-1 of the full bulge / gape) to count
+        bool peak = true;           // a travelling bulge: update when it is near the top of its run
         bool remind = true;         // a note at game start while MuDynamicNormalMap.ini still has the settings that cost the most
     } g;
 
@@ -29,7 +30,7 @@ namespace {
         {"DetectTickMS", "5000", "Its own checks less often",
          "Anatomica asks for the updates while he is taken, so MuDynamicNormalMap's own vertex watching can slow right down. "
          "Other changes (RaceMenu, weight, other mods' morphs) still update, just later. 1000 = its default (every second).", true, {}},
-        {"UpdateDistance", "1000", "Only men within about 20 m get rebuilt",
+        {"UpdateDistance", "1000", "Only men nearby get rebuilt",
          "0 = everyone loaded, however far. Saves GPU work in towns.", false, {}},
         {"UpdateDistanceVramSave", "true", "Free the video memory of men further away",
          "Goes with the distance above: their rebuilt maps are dropped and made again when they come close.", false, {}},
@@ -37,6 +38,7 @@ namespace {
          "Men don't pop from flat to shaded when you arrive - loading screens take a little longer.", false, {}},
     };
     int g_detectMs = 5000;   // the DetectTickMS asked for (slider)
+    int g_distance = 1000;   // the UpdateDistance asked for (slider; 0 = everyone loaded)
     bool g_iniRead = false;
     std::string g_iniNote;
     bool g_reminded = false;
@@ -64,7 +66,7 @@ namespace {
             if (KV(line, k, v)) for (auto& r : g_recs) if (k == r.key) r.now = v;
     }
     bool Good(const Rec& r) { return Lower(r.now) == r.want; }
-    bool CostsMost() { return !Good(g_recs[0]) || std::atoi(g_recs[1].now.c_str()) < 2000; }   // still checking every second or two   // the two that matter with Anatomica asking
+    bool CostsMost() { return !Good(g_recs[0]) || std::atoi(g_recs[1].now.c_str()) < 2000; }   // still checking every second or two
     std::string ApplyIni() {
         std::vector<std::string> L;
         {
@@ -111,9 +113,12 @@ namespace {
     int g_installed = -1;
     int g_asked = 0;                // updates asked this session (menu)
 
-    struct Look { float bulge = 0.0f, reach = 0.0f, belly = 0.0f, gape = 0.0f; };
+    // what changes his shape: the bulge (how strong, how far up), the stomach, the gape, the puffy rim (after-sex swelling and
+    // the ring shapes while he is taken) and the imprint left afterwards
+    struct Look { float bulge = 0.0f, reach = 0.0f, belly = 0.0f, gape = 0.0f, rim = 0.0f, imprint = 0.0f; };
     float Diff(const Look& a, const Look& b) {
-        return std::max({std::abs(a.bulge - b.bulge), std::abs(a.reach - b.reach) / 8.0f, std::abs(a.belly - b.belly), std::abs(a.gape - b.gape)});
+        return std::max({std::abs(a.bulge - b.bulge), std::abs(a.reach - b.reach) / 8.0f, std::abs(a.belly - b.belly), std::abs(a.gape - b.gape),
+                         std::abs(a.rim - b.rim), std::abs(a.imprint - b.imprint)});
     }
     struct St { Look sent, seen; double sentAt = -100.0, movedAt = -100.0; bool dirty = false; };
     std::unordered_map<RE::FormID, St> g_st;
@@ -158,7 +163,10 @@ namespace Mu {
             const auto id = a->GetFormID();
             const auto b = Engine::BulgeOf(id);
             const float gp = Engine::GapeOf(id);
-            Look now_{b.on ? b.amount : 0.0f, b.on ? b.reach : 0.0f, b.belly, std::max(gp, 0.0f)};
+            float rim = 0.0f;
+            for (const char* m : {"Anatomica Swell", "Anatomica Ring", "Anatomica Donut", "Anatomica Rosebud", "Anatomica Lips", "Anatomica Pucker"})
+                rim = std::max(rim, Engine::MorphSum(a, m));
+            Look now_{b.on ? b.amount : 0.0f, b.on ? b.reach : 0.0f, b.belly, std::max(gp, 0.0f), rim, b.imprint};
             auto it = g_st.find(id);
             if (it == g_st.end()) {
                 if (Diff(now_, Look{}) < g.change) continue;   // nothing going on with him
@@ -168,8 +176,11 @@ namespace Mu {
             if (Diff(now_, s.seen) > 0.01f) { s.seen = now_; s.movedAt = now; }
             if (Diff(now_, s.sent) >= g.change) s.dirty = true;
             const bool still = now - s.movedAt >= g.settle;
-            // while it moves: at most every few seconds; once it stands still: straight away
-            if (s.dirty && (now - s.sentAt >= g.every || (still && now - s.sentAt >= 0.5))) {
+            // while it moves: at most every few seconds; once it stands still: straight away.
+            // A bulge running up and back with each stroke: only when it is near the top of its run, so the shading
+            // matches the shape that shows most (a map takes longer to make than one stroke)
+            const bool peakOk = !g.peak || !b.on || b.roundMax <= 0.0f || b.reach >= b.roundMax * 0.85f;
+            if (s.dirty && ((now - s.sentAt >= g.every && peakOk) || (still && now - s.sentAt >= 0.5) || now - s.sentAt >= g.every * 3.0f)) {
                 Ask(a);
                 s.sent = now_;
                 s.sentAt = now;
@@ -214,7 +225,12 @@ namespace Mu {
             ch |= Tr::SliderFloat("Settled after", &g.settle, 0.3f, 5.0f, "%.1f s");
             float pct = g.change * 100.0f;
             if (Tr::SliderFloat("Change that counts", &pct, 2.0f, 40.0f, "%.0f%%")) { g.change = pct / 100.0f; ch = true; }
-            help("How much the bulge or gape has to change before it is worth a new normal map. Lower = closer shading, more work.");
+            help("How much the bulge, stomach, gape or puffy rim has to change before it is worth a new normal map. Lower = "
+                 "closer shading, more work.");
+            ch |= Tr::Checkbox("Travelling bulge: shade it at the top of its run", &g.peak);
+            help("A normal map takes longer to make than one stroke, so a bulge running up and back can't be followed. This "
+                 "updates when it is near the furthest it goes, so the shading matches the shape that shows most. Off: whenever "
+                 "the time is up, wherever it is.");
             Tr::TextDisabled("Updates asked this session: %d", g_asked);
             ImGuiMCP::Unindent();
         }
@@ -232,6 +248,14 @@ namespace Mu {
                 }
                 help("DetectTickMS: how often MuDynamicNormalMap looks for bodies that changed shape by itself. Anatomica asks "
                      "for the updates during sex, so this can be slow: 5000 (5 s) is a good start, 1000 is its default.");
+                int dist = g_distance;
+                ImGuiMCP::SetNextItemWidth(ImGuiMCP::GetFontSize() * 12.0f);
+                if (Tr::SliderInt("Rebuild men within", &dist, 0, 5000, dist == 0 ? "everyone" : "%d units")) {
+                    g_distance = dist < 250 ? 0 : std::clamp(dist / 50 * 50, 250, 5000);
+                    g_recs[2].want = std::to_string(g_distance);
+                    ch = true;
+                }
+                help("UpdateDistance: about 2 m per 100 units (1000 = 20 m). 0 = everyone loaded, however far.");
             }
             for (auto& r : g_recs) {
                 ImGuiMCP::PushID(r.key);
@@ -266,6 +290,8 @@ namespace Mu {
             ini.SetDoubleValue(S, "Change", g.change);
             ini.SetBoolValue(S, "Remind", g.remind);
             ini.SetLongValue(S, "DetectTickMS", g_detectMs);
+            ini.SetLongValue(S, "UpdateDistance", g_distance);
+            ini.SetBoolValue(S, "Peak", g.peak);
         } else {
             g.remind = ini.GetBoolValue(S, "Remind", g.remind);
             g_detectMs = std::clamp(static_cast<int>(ini.GetLongValue(S, "DetectTickMS", g_detectMs)), 1000, 15000);

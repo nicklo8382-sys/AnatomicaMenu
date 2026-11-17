@@ -26,5 +26,6 @@ namespace Engine {
     bool NodeFloat(RE::Actor* a, const char* node, int key, float value);
     bool NodeRemove(RE::Actor* a, const char* node, int key, int index);
     bool RingDirect();
-    void BodyMorph(RE::Actor* a, const char* name, const char* key, float v);   // 2.5v: a RaceMenu body morph (no model update)                    // the skin-blend ring is coloured here, straight on its material
+    void BodyMorph(RE::Actor* a, const char* name, const char* key, float v);
+    float MorphSum(RE::Actor* a, const char* name);   // 2.5v: a body morph, all its keys added up   // 2.5v: a RaceMenu body morph (no model update)                    // the skin-blend ring is coloured here, straight on its material
 }
