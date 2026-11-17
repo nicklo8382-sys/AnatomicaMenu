@@ -123,11 +123,11 @@ namespace {
         g_tr.clear(); g_fmt.clear(); g_lbl.clear(); g_bad = 0; g_problem.clear();
         g_loaded.clear(); g_loadedName = "English";
         if (f.empty()) {
-            if (g_choice != "" && g_choice != "*") g_problem = std::format("{}.ini was not found in the Translations folder", g_choice);
+            if (g_choice != "" && g_choice != "*") g_problem = std::format("{}.ini was not found in the Translations folder - a file added while the game runs is only seen after a restart", g_choice);
             return;
         }
         std::ifstream in(f, std::ios::binary);
-        if (!in) { g_problem = "could not open " + f.filename().string(); return; }
+        if (!in) { g_problem = "could not open " + f.filename().string() + " - restart the game: a file added or renamed while it runs can't be opened until then (Mod Organizer)"; return; }
         std::string line, en;
         bool first = true, haveEn = false;
         while (std::getline(in, line)) {
@@ -229,7 +229,9 @@ namespace Lang {
                  "; game's language setting is picked up automatically), then choose it on the General page.\n"
                  "; Each line of English (en:) gets its translation (tr:) below it. Leave tr: empty to keep the English.\n"
                  "; Keep %s, %d, %.0f, %% and the like exactly as they are, in the same order. \\n = a new line.\n"
-                 "; The file is UTF-8. Menu pages are renamed after a game restart.\n"
+                 "; The file is UTF-8. A new or renamed file is only found after a game restart (Mod Organizer only shows the game\n"
+                 "; the files that were there when it started); edits to a file the game already loaded show when you pick the\n"
+                 "; language again. Menu page names change after a restart.\n"
               << "name: " << (filled ? g_loadedName : std::string("My language")) << "\n\n";
             for (const char* k : kKeys) {
                 std::string tr;
@@ -275,11 +277,13 @@ namespace Lang {
             ImGuiMCP::BeginTooltip();
             ImGuiMCP::PushTextWrapPos(ImGuiMCP::GetFontSize() * 30.0f);
             Tr::TextUnformatted("Translations are files in Data\\SKSE\\Plugins\\AnatomicaMenu\\Translations. \"Game language\" uses the "
-                                "one named like the game's language setting (e.g. German.ini), else English. The menu changes at once; "
-                                "the page names on the left change after a game restart.");
+                                "one named like the game's language setting (e.g. German.ini), else English. Picking a language changes the "
+                                "menu at once; the page names on the left change after a game restart. A translation file you add or "
+                                "rename while the game is running is only found after a restart.");
             ImGuiMCP::PopTextWrapPos();
             ImGuiMCP::EndTooltip();
         }
+        Tr::TextDisabled("Added or renamed a translation file? Restart the game first - it is only found then.");
         if (!g_loaded.empty()) Tr::TextDisabled("In use: %s - %d lines translated", g_loadedName.c_str(), Count());
         else if (!g_problem.empty()) Tr::TextColored(ImGuiMCP::ImVec4{1.0f, 0.45f, 0.4f, 1.0f}, "English (%s)", g_problem.c_str());
         else Tr::TextDisabled("In use: English");

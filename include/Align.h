@@ -14,6 +14,7 @@
 // OStim only (its action factions say who does what).
 namespace Align {
     void Tick(const std::vector<RE::Actor*>& all, float dt, double now);   // from the gape engine's tick (main thread)
+    bool SchlongOff(RE::FormID actor);       // 2.5x: his schlong is switched off as the bottom (the gape engine ignores it too)
     bool RenderSection();                    // During sex page (true = a setting changed)
     void Ini(CSimpleIniA& ini, bool save);   // [BottomAlign] in AnatomicaMenu.ini
 }

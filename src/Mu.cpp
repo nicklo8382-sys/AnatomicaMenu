@@ -1,6 +1,7 @@
 #include "Mu.h"
 #include "Lang.h"
 #include "Engine.h"
+#include "Size.h"
 
 #include <algorithm>
 #include <cmath>
@@ -160,6 +161,7 @@ namespace Mu {
             if (!a || !a->Is3DLoaded()) continue;
             const auto* npc = a->GetActorBase();
             if (!npc || npc->GetSex() != RE::SEX::kMale) continue;
+            if (Size::IsCreatureActor(a)) continue;   // 2.5x: creatures (no HIMBO body: MuDynamicNormalMap says "no valid geometry")
             const auto id = a->GetFormID();
             const auto b = Engine::BulgeOf(id);
             const float gp = Engine::GapeOf(id);

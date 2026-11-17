@@ -278,6 +278,7 @@ namespace {
         if (c.ok)
             for (auto* o : others) {
                 if (o == act) continue;
+                if (Align::SchlongOff(o->GetFormID())) continue;   // 2.5x: a bottom whose schlong is switched off doesn't count as in him
                 const float d = act->GetPosition().GetDistance(o->GetPosition());
                 if (d > 90.0f) continue;
                 Size::Cat(o);   // close enough to be his partner: ask TNG now, so his size is known when it starts
@@ -301,6 +302,7 @@ namespace {
             RE::Actor* best = nullptr;
             for (auto* o : others) {
                 if (o == act || act->GetPosition().GetDistance(o->GetPosition()) > 90.0f) continue;
+                if (Align::SchlongOff(o->GetFormID())) continue;
                 if (Fluid::InTube(o, c.h.ni(), c.a.ni(), 3.2f * c.sc, -0.3f * c.sc, 9.0f * c.sc) < 6) continue;
                 best = o;
                 if (o->GetFormID() == s.lastP) break;

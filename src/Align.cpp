@@ -81,6 +81,9 @@ namespace {
         RE::NiPoint3 expect{};           // where we last put him
         bool haveExpect = false;
         int resets = 0;                  // times something else put him back (OStim aligning)
+        int loggedResets = 0;
+        bool moving = false;             // logged: the move is on
+        int lastFac = -1;                // logged: which action factions he was in
         bool morph = false;              // his schlong is switched off in PPA
         std::string scene;               // his OStim scene ("" = not known)
         double asked = -10.0;
@@ -142,6 +145,11 @@ namespace {
 }
 
 namespace Align {
+    bool SchlongOff(RE::FormID id) {
+        std::lock_guard lk(g_mx);
+        auto it = g_st.find(id);
+        return it != g_st.end() && it->second.morph;
+    }
     void Tick(const std::vector<RE::Actor*>& all, float dt, double now) {
         Factions();
         if (!g_facOk) return;
@@ -172,6 +180,26 @@ namespace Align {
             RE::NiPoint3 want{};
             if (g.move && vag && (man || futaOk)) {
                 if (!Gap(a, man, g.strength, want)) want = {};
+            }
+            {   // 2.5x: what OStim says he is doing, and the move, in the log
+                const int fac = (vag ? 1 : 0) | (taken ? 2 : 0) | (InAny(a, g_usedF) ? 4 : 0) | (schlong ? 8 : 0);
+                const char* nm = a->GetDisplayFullName();
+                if (fac != s.lastFac) {
+                    s.lastFac = fac;
+                    logger::info("Anatomica bottoms: {} - vaginal target {}, taken {}, his schlong has a job {}, has a schlong {} ({})",
+                                 nm ? nm : "?", vag, taken, (fac & 4) != 0, schlong, man ? "man" : "woman");
+                }
+                const bool mv = Length(want) > 0.01f;
+                if (mv != s.moving) {
+                    s.moving = mv;
+                    logger::info("Anatomica bottoms: {} {}", nm ? nm : "?",
+                                 mv ? std::format("moved {:.1f} units ({:.1f}, {:.1f}, {:.1f}) so his anus is where the animation aims", Length(want), want.x, want.y, want.z)
+                                    : std::string("move eased back"));
+                }
+                if (s.resets >= s.loggedResets + 10) {
+                    s.loggedResets = s.resets;
+                    logger::info("Anatomica bottoms: {} - something put him back {} times (OStim lining up?)", nm ? nm : "?", s.resets);
+                }
             }
             // follow the pelvis gently (it turns with every thrust), then ease the offset at most speed units a second
             const float k = std::min(1.0f, dt * 2.0f);
