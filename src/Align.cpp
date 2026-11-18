@@ -97,6 +97,11 @@ namespace {
         int tid = -1, pos = -1;          // 2.5z: his OStim thread and position in it
         double vagSince = -1.0;          // when the vaginal-scene move first wanted to start (pose settles first)
         std::string alignDone;           // the scene his OStim alignment was already moved for
+        RE::NiPoint3 fitSum{};           // 2.5z: measuring how he lines up with his partner's schlong over the first seconds
+        float tSum = 0.0f, latSum = 0.0f;
+        int fitN = 0;
+        double fitStart = -1.0;
+        std::string fitScene;
     };
     std::unordered_map<RE::FormID, St> g_st;
     std::string g_lastScene;             // the last bottom's scene (the "let it work here" button)
@@ -202,6 +207,40 @@ namespace {
         const RE::NiPoint3 d = Sub(kVagina, man ? kAnusMan : kAnusWoman);
         out = Rot(pel->world.rotate, Mul(d, pel->world.scale * strength));
         return true;
+    }
+    float Dot3(const RE::NiPoint3& a, const RE::NiPoint3& b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+    // 2.5z "cock math" (PPA's author: with the schlong's base already past the hole PPA can't solve it - fix the alignment):
+    // where his hole is along the partner's schlong (t: 0 = at the base, 1 = at the tip; lat = how far off its line), and
+    // the move that puts his hole kTarget of the way along it
+    constexpr float kTarget = 0.45f;
+    struct Fit { RE::Actor* partner = nullptr; RE::NiPoint3 corr{}; float t = 0.0f, lat = 0.0f; };
+    bool Measure(RE::Actor* a, bool man, const std::vector<RE::Actor*>& all, Fit& f) {
+        auto* root = a->Get3D(false);
+        auto* pel = root ? root->GetObjectByName(RE::BSFixedString("NPC Pelvis [Pelv]")) : nullptr;
+        if (!pel) return false;
+        const RE::NiPoint3 hole = Add(pel->world.translate, Rot(pel->world.rotate, Mul(man ? kAnusMan : kAnusWoman, pel->world.scale)));
+        float best = 1e9f;
+        for (auto* o : all) {
+            if (!o || o == a || o->GetPosition().GetDistance(a->GetPosition()) > 150.0f) continue;
+            auto* orr = o->Get3D(false);
+            auto* b = orr ? orr->GetObjectByName(RE::BSFixedString("NPC GenitalsBase [GenBase]")) : nullptr;
+            auto* tp = orr ? orr->GetObjectByName(RE::BSFixedString("NPC Genitals06 [Gen06]")) : nullptr;
+            if (!b || !tp) continue;
+            RE::NiPoint3 ax = Sub(tp->world.translate, b->world.translate);
+            const float L = Length(ax);
+            if (L < 3.0f) continue;
+            ax = Mul(ax, 1.0f / L);
+            const RE::NiPoint3 rel = Sub(hole, b->world.translate);
+            const float along = Dot3(rel, ax);
+            const float lat = Length(Sub(rel, Mul(ax, along)));
+            const float t = along / L;
+            const float score = lat + (t < -0.3f ? (-0.3f - t) * L : 0.0f) + (t > 1.6f ? (t - 1.6f) * L : 0.0f);
+            if (score >= best) continue;
+            best = score;
+            f.partner = o; f.t = t; f.lat = lat;
+            f.corr = Sub(Add(b->world.translate, Mul(ax, kTarget * L)), hole);
+        }
+        return f.partner != nullptr && best < 40.0f;
     }
 }
 
@@ -332,31 +371,48 @@ namespace Align {
             // every frame); without OStim's API, his position (OStim puts him back, so it only flickers)
             if (Length(want) > 0.01f) { if (s.vagSince < 0.0) s.vagSince = now; } else s.vagSince = -1.0;
             if (auto* api = OApi(); api && s.tid >= 0 && s.pos >= 0) {
-                if (Length(want) > 0.01f && now - s.vagSince > 0.8 && s.alignDone != s.scene && !s.scene.empty()) {
-                    s.alignDone = s.scene;
-                    AlignLoad();
-                    OAlign cur{};
-                    if (api->GetActorAlignment(static_cast<std::uint32_t>(s.tid), static_cast<std::uint32_t>(s.pos), &cur)) {
-                        const std::string key = s.scene + "#" + std::to_string(s.pos);
-                        bool already = false;
-                        for (auto& v : g_alignSet[key])
-                            if (std::abs(v[0] - cur.x) < 0.05f && std::abs(v[1] - cur.y) < 0.05f && std::abs(v[2] - cur.z) < 0.05f) already = true;
+                // 2.5z: measure for a couple of seconds where his hole sits along his partner's schlong; if it is off (the
+                // base past it, or well off its line) move his OStim alignment so it sits kTarget of the way along
+                const bool canMove = g.move && taken && (man || futaOk) && !s.scene.empty() && s.alignDone != s.scene;
+                if (canMove) {
+                    if (s.fitScene != s.scene) { s.fitScene = s.scene; s.fitSum = {}; s.tSum = s.latSum = 0.0f; s.fitN = 0; s.fitStart = now; }
+                    Fit f;
+                    if (now - s.fitStart > 0.6 && Measure(a, man, all, f)) {
+                        s.fitSum = Add(s.fitSum, f.corr); s.tSum += f.t; s.latSum += f.lat; ++s.fitN;
+                    }
+                    if (now - s.fitStart > 2.6 && s.fitN >= 8) {
+                        s.alignDone = s.scene;
+                        const float inv = 1.0f / static_cast<float>(s.fitN);
+                        const float t = s.tSum * inv, lat = s.latSum * inv;
+                        RE::NiPoint3 move = Mul(s.fitSum, inv * g.strength);
                         const char* nm = a->GetDisplayFullName();
-                        if (already) logger::info("Anatomica bottoms: {} - OStim already has him moved in {}", nm ? nm : "?", s.scene);
+                        const bool off = t < 0.15f || t > 1.1f || lat > 1.5f;
+                        if (!off) logger::info("Anatomica bottoms: {} - lines up already in {} (hole {:.0f}% along the schlong, {:.1f} off its line)", nm ? nm : "?", s.scene, t * 100.0f, lat);
                         else {
-                            // world -> the scene's frame: OStim puts x / y at centre + (cos*x + sin*y, -sin*x + cos*y), centre.r =
-                            // his heading less his own alignment rotation
-                            const float r = a->GetAngleZ() - cur.rotation * 0.01745329f;
-                            const float c = std::cos(r), sn = std::sin(r);
-                            OAlign nw = cur;
-                            nw.x = cur.x + c * want.x - sn * want.y;
-                            nw.y = cur.y + sn * want.x + c * want.y;
-                            nw.z = cur.z + want.z;
-                            api->SetActorAlignment(static_cast<std::uint32_t>(s.tid), static_cast<std::uint32_t>(s.pos), &nw);
-                            g_alignSet[key].push_back({nw.x, nw.y, nw.z});
-                            AlignSave();
-                            logger::info("Anatomica bottoms: {} - OStim alignment in {} (position {}) moved by {:.1f} units: {:.1f},{:.1f},{:.1f} -> {:.1f},{:.1f},{:.1f}",
-                                         nm ? nm : "?", s.scene, s.pos, Length(want), cur.x, cur.y, cur.z, nw.x, nw.y, nw.z);
+                            AlignLoad();
+                            OAlign cur{};
+                            if (api->GetActorAlignment(static_cast<std::uint32_t>(s.tid), static_cast<std::uint32_t>(s.pos), &cur)) {
+                                const std::string key = s.scene + "#" + std::to_string(s.pos);
+                                bool already = false;
+                                for (auto& v : g_alignSet[key])
+                                    if (std::abs(v[0] - cur.x) < 0.05f && std::abs(v[1] - cur.y) < 0.05f && std::abs(v[2] - cur.z) < 0.05f) already = true;
+                                if (already) logger::info("Anatomica bottoms: {} - OStim already has him moved in {} (still {:.0f}% along, {:.1f} off)", nm ? nm : "?", s.scene, t * 100.0f, lat);
+                                else {
+                                    // world -> the scene's frame: OStim puts x / y at centre + (cos*x + sin*y, -sin*x + cos*y), centre.r =
+                                    // his heading less his own alignment rotation
+                                    const float r = a->GetAngleZ() - cur.rotation * 0.01745329f;
+                                    const float c = std::cos(r), sn = std::sin(r);
+                                    OAlign nw = cur;
+                                    nw.x = cur.x + c * move.x - sn * move.y;
+                                    nw.y = cur.y + sn * move.x + c * move.y;
+                                    nw.z = cur.z + move.z;
+                                    api->SetActorAlignment(static_cast<std::uint32_t>(s.tid), static_cast<std::uint32_t>(s.pos), &nw);
+                                    g_alignSet[key].push_back({nw.x, nw.y, nw.z});
+                                    AlignSave();
+                                    logger::info("Anatomica bottoms: {} - in {} his hole was {:.0f}% along the schlong, {:.1f} off its line: OStim alignment (position {}) moved {:.1f} units: {:.1f},{:.1f},{:.1f} -> {:.1f},{:.1f},{:.1f}",
+                                                 nm ? nm : "?", s.scene, t * 100.0f, lat, s.pos, Length(move), cur.x, cur.y, cur.z, nw.x, nw.y, nw.z);
+                                }
+                            }
                         }
                     }
                 }

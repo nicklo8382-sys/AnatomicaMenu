@@ -84,6 +84,27 @@ def keys_of(path):
                     if cur is not None: found.append(cur); cur = None
                     if k == "lbl": found.append(s)
             i = j; continue
+        # tables of structs whose strings are menu text: Type NAME[] = {{...}, ...} - which fields (0-based) are text
+        TABLES = {"Rec": (2, 3), "GlobalSetting": (2, 6, 7), "JigglePart": (1,)}
+        if t[0] == "id" and t[1] in TABLES and i + 4 < len(toks) and toks[i+1][0] == "id" and toks[i+2][1] == "[":
+            fields = TABLES[t[1]]
+            m = i + 2
+            while m < len(toks) and toks[m][1] != "{": m += 1
+            depth, m, field, row = 1, m + 1, 0, []
+            while m < len(toks) and depth:
+                tk = toks[m]
+                if tk[1] == "{":
+                    depth += 1
+                    if depth == 2: field = 0; row = []
+                elif tk[1] == "}":
+                    depth -= 1
+                elif tk[1] == "," and depth == 2: field += 1
+                elif tk[0] == "str" and depth == 2 and field in fields:
+                    if row and row[-1][0] == field: row[-1] = (field, row[-1][1] + tk[1])
+                    else: row.append((field, tk[1]))
+                if tk[1] == "}" and depth == 1: found += [x for _, x in row]; row = []
+                m += 1
+            i = m; continue
         # arrays of menu items: const char* NAME[] = { "...", ... };
         if t[0] == "id" and t[1] == "char" and i + 5 < len(toks):
             j = i + 1
@@ -102,6 +123,7 @@ def clean(s):
     if "##" in s: s = s.split("##")[0]
     if not s.strip(): return None
     if not re.search(r"[A-Za-z]{2}", s): return None        # "%s", "(?)", "x1.00" ...
+    if s == "pct": return None
     if s.lower().endswith((".dds", ".ini", ".esp", ".esm", ".nif")): return None
     return s
 
