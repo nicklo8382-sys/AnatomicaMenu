@@ -2357,7 +2357,7 @@ namespace Colour {
         if (pending == label) {
             Tr::TextUnformatted("Are you sure?");
             ImGuiMCP::SameLine();
-            const std::string yes = std::string("Yes##") + label, no = std::string("No##") + label;
+            const std::string yes = std::string(Lang::T("Yes")) + "##" + label, no = std::string(Lang::T("No")) + "##" + label;
             if (Tr::Button(yes.c_str())) {
                 pending.clear();
                 return true;
@@ -2620,7 +2620,7 @@ namespace Colour {
         {
             auto sel = RE::Console::GetSelectedRef();
             auto* act = sel ? sel->As<RE::Actor>() : nullptr;
-            const std::string lbl = act ? std::format("Re-roll {}", act->GetName()) : std::string("Re-roll selected man");
+            const std::string lbl = act ? Lang::Fmt("Re-roll {}", std::string(act->GetName())) : std::string("Re-roll selected man");
             if (Tr::Button(lbl.c_str()) && act) {
                 ++g_reroll[RefKey(act)];
                 g_ringReset.insert(act->GetFormID());
@@ -2809,7 +2809,7 @@ namespace Colour {
         Tr::TextDisabled("Skin colour is read from the character's skin tone (RaceMenu / CK tint). Skins coloured only "
                                "by a texture, not a tint, read as plain.");
         ImGuiMCP::Separator();
-        std::vector<const char*> items{"All races"};
+        std::vector<const char*> items{Lang::T("All races")};
         for (const auto& r : g_raceRows) items.push_back(r.plain.c_str());
         int del = -1;
         // the man selected in the console (or you): which rules match him, and the one he gets
@@ -3094,7 +3094,7 @@ namespace Colour {
         RE::Actor* a = TestWho();
         static std::string last;
         auto act = [&](const char* label, auto&& fn) {
-            if (Tr::Button(label)) last = std::string(label) + ": " + fn();
+            if (Tr::Button(label)) { std::string lb = Lang::T(label); last = lb.substr(0, lb.find("##")) + ": " + Lang::TS(fn()); }
         };
         // a test can only show what is switched on: say which of the features it needs are off (and where)
         auto off = [](std::initializer_list<std::pair<bool, const char*>> need) {
@@ -3172,7 +3172,7 @@ namespace Colour {
         Tr::TextDisabled("Shows the belly bulge on him for 8 s, moving up and down (During sex page sliders not needed).");
         for (int i = 1; i < During::kShapeCount; ++i) {
             if ((i - 1) % 4) ImGuiMCP::SameLine();
-            act(std::format("Bulge: {}", During::ShapeName(i)).c_str(),
+            act((Lang::Fmt("Bulge: {}", std::string(Lang::T(During::ShapeName(i)))) + "##tb" + std::to_string(i)).c_str(),
                 [&] { return std::string(Engine::TestBulge(a, i) ? "showing for 8 s (needs the body rebuilt with Build Morphs: the Anatomica Bulge sliders)"
                                                                  : "not shown: RaceMenu's body morph interface is not available"); });
         }

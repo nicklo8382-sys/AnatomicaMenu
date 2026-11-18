@@ -23,7 +23,7 @@
 namespace {
     enum Group { kPlayer = 0, kFollower = 1, kOther = 2 };
     enum Return { kOnce = 0, kDays = 1, kSmart = 2 };
-    const char* kGroupName[3] = {"You", "Your followers", "Everyone else"};
+    const char* const kGroupName[3] = {"You", "Your followers", "Everyone else"};
     const char* kGroupKey[3] = {"Player", "Followers", "Others"};
 
     struct GroupSet {
@@ -171,8 +171,10 @@ namespace {
         d = std::max(0.0f, d);
         const int total = static_cast<int>(std::lround(d * 24.0f));
         const int dd = total / 24, hh = total % 24;
-        if (dd == 0) return std::format("{} hour{}", hh, hh == 1 ? "" : "s");
-        return hh ? std::format("{} day{} {} hour{}", dd, dd == 1 ? "" : "s", hh, hh == 1 ? "" : "s") : std::format("{} day{}", dd, dd == 1 ? "" : "s");
+        const std::string h = Lang::Fmt(hh == 1 ? "{} hour" : "{} hours", hh);
+        if (dd == 0) return h;
+        const std::string d2 = Lang::Fmt(dd == 1 ? "{} day" : "{} days", dd);
+        return hh ? d2 + " " + h : d2;
     }
 
     // virginity coming back while he rests
@@ -566,28 +568,32 @@ namespace Virgin {
 
     std::string Status(RE::Actor* a) {
         if (!a) return {};
-        if (!g.on) return "Virginity: off";
-        if (!Covered(a)) return std::format("Virginity: off for {}", kGroupName[GroupOf(a)]);
+        if (!g.on) return Lang::T("Virginity: off");
+        if (!Covered(a)) return Lang::Fmt("Virginity: off for {}", std::string(Lang::T(kGroupName[GroupOf(a)])));
         Watch(a);
         std::lock_guard lk(g_mx);
         auto it = g_men.find(a->GetFormID());
-        if (it == g_men.end()) return "Virginity: not known yet";
+        if (it == g_men.end()) return Lang::T("Virginity: not known yet");
         const Man& m = it->second;
         const GroupSet& gs = g.grp[GroupOf(a)];
         std::string back;
         if (m.virgin == 0) {
             const float rest = m.lastDay >= 0.0f ? Today() - m.lastDay : 0.0f;
-            if (gs.ret == kOnce) back = "for good";
-            else if (gs.ret == kDays) back = "back in " + DaysHours(WaitDays(gs) - rest);
+            if (gs.ret == kOnce) back = Lang::T("for good");
+            else if (gs.ret == kDays) back = Lang::Fmt("back in {}", DaysHours(WaitDays(gs) - rest));
             else {
                 const float rate = 1.0f / (1.0f + static_cast<float>(m.times) / 30.0f);
                 const float need = std::max(3.0f - rest, (rest < 1.0f ? 1.0f - rest : 0.0f) + m.exp / rate);
-                back = "back in about " + DaysHours(need) + " (smart)";
+                back = Lang::Fmt("back in about {} (smart)", DaysHours(need));
             }
         }
-        return std::format("Virginity: {}{} | experience {:.1f} | taken {} time{} by {} partner{}{}", LevelName(m),
-                           m.virgin == 0 ? std::format(" ({})", back) : "", m.exp, m.times, m.times == 1 ? "" : "s", m.partners.size(),
-                           m.partners.size() == 1 ? "" : "s", m.back ? std::format(" | virgin again {} time{}", m.back, m.back == 1 ? "" : "s") : "");
+        std::string o = Lang::Fmt("Virginity: {}", std::string(Lang::T(LevelName(m))));
+        if (m.virgin == 0) o += " (" + back + ")";
+        const size_t np = m.partners.size();
+        o += " | " + Lang::Fmt("experience {:.1f}", m.exp);
+        o += " | " + Lang::Fmt(m.times == 1 ? "taken {} time by {} partner" : (np == 1 ? "taken {} times by {} partner" : "taken {} times by {} partners"), m.times, np);
+        if (m.back) o += " | " + Lang::Fmt(m.back == 1 ? "virgin again {} time" : "virgin again {} times", m.back);
+        return o;
     }
 
     void __stdcall RenderPage() {
@@ -712,9 +718,9 @@ namespace Virgin {
         if (!a) return;
         auto act = [&](const char* label, auto fn) {
             if (!Tr::Button(label)) return;
-            last = fn();
-            if (!g.on) last += " - NOT used: virginity is off (Virginity page)";
-            else if (!g.grp[GroupOf(a)].on) last += std::format(" - NOT used: virginity is off for {} (Virginity page)", kGroupName[GroupOf(a)]);
+            last = Lang::TS(fn());
+            if (!g.on) last += Lang::T(" - NOT used: virginity is off (Virginity page)");
+            else if (!g.grp[GroupOf(a)].on) last += Lang::Fmt(" - NOT used: virginity is off for {} (Virginity page)", std::string(Lang::T(kGroupName[GroupOf(a)])));
         };
         act("Make him a virgin", [&] {
             After out;
@@ -730,7 +736,7 @@ namespace Virgin {
             return std::string("his first time, just now");
         });
         ImGuiMCP::SameLine();
-        act("+5 experience", [&] { std::lock_guard lk(g_mx); auto& m = g_men[a->GetFormID()]; if (m.virgin != 0) m.virgin = 0; m.exp += 5.0f; m.times += 5; if (m.lastDay < 0.0f) m.lastDay = Today(); return std::format("experience {:.1f}", m.exp); });
+        act("+5 experience", [&] { std::lock_guard lk(g_mx); auto& m = g_men[a->GetFormID()]; if (m.virgin != 0) m.virgin = 0; m.exp += 5.0f; m.times += 5; if (m.lastDay < 0.0f) m.lastDay = Today(); return Lang::Fmt("experience {:.1f}", m.exp); });
         ImGuiMCP::SameLine();
         act("Pretend 5 days passed", [&] {
             std::lock_guard lk(g_mx);

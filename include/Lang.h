@@ -1,6 +1,7 @@
 #pragma once
 #include "SKSEMenuFramework.h"
 #include <cstdarg>
+#include <format>
 #include <string>
 #include <vector>
 
@@ -18,6 +19,12 @@ namespace Lang {
     const char* F(const char* fmt);                // a printf format (only taken when its %s / %d... match the English)
     const char* L(const char* label);              // a widget label: the translation, keeping the English as its ID
     std::string TS(const std::string& en);         // T() for a std::string
+    // 2.5zb: a std::format line ("Wet look: {} beads ..."): the translation is used when it formats, else the English
+    template <class... A> std::string Fmt(const char* en, const A&... a) {
+        const char* t = T(en);
+        if (t != en) { try { return std::vformat(t, std::make_format_args(a...)); } catch (...) {} }
+        try { return std::vformat(en, std::make_format_args(a...)); } catch (...) { return en; }
+    }
 
     struct Option { std::string file, name; };     // file "" = English, "*" = the game's language
     std::vector<Option> Options();

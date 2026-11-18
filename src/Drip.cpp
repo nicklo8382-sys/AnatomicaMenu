@@ -1031,11 +1031,11 @@ namespace Drip {
         if (!kCum) return Fluid::Status(a->GetFormID());   // wetness only
         std::lock_guard lk(g_mx);
         auto it = g_st.find(a->GetFormID());
-        if (it == g_st.end() || (it->second.vol <= 0.0f && it->second.leaked <= 0.0f)) return "Cum: none | " + Fluid::Status(a->GetFormID());
+        if (it == g_st.end() || (it->second.vol <= 0.0f && it->second.leaked <= 0.0f)) return std::string(Lang::T("Cum: none")) + " | " + Fluid::Status(a->GetFormID());
         const auto& s = it->second;
-        return std::format("Cum: {} load{} ({:.1f} in him, {} partner{}), leaked {:.1f}{} | {}", s.loads, s.loads == 1 ? "" : "s", s.vol,
-                           s.givers.size(), s.givers.size() == 1 ? "" : "s", s.leaked, s.waitKey ? " - waiting for the scene to end" : "",
-                           Fluid::Status(a->GetFormID()));
+        return Lang::Fmt(s.loads == 1 ? "Cum: {} load" : "Cum: {} loads", s.loads) + " " +
+               Lang::Fmt(s.givers.size() == 1 ? "({:.1f} in him, {} partner)" : "({:.1f} in him, {} partners)", s.vol, s.givers.size()) + ", " +
+               Lang::Fmt("leaked {:.1f}", s.leaked) + (s.waitKey ? Lang::T(" - waiting for the scene to end") : "") + " | " + Fluid::Status(a->GetFormID());
     }
 
     void Ini(CSimpleIniA& ini, bool save) {

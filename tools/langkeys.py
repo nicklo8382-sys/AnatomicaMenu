@@ -55,7 +55,7 @@ def keys_of(path):
         elif t[0] == "id" and t[1] in HELPERS and i + 1 < len(toks) and toks[i+1][1] == "(" and not (i and toks[i-1][1] in ("::", ".")) \
                 and not (i and toks[i-1][0] == "id" and toks[i-1][1] in ("bool", "void", "int", "char")):
             name, start = t[1], i + 2
-        elif t[0] == "id" and t[1] == "Lang" and i + 3 < len(toks) and toks[i+1][1] == "::" and toks[i+2][1] in ("T", "L", "F", "TS") and toks[i+3][1] == "(":
+        elif t[0] == "id" and t[1] == "Lang" and i + 3 < len(toks) and toks[i+1][1] == "::" and toks[i+2][1] in ("T", "L", "F", "TS", "Fmt") and toks[i+3][1] == "(":
             name, start = toks[i+2][1], i + 4
         if name == "TreeNode" and start < len(toks) and toks[start][0] == "str" and start + 1 < len(toks) and toks[start+1][1] == ",":
             start += 2   # TreeNode("id", "fmt", ...): the first one is only an ID
@@ -84,6 +84,21 @@ def keys_of(path):
                     if cur is not None: found.append(cur); cur = None
                     if k == "lbl": found.append(s)
             i = j; continue
+        # local button helpers (Testing page): act("label", [&] { ... return std::string("result"); })
+        if t[0] == "id" and t[1] in ("act", "preset") and not path.endswith("Bridge.cpp") and i + 1 < len(toks) and toks[i+1][1] == "(" and not (i and toks[i-1][1] in ("::", ".", "auto")):
+            depth, j, first, cur = 1, i + 2, True, None
+            while j < len(toks) and depth:
+                tk = toks[j]
+                if tk[1] in "([{": depth += 1
+                elif tk[1] in ")]}": depth -= 1
+                elif tk[1] == "," and depth == 1: first = False
+                if tk[0] == "str" and ((first and depth == 1) or (j >= 4 and toks[j-1][1] == "(" and toks[j-2][1] == "string" and toks[j-3][1] == "::")):
+                    cur = (cur or "") + tk[1]
+                else:
+                    if cur is not None: found.append(cur); cur = None
+                j += 1
+            if cur is not None: found.append(cur)
+            i += 2; continue
         # tables of structs whose strings are menu text: Type NAME[] = {{...}, ...} - which fields (0-based) are text
         TABLES = {"Rec": (2, 3), "GlobalSetting": (2, 6, 7), "JigglePart": (1,)}
         if t[0] == "id" and t[1] in TABLES and i + 4 < len(toks) and toks[i+1][0] == "id" and toks[i+2][1] == "[":
@@ -110,12 +125,19 @@ def keys_of(path):
             j = i + 1
             while j < len(toks) and toks[j][1] in ("*", "const"): j += 1
             if j + 3 < len(toks) and toks[j][0] == "id" and toks[j+1][1] == "[":
-                k = j + 2
-                while k < len(toks) and toks[k][1] != "]": k += 1
-                if k + 2 < len(toks) and toks[k+1][1] == "=" and toks[k+2][1] == "{":
-                    m, body = k + 3, []
-                    while m < len(toks) and toks[m][1] != "}": body.append(toks[m]); m += 1
-                    found += runs(body); i = m; continue
+                k, dims = j + 1, 0
+                while k < len(toks) and toks[k][1] == "[":          # NAME[] or NAME[][3]
+                    k += 1; dims += 1
+                    while k < len(toks) and toks[k][1] != "]": k += 1
+                    k += 1
+                if k + 1 < len(toks) and toks[k][1] == "=" and toks[k+1][1] == "{":
+                    m, body, depth = k + 2, [], 1
+                    while m < len(toks) and depth:
+                        if toks[m][1] == "{": depth += 1
+                        elif toks[m][1] == "}": depth -= 1
+                        body.append(toks[m]); m += 1
+                    found += [r for r in runs(body) if dims < 2 or not re.fullmatch(r"[a-z]+", r)]   # tests[][3]: "load", "squirt" are IDs
+                    i = m; continue
         i += 1
     return found
 

@@ -2336,17 +2336,17 @@ namespace Fluid {
     std::string Status(RE::FormID id) {
         std::lock_guard lk(g_mx);
         auto it = g_act.find(id);
-        if (it == g_act.end()) return kCum ? "no cum on him" : "dry";
+        if (it == g_act.end()) return Lang::T(kCum ? "no cum on him" : "dry");
         const auto& A = it->second;
         if (!kCum)
-            return std::format("Wet look: {} beads, hole {:.0f}%, schlong {:.0f}% | body {}", A.beads.size(), std::max(A.glossSent, 0.0f) * 100.0f,
-                               std::max(A.sglossSent, 0.0f) * 100.0f, A.body.ok ? std::format("{} pts", A.body.wp.size()) : "-");
+            return Lang::Fmt("Wet look: {} beads, hole {:.0f}%, schlong {:.0f}% | body {}", A.beads.size(), std::max(A.glossSent, 0.0f) * 100.0f,
+                             std::max(A.sglossSent, 0.0f) * 100.0f, A.body.ok ? Lang::Fmt("{} pts", A.body.wp.size()) : std::string("-"));
         int n[4] = {};
         for (auto& r : A.ropes) n[static_cast<int>(r.type)]++;
-        return std::format("{} hanging, {} string, {} drops, {} on the skin, {} beads, {} drawn | lip {} | body {} | schlong {}", n[0], n[1], n[2], n[3],
-                           A.beads.size(), A.vis[0].size() + A.vis[1].size() + A.vis[2].size() + A.vis[3].size(),
-                           A.lipOk ? "found" : "estimated", A.body.ok ? std::format("{} pts", A.body.wp.size()) : "-",
-                           A.schlong.ok ? std::format("{} pts", A.schlong.wp.size()) : "-");
+        return Lang::Fmt("{} hanging, {} string, {} drops, {} on the skin, {} beads, {} drawn | lip {} | body {} | schlong {}", n[0], n[1], n[2], n[3],
+                         A.beads.size(), A.vis[0].size() + A.vis[1].size() + A.vis[2].size() + A.vis[3].size(),
+                         std::string(Lang::T(A.lipOk ? "found" : "estimated")), A.body.ok ? Lang::Fmt("{} pts", A.body.wp.size()) : std::string("-"),
+                         A.schlong.ok ? Lang::Fmt("{} pts", A.schlong.wp.size()) : std::string("-"));
     }
 
     void Ini(CSimpleIniA& ini, bool save) {

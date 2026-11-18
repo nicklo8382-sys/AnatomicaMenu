@@ -1,4 +1,5 @@
 #include "SKSEMenuFramework.h"
+#include "Lang.h"
 #include "During.h"
 #include "Fluid.h"
 #include "Extras.h"
@@ -1221,9 +1222,9 @@ namespace Engine {
     }
 
     std::string Status() {
-        return std::format("RaceMenu interface: body morphs {}, overrides {}, overlays {} - {}",
-                           g_morph ? "yes" : "no", g_ovr ? "yes" : "no", g_ovl ? "yes" : "no",
-                           Mode() == 3 ? "gape and colour run in the DLL" : (Mode() == 1 ? "gape and the skin-blend ring run in the DLL, the rest of the colour in the script" : "the script does everything"));
+        auto yn = [](bool b) { return std::string(Lang::T(b ? "yes" : "no")); };
+        return Lang::Fmt("RaceMenu interface: body morphs {}, overrides {}, overlays {} - {}", yn(g_morph), yn(g_ovr), yn(g_ovl),
+                         std::string(Lang::T(Mode() == 3 ? "gape and colour run in the DLL" : (Mode() == 1 ? "gape and the skin-blend ring run in the DLL, the rest of the colour in the script" : "the script does everything"))));
     }
 
     bool NodeFloat(RE::Actor* a, const char* node, int key, float value) {
