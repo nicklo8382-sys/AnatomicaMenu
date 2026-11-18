@@ -9,6 +9,10 @@
 #include <format>
 #include <fstream>
 #include <mutex>
+#include <cstdio>
+#include <filesystem>
+#include <array>
+#include <map>
 #include <set>
 #include <sstream>
 #include <unordered_map>
@@ -90,6 +94,9 @@ namespace {
                                          // anal for a man, so its factions don't say so): -1 not known, 0 no, 1 yes
         std::string vagSceneOf;          // the scene that answer is for
         double asked = -10.0;
+        int tid = -1, pos = -1;          // 2.5z: his OStim thread and position in it
+        double vagSince = -1.0;          // when the vaginal-scene move first wanted to start (pose settles first)
+        std::string alignDone;           // the scene his OStim alignment was already moved for
     };
     std::unordered_map<RE::FormID, St> g_st;
     std::string g_lastScene;             // the last bottom's scene (the "let it work here" button)
@@ -103,7 +110,11 @@ namespace {
         std::string scene;
         void operator()(RE::BSScript::Variable r) override {
             std::lock_guard lk(g_mx);
-            if (auto it = g_st.find(id); it != g_st.end()) { it->second.vagScene = (r.IsInt() && r.GetSInt() >= 0) ? 1 : 0; it->second.vagSceneOf = scene; }
+            if (auto it = g_st.find(id); it != g_st.end()) {
+                it->second.vagScene = (r.IsInt() && r.GetSInt() >= 0) ? 1 : 0;
+                it->second.vagSceneOf = scene;
+                logger::info("Anatomica bottoms: scene {} has vaginal sex on his position: {}", scene, it->second.vagScene ? "yes" : "no");
+            }
         }
         void SetObject(const RE::BSTSmartPointer<RE::BSScript::Object>&) override {}
     };
@@ -112,6 +123,10 @@ namespace {
         std::string scene;
         void operator()(RE::BSScript::Variable r) override {
             const int pos = r.IsInt() ? r.GetSInt() : -1;
+            {
+                std::lock_guard lk(g_mx);
+                if (auto it = g_st.find(id); it != g_st.end()) it->second.pos = pos;
+            }
             if (pos < 0 || scene.empty()) return;
             auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
             if (!vm) return;
@@ -147,6 +162,10 @@ namespace {
         RE::FormID id = 0;
         void operator()(RE::BSScript::Variable r) override {
             const int tid = r.IsInt() ? r.GetSInt() : -1;
+            {
+                std::lock_guard lk(g_mx);
+                if (auto it = g_st.find(id); it != g_st.end()) it->second.tid = tid;
+            }
             if (tid < 0) return;
             auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
             if (!vm) return;
@@ -183,6 +202,61 @@ namespace {
         const RE::NiPoint3 d = Sub(kVagina, man ? kAnusMan : kAnusWoman);
         out = Rot(pel->world.rotate, Mul(d, pel->world.scale * strength));
         return true;
+    }
+}
+
+namespace {
+    // ---- 2.5z: OStim's own alignment (its C++ thread API, OStim.dll "RequestPluginAPI_Thread"). OStim puts every actor
+    // back on its spot each frame, so moving him ourselves only flickers; his alignment offset in the scene is what lasts.
+    // Only the functions used are named; the order is OStim's interface order (IThreadInterface, interface version 1).
+    struct OAlign { float x, y, z, scale, rotation, sosBend; };
+    struct IOStimThread {
+        virtual void f00() noexcept = 0; virtual void f01() noexcept = 0; virtual void f02() noexcept = 0; virtual void f03() noexcept = 0;
+        virtual void f04() noexcept = 0; virtual void f05() noexcept = 0; virtual void f06() noexcept = 0; virtual void f07() noexcept = 0;
+        virtual void f08() noexcept = 0; virtual void f09() noexcept = 0; virtual void f10() noexcept = 0; virtual void f11() noexcept = 0;
+        virtual void f12() noexcept = 0; virtual void f13() noexcept = 0; virtual void f14() noexcept = 0; virtual void f15() noexcept = 0;
+        virtual void f16() noexcept = 0; virtual void f17() noexcept = 0; virtual void f18() noexcept = 0; virtual void f19() noexcept = 0;
+        virtual void f20() noexcept = 0; virtual void f21() noexcept = 0;
+        virtual bool GetActorAlignment(std::uint32_t threadID, std::uint32_t actorIndex, OAlign* out) noexcept = 0;   // slot 22
+        virtual std::uint8_t SetActorAlignment(std::uint32_t threadID, std::uint32_t actorIndex, const OAlign* data) noexcept = 0;   // slot 23
+    };
+    IOStimThread* g_oapi = nullptr;
+    bool g_oapiTried = false;
+    IOStimThread* OApi() {
+        if (g_oapiTried) return g_oapi;
+        g_oapiTried = true;
+        auto* mod = REX::W32::GetModuleHandleA("OStim.dll");
+        if (!mod) return nullptr;
+        using Req = IOStimThread* (*)(std::uint8_t, const char*, REL::Version);
+        auto req = reinterpret_cast<Req>(REX::W32::GetProcAddress(mod, "RequestPluginAPI_Thread"));
+        if (req) g_oapi = req(0, "AnatomicaMenu", REL::Version(2, 5, 0, 0));
+        logger::info("Anatomica bottoms: OStim alignment API {}", g_oapi ? "found" : "not found - his move can't last (OStim puts him back)");
+        return g_oapi;
+    }
+    // what we set, per scene and position, so a scene OStim kept our alignment for isn't moved twice
+    const char* kAlignFile = "Data/SKSE/Plugins/AnatomicaMenu/OStimAlign.ini";
+    std::map<std::string, std::vector<std::array<float, 3>>> g_alignSet;
+    bool g_alignLoaded = false;
+    void AlignLoad() {
+        if (g_alignLoaded) return;
+        g_alignLoaded = true;
+        std::ifstream in(kAlignFile);
+        std::string line;
+        while (std::getline(in, line)) {
+            const auto eq = line.find(" = ");
+            if (line.empty() || line[0] == ';' || eq == std::string::npos) continue;
+            std::array<float, 3> v{};
+            if (std::sscanf(line.c_str() + eq + 3, "%f,%f,%f", &v[0], &v[1], &v[2]) == 3) g_alignSet[line.substr(0, eq)].push_back(v);
+        }
+    }
+    void AlignSave() {
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::path(kAlignFile).parent_path(), ec);
+        std::ofstream o(kAlignFile, std::ios::trunc);
+        o << "; Anatomica: OStim alignments it moved for a man / futa where the scene expects a woman (scene#position = x,y,z)\n"
+             "; Delete this file to let Anatomica move them again; undo a move with OStim's Align menu.\n";
+        for (auto& [k, vs] : g_alignSet)
+            for (auto& v : vs) o << k << " = " << v[0] << "," << v[1] << "," << v[2] << "\n";
     }
 }
 
@@ -254,17 +328,50 @@ namespace Align {
             if (len > maxStep && len > 1e-4f) step = Mul(step, maxStep / len);
             s.cur = Add(s.cur, step);
             if (Length(want) < 1e-3f && Length(s.cur) < 0.02f) s.cur = {};
-            // put it into his position; if something else moved him (OStim lining the actors up), it starts again from there
-            RE::NiPoint3 pos = a->GetPosition();
-            if (s.haveExpect && Length(Sub(pos, s.expect)) > 0.25f) { s.applied = {}; if (Length(s.cur) > 0.05f) ++s.resets; }
-            const RE::NiPoint3 d = Sub(s.cur, s.applied);
-            if (Length(d) > 0.01f) {
-                pos = Add(pos, d);
-                a->SetPosition(pos, true);
-                s.applied = s.cur;
+            // 2.5z: OStim's alignment for his place in the scene, once per scene (OStim keeps it, and puts him there
+            // every frame); without OStim's API, his position (OStim puts him back, so it only flickers)
+            if (Length(want) > 0.01f) { if (s.vagSince < 0.0) s.vagSince = now; } else s.vagSince = -1.0;
+            if (auto* api = OApi(); api && s.tid >= 0 && s.pos >= 0) {
+                if (Length(want) > 0.01f && now - s.vagSince > 0.8 && s.alignDone != s.scene && !s.scene.empty()) {
+                    s.alignDone = s.scene;
+                    AlignLoad();
+                    OAlign cur{};
+                    if (api->GetActorAlignment(static_cast<std::uint32_t>(s.tid), static_cast<std::uint32_t>(s.pos), &cur)) {
+                        const std::string key = s.scene + "#" + std::to_string(s.pos);
+                        bool already = false;
+                        for (auto& v : g_alignSet[key])
+                            if (std::abs(v[0] - cur.x) < 0.05f && std::abs(v[1] - cur.y) < 0.05f && std::abs(v[2] - cur.z) < 0.05f) already = true;
+                        const char* nm = a->GetDisplayFullName();
+                        if (already) logger::info("Anatomica bottoms: {} - OStim already has him moved in {}", nm ? nm : "?", s.scene);
+                        else {
+                            // world -> the scene's frame: OStim puts x / y at centre + (cos*x + sin*y, -sin*x + cos*y), centre.r =
+                            // his heading less his own alignment rotation
+                            const float r = a->GetAngleZ() - cur.rotation * 0.01745329f;
+                            const float c = std::cos(r), sn = std::sin(r);
+                            OAlign nw = cur;
+                            nw.x = cur.x + c * want.x - sn * want.y;
+                            nw.y = cur.y + sn * want.x + c * want.y;
+                            nw.z = cur.z + want.z;
+                            api->SetActorAlignment(static_cast<std::uint32_t>(s.tid), static_cast<std::uint32_t>(s.pos), &nw);
+                            g_alignSet[key].push_back({nw.x, nw.y, nw.z});
+                            AlignSave();
+                            logger::info("Anatomica bottoms: {} - OStim alignment in {} (position {}) moved by {:.1f} units: {:.1f},{:.1f},{:.1f} -> {:.1f},{:.1f},{:.1f}",
+                                         nm ? nm : "?", s.scene, s.pos, Length(want), cur.x, cur.y, cur.z, nw.x, nw.y, nw.z);
+                        }
+                    }
+                }
+            } else {
+                RE::NiPoint3 pos = a->GetPosition();
+                if (s.haveExpect && Length(Sub(pos, s.expect)) > 0.25f) { s.applied = {}; if (Length(s.cur) > 0.05f) ++s.resets; }
+                const RE::NiPoint3 d = Sub(s.cur, s.applied);
+                if (Length(d) > 0.01f) {
+                    pos = Add(pos, d);
+                    a->SetPosition(pos, true);
+                    s.applied = s.cur;
+                }
+                s.expect = pos;
+                s.haveExpect = Length(s.cur) > 0.0f || Length(s.applied) > 0.0f;
             }
-            s.expect = pos;
-            s.haveExpect = Length(s.cur) > 0.0f || Length(s.applied) > 0.0f;
 
             // 2. his own schlong in PPA
             bool off = false;

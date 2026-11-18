@@ -465,6 +465,17 @@ namespace {
                     During::Knots kn;   // 2.5d/e: his schlong's knots (added to any shape, also a shape picked for everyone) and their strength
                     const int autoShape = partner ? During::AutoShape(partner, &kn) : During::kTip;
                     if (shape <= 0 || shape >= During::kShapeCount) shape = autoShape;
+                    if (partner && !test) {   // 2.5z: which shape his partner gives him, and why (once per partner)
+                        static std::unordered_map<RE::FormID, RE::FormID> logged;
+                        if (auto& lp = logged[act->GetFormID()]; lp != partner->GetFormID()) {
+                            lp = partner->GetFormID();
+                            std::string why;
+                            During::AutoShape(partner, nullptr, &why);
+                            const char* an = act->GetDisplayFullName();
+                            const char* pn = partner->GetDisplayFullName();
+                            logger::info("Anatomica bulge: {} from {} - {} ({})", an ? an : "?", pn ? pn : "?", During::ShapeName(shape), why);
+                        }
+                    }
                     // how far in, past "shows from": 0 .. 1 = the whole path filled
                     const float range = std::max(10.0f, s.bulgeReach - dw.bulgeStart);
                     float p = test ? 0.55f + 0.45f * std::sin(static_cast<float>(now) * 1.6f)

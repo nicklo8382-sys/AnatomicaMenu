@@ -263,6 +263,7 @@ namespace {
             const RE::FormID id = armo->GetLocalFormID();
             if (id == 0xA01) return Pick("cut", "TNG Circumcised", "TNG's type");
             if (id >= 0xA02 && id <= 0xA05) return Pick("uncut", (id == 0xA02 || id == 0xA04) ? "TNG Muscular" : "TNG Regular", "TNG's type");
+            // 2.5z: TNG's other schlongs (its beast-race ones...) have no type of their own: his race decides below
             return {0, from, ""};
         }
         if (auto k = Guess(" " + LowerS(nm) + " "); !k.empty()) return Pick(k, from, "a guess from its name");
@@ -289,10 +290,22 @@ namespace {
             ShapeInfo r = Classify(worn, nullptr);
             if (r.shape) return r;
         }
+        ShapeInfo found;
         if (auto* skin = a->GetSkin())
             for (auto* arma : skin->armorAddons)
-                if (auto it = g_byArma.find(arma); it != g_byArma.end()) return Classify(it->second, arma);
-        return {};
+                if (auto it = g_byArma.find(arma); it != g_byArma.end()) { found = Classify(it->second, arma); break; }
+        if (found.shape) return found;
+        // 2.5z: nothing in the schlong says what it is (TNG's beast-race schlongs, unnamed add-ons): a guess from his race
+        // (argonian -> ridged, khajiit -> barbed, ...), still overridden by the menu / compatibility files / keywords above
+        if (auto* race = a->GetRace()) {
+            const std::string ed = race->formEditorID.c_str() ? LowerS(race->formEditorID.c_str()) : "";
+            const std::string nm = race->GetName() ? LowerS(race->GetName()) : "";
+            std::string k = Guess(" " + ed + " ");
+            if (k.empty()) k = Guess(" " + nm + " ");
+            if (!k.empty() && k != "uncut" && k != "cut")   // a human race says nothing about the schlong itself
+                return Pick(k, found.from.empty() ? std::string(race->GetName() ? race->GetName() : ed) : found.from, "a guess from his race");
+        }
+        return found;
     }
     struct ShapeKnown { ShapeInfo s; double at = 0.0; };
     std::unordered_map<RE::FormID, ShapeKnown> g_shapes;   // under g_mx
