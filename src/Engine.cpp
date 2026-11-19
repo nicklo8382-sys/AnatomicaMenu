@@ -109,6 +109,20 @@ namespace {
         c.ok = true;
         return c;
     }
+    // 2.6: how far his hips are bent (degrees, 0 = standing, 90 = thighs level as when sitting), both legs averaged
+    float HipBend(RE::Actor* act, const Canal& c) {
+        auto* root = act->Get3D(false);
+        float sum = 0.0f; int n = 0;
+        for (auto [t, k] : {std::pair{"NPC L Thigh [LThg]", "NPC L Calf [LClf]"}, std::pair{"NPC R Thigh [RThg]", "NPC R Calf [RClf]"}}) {
+            auto* tn = Node(root, t); auto* kn = Node(root, k);
+            if (!tn || !kn) continue;
+            V d = V(kn->world.translate) - V(tn->world.translate);
+            const float ld = Len(d);
+            if (ld < 1e-3f) continue;
+            sum += std::acos(std::clamp(-Dot(d * (1.0f / ld), c.u), -1.0f, 1.0f)) * 57.29578f; ++n;
+        }
+        return n ? sum / static_cast<float>(n) : 0.0f;
+    }
     // the same frame on the Anatomica mesh (bind pose, BodySlide units): pelvis and its axes - for the belly bulge
     const V kMeshP{0.0f, 0.0f, 68.9113f}, kMeshX{1.0f, 0.0f, 0.0f}, kMeshU{0.0f, -0.810145f, 0.586230f}, kMeshF{0.0f, -0.586230f, -0.810145f};
     V ToMesh(const Canal& c, const V& w) {
@@ -207,7 +221,8 @@ namespace {
         double moveT = 0.0;                      // 2.5 travelling: its phase (radians)
         double lastPush = -100.0; float strokeT = 1.2f;   // 2.5g: when the last thrust began, the time between thrusts
         float tw = 0.0f, twWant = 0.0f; double twNext = 0.0;   // 2.5 twitching
-        float bellyG = 0.0f, rndB = 0.0f;        // 2.5f stomach: how far risen (0-1), this stroke's variation
+        float bellyG = 0.0f, rndB = 0.0f, hipF = 0.0f;
+        double hipLog = 0.0;                     // 2.6: last hip-bend log line        // 2.5f stomach: how far risen (0-1), this stroke's variation
         bool deep = false;                       // 2.5k: this scene goes super deep (rolled when a scene's bulge starts)
         float deepRolledAt = -2.0f;              // 2.5t: the setting it was rolled with (-1 = off): rolled again when it changes
         float pulse = 0.0f, bulgeDil = 0.0f;     // thrust pulse; how worked he was while it bulged (lingering)
@@ -573,6 +588,23 @@ namespace {
                         if (dw.belly > 0.0f) {
                             s.bellyG = std::min(1.0f, s.bellyG + dt / std::max(1.0f, dw.bellyTime));
                             bw[kBelly] = dw.bulge * dw.belly * Smooth(s.bellyG) * std::max(0.0f, 1.0f + 0.5f * dw.bellyRandom * s.rndB);
+                        }
+                        // 2.6: legs drawn up - the skin above his groin folds, so the bottom of the bulge fades (eased, not snapped)
+                        {
+                            const float bend = c.ok ? HipBend(act, c) : 0.0f;
+                            const float want = dw.hipFade ? Smooth(std::clamp((bend - dw.hipFrom) / 40.0f, 0.0f, 1.0f)) : 0.0f;
+                            if (!test && now - s.hipLog > 15.0) {   // for tuning "Starts fading at a hip bend of"
+                                s.hipLog = now;
+                                const char* an = act->GetDisplayFullName();
+                                logger::info("Anatomica bulge: {} hip bend {:.0f} deg, bottom of the bulge faded {:.0f}%", an ? an : "?", bend, want * 100.0f);
+                            }
+                            s.hipF += (want - s.hipF) * std::min(1.0f, dt / 0.3f);
+                            const float hf = s.hipF;
+                            if (hf > 0.001f) {
+                                if (seg >= 0) { bw[segAt(0)] *= 1.0f - hf; bw[segAt(1)] *= 1.0f - 0.5f * hf; }
+                                if (head >= 0) { bw[headAt(0)] *= 1.0f - hf; bw[headAt(1)] *= 1.0f - 0.3f * hf; }
+                                bw[kBelly] *= 1.0f - 0.5f * hf;
+                            }
                         }
                         bulging = true;
                         {   // 2.5o: what SkyrimNet can say about it

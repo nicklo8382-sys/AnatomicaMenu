@@ -207,6 +207,7 @@ namespace During {
         g_w.bulgeShape = 0;   // 2.5p: always from his schlong (the one-shape-for-everyone choice is gone)
         F("BulgeShaftStrength", g_w.shaftK, 0.0f, 2.0f); F("BulgeHeadStrength", g_w.headK, 0.0f, 2.0f);
         F("BulgeBuildTime", g_w.buildTime, 1.0f, 60.0f); F("BulgeTravelSpeed", g_w.travelSpeed, 0.1f, 2.0f); B("BulgeHoldFull", g_w.holdFull);
+        B("BulgeHipFade", g_w.hipFade); F("BulgeHipFrom", g_w.hipFrom, 30.0f, 150.0f);
         F("BulgeStomach", g_w.belly, 0.0f, 2.0f); F("BulgeStomachTime", g_w.bellyTime, 1.0f, 180.0f); F("BulgeStomachRandom", g_w.bellyRandom, 0.0f, 1.0f);
         B("BulgeSuperDeep", g_w.deep); F("BulgeSuperDeepChance", g_w.deepChance, 0.0f, 1.0f);
         B("BulgeImprint", g_w.imprint); F("BulgeImprintAmount", g_w.imprintAmt, 0.0f, 0.5f); F("BulgeImprintMinutes", g_w.imprintMin, 0.5f, 15.0f);
@@ -563,6 +564,17 @@ namespace During {
                     ch |= Tr::Checkbox("Hold the shape when full", &g_w.holdFull);
                     Help("Build-up: once it is full the shaft stays where it got to and only the head keeps moving.");
                     ImGuiMCP::TreePop();
+                }
+                ch |= Tr::Checkbox("Fade its bottom when his legs are pulled up", &g_w.hipFade);
+                Help("In poses with his thighs drawn up towards his chest the skin above his groin folds, and the bottom of the bulge "
+                     "would fold with it into a sharp crease. This fades the lowest part of the bulge (and the bottom of the stomach) "
+                     "as his hips bend - standing, kneeling and most other poses are not affected.");
+                if (g_w.hipFade) {
+                    ImGuiMCP::Indent();
+                    ch |= Tr::SliderFloat("Starts fading at a hip bend of", &g_w.hipFrom, 30.0f, 150.0f, "%.0f deg");
+                    Help("0 = standing, 90 = sitting (thighs level), 130+ = knees towards his chest. It is gone 40 degrees further on. "
+                         "Lower = it fades sooner.");
+                    ImGuiMCP::Unindent();
                 }
                 float rnd = g_w.bulgeRandom * 100.0f;
                 if (Tr::SliderFloat("Randomness", &rnd, 0.0f, 100.0f, "%.0f%%")) { g_w.bulgeRandom = rnd / 100.0f; ch = true; }

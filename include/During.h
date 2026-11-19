@@ -52,6 +52,8 @@ namespace During {
         float buildTime = 12.0f;  // 2.5 build-up: seconds to the full shape (1-60)
         float travelSpeed = 0.3f; // 2.5g travelling: 1 = once up and back per thrust
         bool holdFull = true;     // 2.5 build-up: once full the shaft stays, only the head moves
+        bool hipFade = true;      // 2.6: legs pulled up (deep hip bend) - the bottom of the bulge fades (the skin folds there)
+        float hipFrom = 80.0f;    // 2.6: hip bend (degrees from standing) where it starts to fade; gone 40 degrees further
         float belly = 0.5f, bellyTime = 30.0f, bellyRandom = 0.3f;   // 2.5f stomach: how far the whole lower belly rounds out (0 = off),
                                                                       // seconds to rise to it, how much it varies stroke to stroke
         bool deep = false;        // 2.5k super deep: some scenes go two sections further (towards his chest)
