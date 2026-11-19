@@ -14,11 +14,17 @@ namespace Kinds {
     struct Kind { std::string key, one, many; bool creature = false; };   // key, "a horse" / "horse cock", "horses" / "horse cocks"
     Kind KindOf(RE::Actor* partner);                 // "" key when nothing stands out (a plain human schlong)
 
-    enum First : std::uint32_t { kFirstCreature = 1, kFirstKnot = 2, kFirstFlare = 4, kFirstDeep = 8, kFirstColossal = 16 };
+    enum First : std::uint32_t { kFirstCreature = 1, kFirstKnot = 2, kFirstFlare = 4, kFirstDeep = 8, kFirstColossal = 16, kFirstColossalLoad = 32 };
     // a round with this partner (from Bridge::Taken): counts it, notes where; returns the firsts it was (First bits)
     std::uint32_t OnTaken(RE::Actor* man, RE::Actor* partner);
     // the bulge went this far this round (sections 0-8; deep = super deep); returns the firsts it was (kFirstDeep)
     std::uint32_t OnReach(RE::FormID man, float reach, bool deep);
+    // 2.6f: he was just filled with a Colossal Load (OStrands); returns kFirstColossalLoad the first time
+    std::uint32_t OnColossalLoad(RE::FormID man);
+    // 2.6g: stuffed full of cum (OStrands): counts it, returns how many times now; and what is known of it
+    std::uint16_t OnStuffed(RE::FormID man);
+    struct StuffedInfo { std::uint16_t times = 0; float daysSince = -1.0f; };
+    StuffedInfo StuffedOf(RE::FormID man);
 
     struct Info {
         std::string madeFor, madeForMany;   // the kind he was made for ("" = none yet): one / many wording

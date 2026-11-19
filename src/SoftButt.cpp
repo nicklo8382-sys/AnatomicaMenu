@@ -85,6 +85,13 @@ namespace {
         for (auto& l : L) o << l << "\n";
         return static_cast<bool>(o);
     }
+    // 2.6e: FSMP (Faster HDT-SMP) is what runs the physics - without it the soft butt does nothing, and the men it would be
+    // on must keep CBPC's butt jiggle
+    bool Fsmp() {
+        static int s = -1;
+        if (s < 0) s = (REX::W32::GetModuleHandleW(L"hdtSMP64.dll") != nullptr) ? 1 : 0;
+        return s == 1;
+    }
     void Help(const char* t) {
         ImGuiMCP::SameLine();
         Tr::TextDisabled("(?)");
@@ -105,9 +112,20 @@ namespace SoftButt {
     }
 
     void Tick(RE::Actor* player, const std::vector<RE::Actor*>& men) {
+        static bool checked = false;
+        if (!checked) {   // 2.6e: no FSMP - the men picked keep (or get back) CBPC's butt jiggle
+            checked = true;
+            if (!Fsmp()) {
+                const int c = ReadCbpc();
+                if (c > 0 && WriteCbpc(0)) {
+                    g_cbpcWho = 0;
+                    logger::info("Anatomica soft butt: FSMP (hdtSMP64.dll) not loaded - CBPC's butt jiggle given back to every man (takes effect after a restart)");
+                } else logger::info("Anatomica soft butt: FSMP (hdtSMP64.dll) not loaded - soft butt off");
+            }
+        }
         auto* armo = Item();
         if (!armo) return;
-        const int who = g_who.load();
+        const int who = Fsmp() ? g_who.load() : 0;
         auto* em = RE::ActorEquipManager::GetSingleton();
         if (!em) return;
         std::vector<RE::Actor*> all{player};
@@ -128,8 +146,13 @@ namespace SoftButt {
 
     void RenderSection() {
         if (!Tr::CollapsingHeader("Soft butt (SMP physics)###softbutt")) return;
-        const bool has = Item() != nullptr;
-        if (!has) {
+        const bool fsmp = Fsmp();
+        const bool has = Item() != nullptr && fsmp;
+        if (!fsmp) {
+            Tr::TextColored(ImGuiMCP::ImVec4{1.0f, 0.45f, 0.4f, 1.0f},
+                                  "FSMP (Faster HDT-SMP) is not installed, so the soft butt is off and every man keeps CBPC's butt jiggle.");
+            ImGuiMCP::BeginDisabled();
+        } else if (!has) {
             Tr::TextColored(ImGuiMCP::ImVec4{1.0f, 0.45f, 0.4f, 1.0f},
                                   "Not installed: needs the installer's \"Soft butt (SMP)\" option (AnatomicaSoftButt.esp) and FSMP.");
             ImGuiMCP::BeginDisabled();

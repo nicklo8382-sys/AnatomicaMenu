@@ -24,6 +24,9 @@ namespace {
     std::mutex g_mx;
     std::unordered_map<RE::FormID, Man> g_men;
     constexpr std::uint32_t kRec = 'ANKD';
+    struct Stuffed { std::uint16_t times = 0; float lastDay = -1.0f; };   // 2.6g: how often he was stuffed full of cum (OStrands)
+    std::unordered_map<RE::FormID, Stuffed> g_stuffed;
+    constexpr std::uint32_t kRecStuffed = 'ANKS';
 
     float Day() { auto* c = RE::Calendar::GetSingleton(); return c ? c->GetDaysPassed() : 0.0f; }
     std::string Lower(std::string x) { for (auto& c : x) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); return x; }
@@ -112,6 +115,13 @@ namespace Kinds {
         if (deep && !m.everDeep) { m.everDeep = true; if (!(m.firsts & kFirstDeep)) fresh = kFirstDeep; m.firsts |= kFirstDeep; }
         return fresh;
     }
+    std::uint32_t OnColossalLoad(RE::FormID man) {
+        std::lock_guard lk(g_mx);
+        auto& m = g_men[man];
+        if (m.firsts & kFirstColossalLoad) return 0;
+        m.firsts |= kFirstColossalLoad;
+        return kFirstColossalLoad;
+    }
     Info Get(RE::FormID id, int madeForTimes, float forgetDays) {
         Info i;
         const float day = Day();
@@ -151,8 +161,27 @@ namespace Kinds {
         return std::format("Around {} it is said that {} has a taste for {}.", hold, who, bestMany);
     }
 
+    std::uint16_t OnStuffed(RE::FormID man) {
+        std::lock_guard lk(g_mx);
+        auto& s = g_stuffed[man];
+        if (s.times < 60000) ++s.times;
+        s.lastDay = Day();
+        return s.times;
+    }
+    StuffedInfo StuffedOf(RE::FormID man) {
+        std::lock_guard lk(g_mx);
+        auto it = g_stuffed.find(man);
+        if (it == g_stuffed.end()) return {};
+        return {it->second.times, it->second.lastDay >= 0.0f ? Day() - it->second.lastDay : -1.0f};
+    }
+
     void Save(SKSE::SerializationInterface* a) {
         std::lock_guard lk(g_mx);
+        if (a->OpenRecord(kRecStuffed, 1)) {   // 2.6g (its own record: older saves just do not have it)
+            const std::uint32_t n = static_cast<std::uint32_t>(g_stuffed.size());
+            a->WriteRecordData(&n, sizeof n);
+            for (auto& [id, s] : g_stuffed) { a->WriteRecordData(&id, sizeof id); a->WriteRecordData(&s.times, sizeof s.times); a->WriteRecordData(&s.lastDay, sizeof s.lastDay); }
+        }
         if (!a->OpenRecord(kRec, 1)) return;
         const std::uint32_t n = static_cast<std::uint32_t>(g_men.size());
         a->WriteRecordData(&n, sizeof n);
@@ -187,6 +216,19 @@ namespace Kinds {
         }
     }
     bool Load(SKSE::SerializationInterface* a, std::uint32_t type, std::uint32_t ver, std::uint32_t) {
+        if (type == kRecStuffed) {
+            if (ver != 1) return true;
+            std::lock_guard lk(g_mx);
+            g_stuffed.clear();
+            std::uint32_t n = 0;
+            a->ReadRecordData(&n, sizeof n);
+            for (std::uint32_t j = 0; j < n; ++j) {
+                RE::FormID id = 0, now = 0; Stuffed s;
+                a->ReadRecordData(&id, sizeof id); a->ReadRecordData(&s.times, sizeof s.times); a->ReadRecordData(&s.lastDay, sizeof s.lastDay);
+                if (a->ResolveFormID(id, now)) g_stuffed[now] = s;
+            }
+            return true;
+        }
         if (type != kRec) return false;
         if (ver != 1) return true;
         std::lock_guard lk(g_mx);
@@ -235,5 +277,6 @@ namespace Kinds {
     void Revert() {
         std::lock_guard lk(g_mx);
         g_men.clear();
+        g_stuffed.clear();
     }
 }

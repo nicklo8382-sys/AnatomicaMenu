@@ -15,7 +15,8 @@ namespace Colour {
     int RingTexLevel();                 // ring colour textures: mip levels to drop (0 = 2048, 1 = 1024, 2 = 512)
     bool RingStrong();                  // "Stronger skin-blend ring": ring colour textures with doubled opacity
     void TidyMade();                    // keep the folder of textures Anatomica makes under its size budget (game start)
-    void RenderCumColours();            // cum colour per race + wetness follows the giver (Cum & drips page)
+    void RenderCumColours();
+    void RenderOStrandsCum();           // 2.6f: cum colour by race / skin for OStrands (Integrations page)            // cum colour per race + wetness follows the giver (Cum & drips page)
     void __stdcall RenderGeneral();   // settings for the whole script (wait after loading screens)
     void __stdcall RenderColours();
     void __stdcall RenderRaces();

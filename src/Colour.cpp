@@ -545,6 +545,9 @@ namespace {
         float wetBurstSecs = 20.0f;
         float wetBurstBoost = 0.5f;
         bool cumByRace = true;       // the wetness colour follows the giver's race (Cum & drips page)
+        bool cumSkin = false;        // 2.6f: (old switch, read once into cumMode)
+        int cumMode = 3;             // 2.6g: OStrands cum colour - 0 plain, 1 per race, 2 skin tint (race first), 3 skin rules (then race, then tint)
+        float cumSkinAmt = 0.25f;
         bool slowClose = true;       // the gape closes slower while he is tender
         float slowCloseAmt = 0.5f;
         bool rested = true;          // first time in a while = redder
@@ -632,6 +635,9 @@ namespace {
         bool innerOwn = false;       // its own colour for the inside (the canal); off = the Colours page decides
         float inner[3] = {0.20f, 0.22f, 0.50f};
         float inner2[3] = {0.40f, 0.18f, 0.48f};   // the OR pair's inside
+        bool cumOwn = false;         // 2.6g: his cum colour too (OStrands, "Skin rules" cum colours)
+        float cum[3] = {0.80f, 0.82f, 0.95f};
+        float cum2[3] = {0.88f, 0.80f, 0.92f};     // the OR pair's cum
     };
     constexpr int kMaxRules = 48;
     std::vector<Rule> g_rules;
@@ -750,6 +756,9 @@ namespace {
         B("HealFoodOn", g.healFoodOn); B("HealSpellOn", g.healSpellOn);
         B("WetBurst", g.wetBurst); F("WetBurstSecs", g.wetBurstSecs, 5.0f, 120.0f); F("WetBurstBoost", g.wetBurstBoost, 0.0f, 1.0f);
         B("CumByRace", g.cumByRace);
+        if (save) ini.SetLongValue(S, "CumMode", g.cumMode);
+        else g.cumMode = std::clamp(static_cast<int>(ini.GetLongValue(S, "CumMode", g.cumMode)), 0, 3);
+        if (save) ini.SetDoubleValue(S, "CumSkinAmount", g.cumSkinAmt); else g.cumSkinAmt = std::clamp(static_cast<float>(ini.GetDoubleValue(S, "CumSkinAmount", g.cumSkinAmt)), 0.0f, 1.0f);
         B("SlowClose", g.slowClose); F("SlowCloseAmt", g.slowCloseAmt, 0.0f, 2.0f);
         B("Rested", g.rested); F("RestedMinutes", g.restedMinutes, 5.0f, 600.0f); F("RestedExtra", g.restedExtra, 0.0f, 1.0f);
         B("Loose", g.loose); F("LooseAdd", g.looseAdd, 0.0f, 0.2f); F("LooseCap", g.looseCap, 0.0f, 0.6f);
@@ -788,7 +797,7 @@ namespace {
             size_t pos = 0;
             for (size_t q; (q = str.find(';', pos)) != std::string::npos; pos = q + 1) parts.push_back(str.substr(pos, q - pos));
             parts.push_back(str.substr(pos));
-            if (parts.size() < 5 || parts.size() > 10) continue;
+            if (parts.size() < 5 || parts.size() > 12) continue;
             Rule r;
             r.on = parts[0] == "1";
             r.race = parts[1];
@@ -805,6 +814,10 @@ namespace {
                 r.innerOwn = std::sscanf(parts[8].c_str(), "%f,%f,%f", &r.inner[0], &r.inner[1], &r.inner[2]) == 3;
             if (parts.size() >= 10 && parts[9] != "-")
                 std::sscanf(parts[9].c_str(), "%f,%f,%f", &r.inner2[0], &r.inner2[1], &r.inner2[2]);
+            if (parts.size() >= 11 && parts[10] != "-")   // 2.6g: the cum colour (11th part) and the OR pair's (12th)
+                r.cumOwn = std::sscanf(parts[10].c_str(), "%f,%f,%f", &r.cum[0], &r.cum[1], &r.cum[2]) == 3;
+            if (parts.size() >= 12 && parts[11] != "-")
+                std::sscanf(parts[11].c_str(), "%f,%f,%f", &r.cum2[0], &r.cum2[1], &r.cum2[2]);
             out.push_back(r);
         }
         return out;
@@ -1014,8 +1027,9 @@ namespace {
             std::string line =
                 std::format("{};{};{:.3f},{:.3f},{:.3f};{:.0f};{:.3f},{:.3f},{:.3f};{}", r.on ? 1 : 0, r.race, r.skin[0], r.skin[1],
                             r.skin[2], r.tol, r.anus[0], r.anus[1], r.anus[2], r.blendOwn ? c3(r.blend) : std::string("-"));
-            if (r.alt || r.innerOwn) line += r.alt ? ";" + c3(r.anus2) + ";" + c3(r.blend2) : std::string(";-;-");
-            if (r.innerOwn) line += ";" + c3(r.inner) + ";" + (r.alt ? c3(r.inner2) : std::string("-"));
+            if (r.alt || r.innerOwn || r.cumOwn) line += r.alt ? ";" + c3(r.anus2) + ";" + c3(r.blend2) : std::string(";-;-");
+            if (r.innerOwn || r.cumOwn) line += r.innerOwn ? ";" + c3(r.inner) + ";" + (r.alt ? c3(r.inner2) : std::string("-")) : std::string(";-;-");
+            if (r.cumOwn) line += ";" + c3(r.cum) + ";" + (r.alt ? c3(r.cum2) : std::string("-"));   // 2.6g
             ini.SetValue("ColourRules", std::format("Rule{}", i).c_str(), line.c_str());
         }
         for (const auto& [k, v] : g_races) {
@@ -2393,9 +2407,50 @@ namespace Colour {
         std::lock_guard lk(g_lock);
         if (!g_loaded) LoadIni();
         auto it = g_races.find(RaceKey(giver->GetRace()));
-        if (!kCum || it == g_races.end() || !it->second.cumOwn) return false;   // per-race cum colours: cum system only
-        for (int i = 0; i < 3; ++i) out[i] = it->second.cum[i];
+        if (!kCum && !OStrandsLink::Installed()) return false;   // per-race cum colours: Anatomica's cum or OStrands (2.6f)
+        if (g.cumMode == 0) return false;
+        float sk[3];
+        SkinTone(giver, sk);
+        if (g.cumMode == 3) {   // 2.6g: the skin rule that matches him, if it gives a cum colour
+            const auto hits = RuleHits(giver, sk);
+            if (!hits.empty()) {
+                const Rule& r = g_rules[RuleChosen(giver, hits)];
+                if (r.cumOwn) { const float* c = RuleAlt(giver, r) ? r.cum2 : r.cum; std::copy(c, c + 3, out); return true; }
+            }
+        }
+        if (it != g_races.end() && it->second.cumOwn) { for (int i = 0; i < 3; ++i) out[i] = it->second.cum[i]; return true; }
+        if (g.cumMode < 2) return false;
+        // 2.6f smart skin: the usual creamy white with a little of his own skin colour in it
+        const float base[3] = {0.925f, 0.914f, 0.871f};
+        const float mx = std::max({sk[0], sk[1], sk[2]}), mn = std::min({sk[0], sk[1], sk[2]});
+        if (mx - mn < 0.05f) return false;   // a plain, colourless skin: plain cum
+        for (int i = 0; i < 3; ++i) {
+            const float hue = (sk[i] - mn) / std::max(mx - mn, 1e-3f);   // his skin's hue, brightness taken out
+            out[i] = std::clamp(base[i] * (1.0f - g.cumSkinAmt) + (0.55f + 0.45f * hue) * g.cumSkinAmt, 0.0f, 1.0f);
+        }
         return true;
+    }
+
+    // 2.6f: cum colours for OStrands (Integrations page) - by race and by skin
+    void RenderOStrandsCum() {
+        if (!Tr::CollapsingHeader("Cum colour (OStrands)###oscum")) return;
+        {
+            std::lock_guard lk(g_lock);
+            if (!g_loaded) LoadIni();
+            bool changed = false;
+            Tr::TextWrapped("The colour OStrands gives each man's cum (with \"Anatomica's colours\" on in OStrands). A Colossal Load with its own colour uses that instead.");
+            static const char* modes[] = {"Plain (everyone the same)", "Per race", "Skin tint", "Skin rules"};
+            changed |= Tr::Combo("Cum colour", &g.cumMode, modes, 4);
+            Help("Plain: the normal creamy white for everyone.\nPer race: the race list below.\nSkin tint: his race's colour, or else the "
+                 "usual white with a little of his skin's colour in it (a blue-scaled argonian's comes out faintly blue).\nSkin rules: "
+                 "the skin rule that coloured his anus (Skin rules page, \"cum\" tick), else his race's, else the skin tint.");
+            if (g.cumMode >= 2) {
+                float a = g.cumSkinAmt * 100.0f;
+                if (Tr::SliderFloat("How much of his skin colour", &a, 5.0f, 100.0f, "%.0f%%")) { g.cumSkinAmt = a / 100.0f; changed = true; }
+            }
+            if (changed) SaveIni();
+        }
+        RenderCumColours();
     }
 
     // the cum settings that live with the colours (shown on the Cum & drips page)
@@ -2832,7 +2887,7 @@ namespace Colour {
         }
         if (!g_rules.empty())
             Tr::TextDisabled("On | Race | Skin colour | matches within | Anus colour | Anus blend (ring) - tick for its own | "
-                                   "Inside (canal) - tick for its own | OR - a second anus / blend / inside set");
+                                   "Inside (canal) - tick for its own | Cum (OStrands) - tick for its own | OR - a second anus / blend / inside / cum set");
         for (size_t i = 0; i < g_rules.size(); ++i) {
             auto& r = g_rules[i];
             ImGuiMCP::PushID(static_cast<int>(i));
@@ -2864,6 +2919,11 @@ namespace Colour {
             if (r.innerOwn) changed |= Tr::ColorEdit3("inside##i", r.inner, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
             else Tr::TextDisabled("inside: Colours page");
             ImGuiMCP::SameLine();
+            changed |= Tr::Checkbox("##co", &r.cumOwn);   // 2.6g: his cum colour (OStrands)
+            ImGuiMCP::SameLine();
+            if (r.cumOwn) changed |= Tr::ColorEdit3("cum##c", r.cum, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
+            else Tr::TextDisabled("cum: race / tint");
+            ImGuiMCP::SameLine();
             changed |= Tr::Checkbox("OR##alt", &r.alt);
             if (r.alt) {   // a second pair: each man gets one of the two
                 ImGuiMCP::SameLine();
@@ -2875,6 +2935,10 @@ namespace Colour {
                 if (r.innerOwn) {
                     ImGuiMCP::SameLine();
                     changed |= Tr::ColorEdit3("inside##i2", r.inner2, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
+                }
+                if (r.cumOwn) {
+                    ImGuiMCP::SameLine();
+                    changed |= Tr::ColorEdit3("cum##c2", r.cum2, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs);
                 }
             }
             ImGuiMCP::SameLine();

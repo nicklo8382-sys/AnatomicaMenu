@@ -52,6 +52,7 @@ namespace {
         bool slsfBeast = true;     // SLSF: creatures add Bestiality fame (the player)
         bool firsts = true;        // first knot / creature / horse / colossal / super deep: memories + a reaction
         bool watchBulge = true;    // people watching react to the bulge
+        bool snCum = true;         // 2.6f: cum in him (OStrands): seen, felt, remarked on, remembered
         // SLSF Reloaded
         bool fame = true;
         int fameLo = 2, fameHi = 10;   // per time he is taken (the player only: SLSF fame is his)
@@ -236,6 +237,15 @@ namespace {
                 out += (out.empty() ? "" : " ") + std::format("It looks stretched by something big - {}.", k.lastCreature && Mnc::Active() ? "an animal's cock" : k.lastKind);
         }
         if (!bulge.empty()) out += (out.empty() ? "" : " ") + bulge;
+        if (g.snCum) {   // 2.6f: cum in him (OStrands)
+            const OStrandsLink::Held h = OStrandsLink::HeldOf(man->GetFormID());
+            std::string c;
+            if (h.flooding) c = std::format("Cum is pouring out of {}'s hole in a steady stream.", Name(man));
+            else if (h.leaking && h.vol > 0.05f) c = std::format("Cum is dribbling out of {}'s hole and running down his thighs.", Name(man));
+            else if (h.vol > 0.5f) c = std::format("{}'s hole is full of cum; it glistens at the rim.", Name(man));
+            if (h.vol > 2.0f && OStrandsLink::Belly(man->GetFormID()) > 0.3f) c += (c.empty() ? "" : " ") + std::format("His belly is visibly rounded, swollen with it.");
+            if (!c.empty()) out += (out.empty() ? "" : " ") + c;
+        }
         return out;
     }
     // what he himself knows
@@ -281,6 +291,20 @@ namespace {
             }
             const Engine::Bulge b = Engine::BulgeOf(man->GetFormID());
             if (g.snBulge && b.on) out.push_back(std::format("Right now he can feel it reaching {} inside him.", ReachWords(b.reach, b.deep)));
+        }
+        if (g.snCum) {   // 2.6f: what he feels of the cum in him
+            const OStrandsLink::Held h = OStrandsLink::HeldOf(man->GetFormID());
+            if (h.filling) out.push_back("Right now he is being filled - he can feel it pumping into him.");
+            if (h.flooding) out.push_back("It is pouring out of him right now and he cannot hold it in.");
+            else if (h.leaking) out.push_back("He can feel it trickling out of him and down his thighs.");
+            if (h.plugged && h.vol > 0.2f) out.push_back("A plug holds it all in him.");
+            if (h.vol > 3.0f) out.push_back("He is stuffed full of cum - his belly sloshes with it.");
+            else if (h.vol > 1.0f) out.push_back("He is full of cum; he can feel it inside him.");
+            else if (h.vol > 0.2f) out.push_back("There is still some cum inside him.");
+            const Kinds::StuffedInfo st = Kinds::StuffedOf(man->GetFormID());   // 2.6g
+            if (st.times >= 2) out.push_back(std::format("He has been stuffed full of cum {} times{}.", st.times,
+                                                         st.daysSince >= 0.0f && st.daysSince < 1.0f ? ", the last time today" : ""));
+            else if (st.times == 1) out.push_back("He has been stuffed full of cum once before.");
         }
         const std::string seen = Seen(man, false);
         if (!seen.empty() && (s.gape > 0.15f || s.tender > 0.25f || s.wet > 0.2f || s.swell > 0.25f || s.schlong > 0.15f)) out.push_back("Right now: " + seen);
@@ -427,7 +451,8 @@ namespace {
     std::unordered_map<RE::FormID, int> g_arousalSent;
     double g_lastTick = 0.0, g_lastRemark = 0.0;
     struct BulgeRound { bool active = false, watched = false; float most = 0.0f; bool deep = false; RE::FormID partner = 0; int shape = 0; double offAt = 0.0; };
-    std::unordered_map<RE::FormID, BulgeRound> g_bulgeRound;   // 2.5o: per man, the bulge this round (memories, watchers)
+    std::unordered_map<RE::FormID, BulgeRound> g_bulgeRound;
+    std::unordered_map<RE::FormID, double> g_floodSeen;   // 2.6f: the last flood of his someone may have remarked on   // 2.5o: per man, the bulge this round (memories, watchers)
 
     // ---- bathing
     bool IsBath(RE::FormID mgefId) {
@@ -456,6 +481,7 @@ namespace {
                 t = Now();
             }
             Colour::Bathed(a->GetFormID(), g.bathDry, g.bathSoothe);
+            OStrandsLink::Bathed(a->GetFormID());   // 2.6g: it all runs out of him
             if (g.bathHours > 0.0f) Virgin::RestFor(a, g.bathHours, "a bath");
             return RE::BSEventNotifyControl::kContinue;
         }
@@ -484,7 +510,7 @@ namespace Bridge {
         B("SNInspect", g.actInspect); B("SNLube", g.actLube); B("SNClench", g.actClench); B("SNAsk", g.actAsk);
         B("SNBulge", g.snBulge); B("SNMadeFor", g.madeFor); I("SNMadeForTimes", g.madeForTimes, 2, 100); F("SNMadeForForget", g.madeForForget, 2.0f, 365.0f);
         B("SNLooseFrom", g.looseFrom); B("SNBulgeMemory", g.bulgeMem); B("SNRumours", g.rumours); I("SNRumourMin", g.rumourMin, 1, 50);
-        B("SLSFBestiality", g.slsfBeast); B("SNFirsts", g.firsts); B("SNWatchBulge", g.watchBulge);
+        B("SLSFBestiality", g.slsfBeast); B("SNFirsts", g.firsts); B("SNWatchBulge", g.watchBulge); B("SNCum", g.snCum);
         B("SNScene", g.snScene); B("SNRemarks", g.snRemarks); F("SNRemarkMinutes", g.remarkMinutes, 0.5f, 60.0f); F("SNRemarkChance", g.remarkChance, 0.0f, 1.0f);
         B("SLSF", g.fame); I("SLSFFameMin", g.fameLo, 0, 50); I("SLSFFameMax", g.fameHi, 1, 100); F("SLSFFirst", g.fameFirst, 1.0f, 10.0f); B("SLSFGroup", g.fameGroup);
         B("Arousal", g.arousal); I("ArousalFrom", g.arousalFrom, 0, 99); F("ArousalWet", g.arousalWet, 0.0f, 1.0f); B("ArousalSensitive", g.arousalSens);
@@ -516,7 +542,7 @@ namespace Bridge {
         if (!sink) if (auto* src = RE::ScriptEventSourceHolder::GetSingleton()) { src->AddEventSink<RE::TESMagicEffectApplyEvent>(&g_bathSink); sink = true; }
         {
             std::lock_guard lk(g_mx);
-            g_react.clear(); g_sceneSent.clear(); g_sceneAt.clear(); g_remarkAt.clear(); g_arousalSent.clear(); g_bulgeRound.clear();
+            g_react.clear(); g_sceneSent.clear(); g_sceneAt.clear(); g_remarkAt.clear(); g_arousalSent.clear(); g_bulgeRound.clear(); g_floodSeen.clear();
         }
         RegisterSN();
     }
@@ -628,6 +654,31 @@ namespace Bridge {
             }
         }
         for (auto& p : due) Narrate(p.text, RE::TESForm::LookupByID<RE::Actor>(p.partner), RE::TESForm::LookupByID<RE::Actor>(p.man));
+        // 2.6f: fillings that just finished (OStrands): the giver remembers, a first Colossal Load is a first
+        if (g.snCum) {
+            for (auto& f : OStrandsLink::TakeFilled()) {
+                auto* man = RE::TESForm::LookupByID<RE::Actor>(f.man);
+                auto* giver = RE::TESForm::LookupByID<RE::Actor>(f.giver);
+                if (!man || !giver || f.loads < 0.3f) continue;
+                const char* how = f.colossal ? "an enormous load" : f.loads > 1.5f ? "a big load" : "his load";
+                if (g.snMemory) Remember(std::format("{} came deep inside {}, filling him with {}.", Name(giver), Name(man), how), giver, man);
+                if (f.colossal && g.firsts && (Kinds::OnColossalLoad(f.man) & Kinds::kFirstColossalLoad)) {
+                    const std::string t = std::format("{} filled {} with more cum than he had ever taken - it kept coming until it ran out of him.", Name(giver), Name(man));
+                    if (g.snMemory) Remember(t, giver, man);
+                    std::lock_guard lk(g_mx);
+                    g_react.push_back({f.man, f.giver, t, now});
+                }
+            }
+        }
+        if (g.snCum) {   // 2.6g: stuffed full - counted, and remembered
+            for (auto id : OStrandsLink::TakeStuffed()) {
+                const std::uint16_t n = Kinds::OnStuffed(id);
+                auto* man = RE::TESForm::LookupByID<RE::Actor>(id);
+                if (man && g.snMemory && (n == 1 || n == 5 || n == 10 || n % 25 == 0))
+                    Remember(n == 1 ? std::format("{} was stuffed so full of cum that his belly swelled with it - the first time.", Name(man))
+                                    : std::format("{} has been stuffed full of cum {} times now.", Name(man), n), man, man);
+            }
+        }
         // what can be seen right now (naked men near the player)
         for (auto* man : all) {
             if (!IsMan(man) || man->IsDead() || man->GetPosition().GetDistance(player->GetPosition()) > 1500.0f) continue;
@@ -676,6 +727,29 @@ namespace Bridge {
                     }
                     const std::string bs = BulgeSeen(man);
                     if (who && !bs.empty()) { ++g_sentRemark; Narrate(std::format("{} watches as {}", Name(who), bs), who, man); }
+                }
+            }
+            if (g.snCum && g.snRemarks) {   // 2.6f: someone nearby sees it pour out of him
+                const OStrandsLink::Held h = OStrandsLink::HeldOf(id);
+                bool fresh = false;
+                {
+                    std::lock_guard lk(g_mx);
+                    double& seenAt = g_floodSeen[id];
+                    if (h.floodAt > seenAt) { seenAt = h.floodAt; fresh = true; }
+                }
+                if (fresh && Rand01() <= g.remarkChance) {
+                    RE::Actor* who = nullptr; float best = 900.0f;
+                    for (auto* o : all) {
+                        if (!o || o == man || o->IsDead() || o->IsChild() || o->IsInCombat() || o->IsPlayerRef()) continue;
+                        const float d = o->GetPosition().GetDistance(man->GetPosition());
+                        bool los = false;
+                        if (d < best && o->HasLineOfSight(man, los) && los) { best = d; who = o; }
+                    }
+                    if (who) {
+                        ++g_sentRemark;
+                        Narrate(std::format("{} watches as cum floods out of {}'s hole and down his thighs.", Name(who), Name(man)), who, man);
+                        if (g.snMemory) Remember(std::format("{} saw cum pour out of {}'s hole in a stream, more than one man should hold.", Name(who), Name(man)), who, man);   // 2.6g: to tease him with later
+                    }
                 }
             }
             if (g.snScene && shows) {
@@ -804,6 +878,9 @@ namespace Bridge {
                                : "While he is still loose or gaping, he knows (and it can be seen) who did it - \"still loose from "
                                  "Farkas last night\".");
             ch |= Tr::Checkbox("Partners remember the bulge", &g.bulgeMem);
+            ch |= Tr::Checkbox("Cum in him (OStrands)", &g.snCum);
+            Help("With the OStrands link: people see it dribbling or pouring out of him and his belly full of it, he feels it, "
+                 "someone watching may remark on a flood, the man who filled him remembers it, and his first Colossal Load is a first.");
             Help("After a round where the bulge went past his lower belly, the one who gave it to him remembers how far it went.");
             ch |= Tr::Checkbox("Firsts", &g.firsts);
             Help(Mnc::Active() ? "His first creature, first knot, first flared cock, the biggest he has taken and his first super "
@@ -882,6 +959,7 @@ namespace Bridge {
         ch |= Mu::RenderSection();   // 2.5v
         ch |= OStrandsLink::RenderSection();   // 2.5w
         ch |= Colossal::RenderSection();       // 2.6c
+        Colour::RenderOStrandsCum();           // 2.6f
         if (ch) Colour::SaveNow();
     }
 }

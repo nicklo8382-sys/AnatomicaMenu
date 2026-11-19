@@ -84,7 +84,7 @@ namespace Colossal {
             sl("Amount", &l.amount, 0.2f, 8.0f);
             sl("Spurts", &l.pulses, 0.3f, 4.0f);
             sl("Force", &l.force, 0.3f, 3.0f);
-            sl("Strand thickness", &l.thick, 0.3f, 3.0f);
+            sl("Thickness (strands and globs)", &l.thick, 0.3f, 3.0f);
             sl("Thick and sticky", &l.sticky, 0.2f, 3.0f);
             sl("Stretch", &l.stretch, 0.2f, 3.0f);
             ch |= Tr::Checkbox(std::format("Own colour##oc{}", id).c_str(), &l.ownColour);

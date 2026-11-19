@@ -1,5 +1,6 @@
 #include "SKSEMenuFramework.h"
 #include "Lang.h"
+#include "OStrandsLink.h"
 #include "During.h"
 #include "Fluid.h"
 #include "Extras.h"
@@ -646,6 +647,7 @@ namespace {
                 const float k = age < 1.0f ? dw.imprintAmt * (1.0f - Smooth(age)) : 0.0f;
                 for (int i = 0; i < kNB; ++i) bw[i] = s.imp[i] * k;
             }
+            bw[kBelly] = std::max(bw[kBelly], OStrandsLink::Belly(act->GetFormID()));   // 2.6e: full of what OStrands put in him
             for (int i = 0; i < kNB; ++i) ease(s.bulge[i], bw[i], 0.08f, bulging ? 0.25f : linger);
             // (the first time each session it is always sent: a save made mid-scene keeps the morphs it had)
             auto send = [&](const char* morph, float v, float& sent) {
