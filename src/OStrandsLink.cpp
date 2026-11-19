@@ -227,6 +227,46 @@ namespace OStrandsLink {
         s.squirtStream = g_nextStream++;
     }
 
+    // 2.6d: the Testing page - see it come out without a schlong in the way
+    void RenderTests(RE::Actor* a) {
+        static std::string last;
+        if (!a) return;
+        if (!Installed()) { Tr::TextDisabled("OStrands 0.8.0.3+ is not installed."); return; }
+        if (!Male(a)) { Tr::TextDisabled("Only men (Anatomica's anus)."); return; }
+        RE::NiPoint3 hc, hd;
+        if (!Fluid::HoleFrame(a, hc, hd)) { Tr::TextDisabled("No Anatomica rim found on him."); return; }
+        bool on;
+        { std::lock_guard lk(g_mx); on = g.on; }
+        if (!on) Tr::TextColored(ImGuiMCP::ImVec4{1.0f, 0.5f, 0.4f, 1.0f}, "\"Take the cum and let it out of him\" is off (Integrations page, OStrands).");
+        auto act = [&](const char* label, auto&& fn) {
+            if (Tr::Button(label)) { std::lock_guard lk(g_mx); State& s = g_st[a->GetFormID()]; s.lastWorked = 0.0; s.plugged = false; last = Lang::TS(fn(s)); }
+        };
+        act("Fill him: 1 load", [&](State& s) { s.vol = std::min(s.vol + 1.0f, g.maxLoads); return std::string("1 load in him"); });
+        ImGuiMCP::SameLine();
+        act("Fill him: 3 loads", [&](State& s) { s.vol = std::min(s.vol + 3.0f, g.maxLoads); return std::string("3 loads in him"); });
+        ImGuiMCP::SameLine();
+        act("Gush now", [&](State& s) {
+            if (s.vol <= 0.02f) return std::string("he holds nothing - fill him first");
+            s.gushLeft += s.vol * g.gush; s.stream = g_nextStream++;
+            return std::string("a gush, as when the schlong slides out");
+        });
+        ImGuiMCP::SameLine();
+        act("Squirt now", [&](State& s) {
+            if (s.vol <= 0.02f) return std::string("he holds nothing - fill him first");
+            s.squirtLeft += s.vol * g.clenchShare; s.squirtSpeed = 30.0f; s.squirtStream = g_nextStream++;
+            return std::string("a squirt, as from a full clench");
+        });
+        ImGuiMCP::SameLine();
+        act("Empty him", [&](State& s) { s.vol = s.gushLeft = s.squirtLeft = 0.0f; return std::string("nothing in him"); });
+        Tr::TextDisabled("Left alone he oozes it out over time (faster when gaping: Gape and movement > Gape him open). Close the menu to see it.");
+        {
+            std::lock_guard lk(g_mx);
+            auto it = g_st.find(a->GetFormID());
+            Tr::TextDisabled("%s", Lang::Fmt("In him: {:.2f} loads", it == g_st.end() ? 0.0f : it->second.vol).c_str());
+        }
+        if (!last.empty()) Tr::TextDisabled("%s", last.c_str());
+    }
+
     std::string Status(RE::Actor* a) {
         if (!a) return {};
         std::lock_guard lk(g_mx);

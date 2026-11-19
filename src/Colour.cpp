@@ -2,6 +2,7 @@
 #include "Lang.h"
 #include "SoftButt.h"
 #include "Colour.h"
+#include "OStrandsLink.h"
 #include "Drip.h"
 #include "Virgin.h"
 #include "Size.h"
@@ -3167,6 +3168,9 @@ namespace Colour {
             Drip::RenderTests(a);
         }
 
+        }
+        if (OStrandsLink::Installed() && Section("Cum (OStrands)")) {   // 2.6d
+            OStrandsLink::RenderTests(a);
         }
         if (Section("During sex")) {
         Tr::TextDisabled("Shows the belly bulge on him for 8 s, moving up and down (During sex page sliders not needed).");

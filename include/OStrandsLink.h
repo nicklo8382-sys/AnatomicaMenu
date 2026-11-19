@@ -13,6 +13,7 @@ namespace OStrandsLink {
     void OnWorked(RE::Actor* recv, RE::Actor* partner, float dil);   // the gape script: he is being taken
     void OnClench(RE::FormID id, float amp);                      // Wink: a clench just started
     std::string Status(RE::Actor* a);                             // one line for the Status page ("" = nothing)
+    void RenderTests(RE::Actor* a);                               // 2.6d: Testing page buttons (fill, gush, squirt, ooze, empty)
     bool RenderSection();                                         // Integrations page
     void Ini(CSimpleIniA& ini, bool save);                        // [OStrands]
 }
