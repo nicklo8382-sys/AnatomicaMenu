@@ -109,9 +109,11 @@ namespace {
         c.ok = true;
         return c;
     }
-    // 2.6: how far his hips are bent (degrees, 0 = standing, 90 = thighs level as when sitting), both legs averaged
+    // 2.6: how far his hips are bent (degrees, 0 = standing, 90 = thighs level as when sitting), both legs averaged.
+    // 2.6c: measured against his body's real up (the canal frame's u leans back 54 degrees - standing read as 54 before)
     float HipBend(RE::Actor* act, const Canal& c) {
         auto* root = act->Get3D(false);
+        const V up = c.u * 0.586230f + c.f * -0.810145f;   // the mesh's up (0,0,1) in that frame
         float sum = 0.0f; int n = 0;
         for (auto [t, k] : {std::pair{"NPC L Thigh [LThg]", "NPC L Calf [LClf]"}, std::pair{"NPC R Thigh [RThg]", "NPC R Calf [RClf]"}}) {
             auto* tn = Node(root, t); auto* kn = Node(root, k);
@@ -119,7 +121,7 @@ namespace {
             V d = V(kn->world.translate) - V(tn->world.translate);
             const float ld = Len(d);
             if (ld < 1e-3f) continue;
-            sum += std::acos(std::clamp(-Dot(d * (1.0f / ld), c.u), -1.0f, 1.0f)) * 57.29578f; ++n;
+            sum += std::acos(std::clamp(-Dot(d * (1.0f / ld), up), -1.0f, 1.0f)) * 57.29578f; ++n;
         }
         return n ? sum / static_cast<float>(n) : 0.0f;
     }
@@ -604,6 +606,7 @@ namespace {
                                 if (seg >= 0) { bw[segAt(0)] *= 1.0f - hf; bw[segAt(1)] *= 1.0f - 0.5f * hf; }
                                 if (head >= 0) { bw[headAt(0)] *= 1.0f - hf; bw[headAt(1)] *= 1.0f - 0.3f * hf; }
                                 bw[kBelly] *= 1.0f - 0.5f * hf;
+                                bw[kKnot1] *= 1.0f - 0.6f * hf;   // 2.6c: the low knot folds with it too
                             }
                         }
                         bulging = true;

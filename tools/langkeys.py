@@ -85,7 +85,7 @@ def keys_of(path):
                     if k == "lbl": found.append(s)
             i = j; continue
         # local button helpers (Testing page): act("label", [&] { ... return std::string("result"); })
-        if t[0] == "id" and t[1] in ("act", "preset") and not path.endswith("Bridge.cpp") and i + 1 < len(toks) and toks[i+1][1] == "(" and not (i and toks[i-1][1] in ("::", ".", "auto")):
+        if t[0] == "id" and t[1] in ("act", "preset", "sl") and not path.endswith("Bridge.cpp") and i + 1 < len(toks) and toks[i+1][1] == "(" and not (i and toks[i-1][1] in ("::", ".", "auto")):
             depth, j, first, cur = 1, i + 2, True, None
             while j < len(toks) and depth:
                 tk = toks[j]

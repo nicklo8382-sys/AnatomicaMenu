@@ -5,6 +5,7 @@
 #include "Fluid.h"
 #include "Colour.h"
 #include "Wink.h"
+#include "OStrandsLink.h"
 #include "SKSEMenuFramework.h"
 
 #include <algorithm>
@@ -862,6 +863,7 @@ namespace Drip {
         }
         std::thread(Loop).detach();
         Fluid::Install();
+        OStrandsLink::Install();   // 2.5w
     }
 
     void RegisterFuncs(RE::BSScript::IVirtualMachine* vm) {
@@ -880,6 +882,7 @@ namespace Drip {
         if (!bathSink) {
             if (auto* src = RE::ScriptEventSourceHolder::GetSingleton()) { src->AddEventSink<RE::TESMagicEffectApplyEvent>(&g_bathSink); bathSink = true; }
         }
+        OStrandsLink::Reset();   // 2.5w
         std::lock_guard lk(g_mx);
         g_st.clear();          // armor left on men is removed by CleanStrays
         Fluid::Reset();
@@ -888,6 +891,7 @@ namespace Drip {
     }
 
     void OnWorked(RE::Actor* recv, RE::Actor* partner, float dil) {
+        OStrandsLink::OnWorked(recv, partner, dil);   // 2.5w
         if (!kCum || !recv) return;
         std::array<float, 3> pc{};
         const bool male = partner && partner != recv && partner->GetActorBase() && partner->GetActorBase()->GetSex() == RE::SEX::kMale;
@@ -910,6 +914,7 @@ namespace Drip {
     }
 
     void OnClench(RE::FormID id, float amp) {
+        OStrandsLink::OnClench(id, amp);   // 2.5w
         if (!kCum) return;
         std::lock_guard lk(g_mx);
         if (!g.on || !g.clench) return;
@@ -1028,7 +1033,11 @@ namespace Drip {
 
     std::string Status(RE::Actor* a) {
         if (!a) return {};
-        if (!kCum) return Fluid::Status(a->GetFormID());   // wetness only
+        if (!kCum) {   // wetness only (+ 2.5w: what OStrands put in him)
+            const std::string os = OStrandsLink::Status(a);
+            const std::string fs = Fluid::Status(a->GetFormID());
+            return os.empty() ? fs : (fs.empty() ? os : fs + " | " + os);
+        }
         std::lock_guard lk(g_mx);
         auto it = g_st.find(a->GetFormID());
         if (it == g_st.end() || (it->second.vol <= 0.0f && it->second.leaked <= 0.0f)) return std::string(Lang::T("Cum: none")) + " | " + Fluid::Status(a->GetFormID());

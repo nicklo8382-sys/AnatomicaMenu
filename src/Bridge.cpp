@@ -1,6 +1,8 @@
 #include "Bridge.h"
 #include "Lang.h"
 #include "Mu.h"
+#include "OStrandsLink.h"
+#include "Colossal.h"
 #include "Colour.h"
 #include "Engine.h"
 #include "Virgin.h"
@@ -491,6 +493,8 @@ namespace Bridge {
         if (g.fameHi < g.fameLo) g.fameHi = g.fameLo;
         Size::Ini(ini, save);
         Mu::Ini(ini, save);
+        OStrandsLink::Ini(ini, save);   // 2.5w
+        Colossal::Ini(ini, save);       // 2.6c
         Extras::Ini(ini, save);
     }
 
@@ -876,6 +880,8 @@ namespace Bridge {
         }
         }
         ch |= Mu::RenderSection();   // 2.5v
+        ch |= OStrandsLink::RenderSection();   // 2.5w
+        ch |= Colossal::RenderSection();       // 2.6c
         if (ch) Colour::SaveNow();
     }
 }
