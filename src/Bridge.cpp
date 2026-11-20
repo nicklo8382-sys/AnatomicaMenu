@@ -1,4 +1,7 @@
 #include "Talk.h"
+#include "Training.h"
+#include "Face.h"
+#include "Fluid.h"
 #include "Bridge.h"
 #include "Lang.h"
 #include "Mu.h"
@@ -36,7 +39,7 @@ namespace {
         bool snStatus = true;      // decorators + the prompt pack
         bool snMemory = true;      // persistent memories: virginity taken / come back
         bool snReact = true;       // the partner says something right after his first time
-        bool actInspect = true, actLube = true, actClench = true, actAsk = true;
+        bool actInspect = true, actLube = true, actClench = true, actAsk = true, actClean = true;
         bool snScene = true;       // short-lived "what you can see" notes while he is naked and it shows
         bool snRemarks = true;     // someone nearby comments on it now and then
         float remarkMinutes = 5.0f;
@@ -209,9 +212,16 @@ namespace {
         return {};
     }
     // what anyone looking at his naked backside can see
+    bool HasRim(RE::Actor* a) {   // 2.6j: his body as it is now has the Anatomica anus (a werewolf body may too)
+        auto* r = a ? a->Get3D(false) : nullptr;
+        return r && r->GetObjectByName(RE::BSFixedString("3BA_AnusRim"));
+    }
     std::string Seen(RE::Actor* man, bool needNaked) {
         if (!IsMan(man)) return {};
-        const std::string bulge = BulgeSeen(man);   // 2.5o: shows when the bulge itself is allowed to (its own "shows through")
+        // 2.6j: in a beast form (OStim Beast Form) his body is the beast's - nothing of his own hole shows
+        if (const int bf = Colossal::BeastForm(man); bf != 0 && !HasRim(man)) return Face::SeenText(man);
+        std::string bulge = BulgeSeen(man);   // 2.5o: shows when the bulge itself is allowed to (its own "shows through")
+        if (const std::string face = Face::SeenText(man); !face.empty()) bulge = face + (bulge.empty() ? "" : " " + bulge);   // 2.6j: his face shows dressed too
         if (needNaked && !Naked(man)) return bulge;
         const Colour::Snapshot s = Colour::SnapshotOf(man);
         const Virgin::Info v = Virgin::Get(man->GetFormID());
@@ -245,6 +255,7 @@ namespace {
             else if (h.leaking && h.vol > 0.05f) c = std::format("Cum is dribbling out of {}'s hole and running down his thighs.", Name(man));
             else if (h.vol > 0.5f) c = std::format("{}'s hole is full of cum; it glistens at the rim.", Name(man));
             if (h.vol > 2.0f && OStrandsLink::Belly(man->GetFormID()) > 0.3f) c += (c.empty() ? "" : " ") + std::format("His belly is visibly rounded, swollen with it.");
+            else if (Training::Lasting(man->GetFormID()) > 0.15f) c += (c.empty() ? "" : " ") + std::format("His belly stays softly rounded, stretched from being stuffed again and again.");   // 2.6j
             if (!c.empty()) out += (out.empty() ? "" : " ") + c;
         }
         return out;
@@ -299,6 +310,8 @@ namespace {
             if (h.flooding) out.push_back("It is pouring out of him right now and he cannot hold it in.");
             else if (h.leaking) out.push_back("He can feel it trickling out of him and down his thighs.");
             if (h.plugged && h.vol > 0.2f) out.push_back("A plug holds it all in him.");
+            if (const int gc = OStrandsLink::GiverCount(man->GetFormID()); gc >= 2)   // 2.6j: breeding talk
+                out.push_back(std::format("He has been bred by {} men and holds all of their seed.", gc));
             if (h.vol > 3.0f) out.push_back("He is stuffed full of cum - his belly sloshes with it.");
             else if (h.vol > 1.0f) out.push_back("He is full of cum; he can feel it inside him.");
             else if (h.vol > 0.2f) out.push_back("There is still some cum inside him.");
@@ -307,6 +320,38 @@ namespace {
                                                          st.daysSince >= 0.0f && st.daysSince < 1.0f ? ", the last time today" : ""));
             else if (st.times == 1) out.push_back("He has been stuffed full of cum once before.");
         }
+        if (const std::string mouth = Face::SelfText(man); !mouth.empty()) out.push_back(mouth);   // 2.6j
+        if (const float tl = Training::Level(man->GetFormID()); tl >= 0.5f)   // 2.6j: training
+            out.push_back(std::format("His hole has been trained to take {} comfortably.", Training::Word(tl)));
+        {   // 2.6j: Vampire Lords
+            const RE::FormID mid = man->GetFormID();
+            if (Training::Cold(mid)) out.push_back("A Vampire Lord's seed sits cold in his belly; it is slow to run out of him.");
+            if (const float th = Training::Thrall(mid); th > 0.0f)
+                out.push_back(std::format("Vampire Lords have bred him {} times; he feels bound to them, like a thrall.", static_cast<int>(th + 0.5f)));
+            else if (Training::LordLevel(mid) >= 1.0f) out.push_back("He has grown used to being taken by Vampire Lords.");
+            if (Training::Bond(mid) > 0.0f) out.push_back("His skin glows faintly red - the blood bond of a Vampire Lord's thrall.");
+            if (const RE::FormID sc = Training::Scent(mid); sc)
+                out.push_back(std::format("A werewolf, {}, bred him and left his scent on him; any werewolf would smell it.", NameOf(sc)));
+            if (const int bfm = Colossal::BeastForm(man); bfm == 1 || bfm == 2) {
+                if (const float mn = Colossal::Moon(); mn >= 1.0f) out.push_back("Tonight the moon is full, and the beast in him is at its strongest.");
+                else if (mn > 0.0f) out.push_back("Tonight the moon is nearly full.");
+            }
+            if (Colossal::BeastForm(man) == 3) {
+                const float hg = Colossal::Hunger(man);
+                if (hg >= 0.75f) out.push_back("He is starving for blood.");
+                else if (hg >= 0.4f) out.push_back("He is hungry for blood.");
+            }
+        }
+        if (const int bf = Colossal::BeastForm(man); bf != 0 && !HasRim(man)) {   // 2.6j: OStim Beast Form (a beast body without the Anatomica anus)
+            const char* form = bf == 1 ? "a werewolf" : bf == 2 ? "a werebear" : "a Vampire Lord";
+            const OStrandsLink::Held h = OStrandsLink::HeldOf(man->GetFormID());
+            out.push_back(std::format("Right now he is in beast form, {}.{}", form, h.vol > 0.2f ? " Even transformed he still holds the cum he took before he changed." : ""));
+            std::string o;
+            for (auto& x : out) o += (o.empty() ? "" : " ") + x;
+            return o;   // (his own hole's state is not described while he is transformed)
+        }
+        if (const int bf = Colossal::BeastForm(man); bf != 0)   // a beast body with the Anatomica anus: all of it still applies
+            out.push_back(std::format("Right now he is in beast form, {}.", bf == 1 ? "a werewolf" : bf == 2 ? "a werebear" : "a Vampire Lord"));
         const std::string seen = Seen(man, false);
         if (!seen.empty() && (s.gape > 0.15f || s.tender > 0.25f || s.wet > 0.2f || s.swell > 0.25f || s.schlong > 0.15f)) out.push_back("Right now: " + seen);
         std::string o;
@@ -368,10 +413,18 @@ namespace {
     bool SNCanAsk(RE::StaticFunctionTag*, RE::Actor* sp, RE::BSFixedString, RE::BSFixedString) { return SN() && g.actAsk && Fit(sp) && ManNear(sp, false); }
 
     void SNDo(RE::StaticFunctionTag*, RE::BSFixedString what, RE::Actor* sp, RE::Actor* t, RE::BSFixedString how) {
-        const std::string w = what.c_str() ? what.c_str() : "";
+        std::string w = what.c_str() ? what.c_str() : "";
         if (!sp) return;
         ++g_actRun;
-        if (!t || !IsMan(t)) t = ManNear(sp, w != "ask");
+        if (w == "clench") {   // 2.6j: the clean-up action shares SNClench (no new Papyrus): told apart by "how"
+            std::string h = how.c_str() ? how.c_str() : "";
+            for (auto& c : h) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            const bool clench = h.find("clench") != std::string::npos || h.find("tight") != std::string::npos || h.find("relax") != std::string::npos || h.find("open") != std::string::npos;
+            if (!clench && (h.find("wipe") != std::string::npos || h.find("clean") != std::string::npos || h.find("face") != std::string::npos ||
+                            h.find("both") != std::string::npos || h.find("hole") != std::string::npos || h.find("lick") != std::string::npos)) w = "clean";
+        }
+        if (w == "clean" && !g.actClean) return;
+        if (!t || !IsMan(t)) t = ManNear(sp, w != "ask" && w != "clean");
         if (!t) return;
         const std::string S = Name(sp), T = Name(t);
         if (w == "inspect") {
@@ -392,6 +445,16 @@ namespace {
                 if (!Wink::TestClench(t)) Wink::BlinkNow(t);
                 Narrate(std::format("At {}'s order {} clenches his hole tight.", S, T), t, sp);
             }
+        } else if (w == "clean") {   // 2.6j
+            std::string h = how.c_str() ? how.c_str() : "";
+            for (auto& c : h) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            const bool lick = h.find("lick") != std::string::npos || h.find("tongue") != std::string::npos;
+            const bool face = h.find("hole") == std::string::npos || h.find("face") != std::string::npos || h.find("both") != std::string::npos;
+            const bool hole = h.find("hole") != std::string::npos || h.find("both") != std::string::npos;
+            const bool hadFace = face && Face::Wiped(t->GetFormID());
+            if (hole) Fluid::Clear(t->GetFormID());
+            const std::string part = face && hole ? std::format("{}'s face and his hole", T) : hole ? std::format("the cum leaking from {}'s hole", T) : std::format("{}'s face", T);
+            Narrate(std::format("{} {} {} clean{}.", S, lick ? "licks" : "wipes", part, (face && !hadFace && !hole) ? ", though there was little on it" : ""), sp, t);
         } else if (w == "ask") {
             const Virgin::Info v = Virgin::Get(t->GetFormID());
             std::string truth;
@@ -438,6 +501,9 @@ namespace {
                 "SNCanClench", "SNClench", "{\"target\": \"Actor\", \"how\": \"clench or relax\"}");
             act("AnatomicaAskVirgin", "Ask a man whether he is still an anal virgin. He will answer.",
                 "SNCanAsk", "SNAsk", "{\"target\": \"Actor\"}");
+            if (g.actClean)   // 2.6j (runs through SNClench: "how" says what is cleaned)
+                act("AnatomicaCleanUp", "Wipe or lick a man clean after sex: cum on his face and lips, or cum leaking from his hole. Use when the speaker cleans him up.",
+                    "SNCanAsk", "SNClench", "{\"target\": \"Actor\", \"how\": \"wipe or lick - his face, his hole or both\"}");
             Extras::RegisterSN(vm);   // anatomica_lot (only with the extras mod)
             logger::info("Anatomica: registered with SkyrimNet (4 decorators, 4 actions{})", Extras::On() ? ", extras' anatomica_lot" : "");
         });
@@ -483,6 +549,7 @@ namespace {
             }
             Colour::Bathed(a->GetFormID(), g.bathDry, g.bathSoothe);
             OStrandsLink::Bathed(a->GetFormID());   // 2.6g: it all runs out of him
+            Face::Bathed(a->GetFormID());           // 2.6j: his face washed
             if (g.bathHours > 0.0f) Virgin::RestFor(a, g.bathHours, "a bath");
             return RE::BSEventNotifyControl::kContinue;
         }
@@ -508,7 +575,7 @@ namespace Bridge {
         auto I = [&](const char* k, int& v, int lo, int hi) { if (save) ini.SetLongValue(S, k, v); else v = std::clamp(static_cast<int>(ini.GetLongValue(S, k, v)), lo, hi); };
         auto F = [&](const char* k, float& v, float lo, float hi) { if (save) ini.SetDoubleValue(S, k, v); else v = std::clamp(static_cast<float>(ini.GetDoubleValue(S, k, v)), lo, hi); };
         B("SkyrimNet", g.sn); B("SNStatus", g.snStatus); B("SNMemory", g.snMemory); B("SNReact", g.snReact);
-        B("SNInspect", g.actInspect); B("SNLube", g.actLube); B("SNClench", g.actClench); B("SNAsk", g.actAsk);
+        B("SNInspect", g.actInspect); B("SNLube", g.actLube); B("SNClench", g.actClench); B("SNAsk", g.actAsk); B("SNCleanUp", g.actClean);
         B("SNBulge", g.snBulge); B("SNMadeFor", g.madeFor); I("SNMadeForTimes", g.madeForTimes, 2, 100); F("SNMadeForForget", g.madeForForget, 2.0f, 365.0f);
         B("SNLooseFrom", g.looseFrom); B("SNBulgeMemory", g.bulgeMem); B("SNRumours", g.rumours); I("SNRumourMin", g.rumourMin, 1, 50);
         B("SLSFBestiality", g.slsfBeast); B("SNFirsts", g.firsts); B("SNWatchBulge", g.watchBulge); B("SNCum", g.snCum);
@@ -523,6 +590,8 @@ namespace Bridge {
         OStrandsLink::Ini(ini, save);   // 2.5w
         Colossal::Ini(ini, save);       // 2.6c
         Talk::Ini(ini, save);           // 2.6i
+        Face::Ini(ini, save);           // 2.6j
+        Training::Ini(ini, save);       // 2.6j
         Extras::Ini(ini, save);
     }
 
@@ -842,6 +911,8 @@ namespace Bridge {
             ch |= Tr::Checkbox("Lube him up", &g.actLube);
             ch |= Tr::Checkbox("Order him to clench or relax", &g.actClench);
             ch |= Tr::Checkbox("Ask if he is a virgin", &g.actAsk);
+            ch |= Tr::Checkbox("Clean him up", &g.actClean);
+            Help("Wipe or lick cum off his face, or from his hole (2.6j). Needs \"Ask if he is a virgin\" on too (it uses the same check). Applies after the next load.");
             ImGuiMCP::Unindent();
             Help("Only offered when it makes sense: a naked man close by (asking does not need him naked).");
             ch |= Tr::Checkbox("Scene awareness", &g.snScene);

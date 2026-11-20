@@ -28,7 +28,9 @@ namespace Engine {
     bool RingDirect();
     void BodyMorph(RE::Actor* a, const char* name, const char* key, float v);
     void ClearMorphKey(RE::Actor* a, const char* key);
-    void CumOverlay(RE::Actor* a, int level, int col, float alpha);   // 2.6i: cum overlay round his anus (0 = off, 1 film, 2 dripping)   // 2.6i: every body morph under this key, gone
+    void CumOverlay(RE::Actor* a, int level, int col, float alpha);
+    bool BondGlow(RE::Actor* a, float strength);  // 2.6j: a thrall's faint red skin glow (0 = off; false = no RaceMenu interface)
+    bool BlushBoost(RE::Actor* a, float add);   // 2.6j: OBlush's face blush this much stronger (0 = back to its own); false = no OBlush blush on him   // 2.6i: cum overlay round his anus (0 = off, 1 film, 2 dripping)   // 2.6i: every body morph under this key, gone
     std::vector<RE::FormID> DuringIds();          // 2.6i: the men the During-sex update has seen this session
     float MorphSum(RE::Actor* a, const char* name);   // 2.5v: a body morph, all its keys added up   // 2.5v: a RaceMenu body morph (no model update)                    // the skin-blend ring is coloured here, straight on its material
 }

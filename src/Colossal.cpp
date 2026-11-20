@@ -2,9 +2,11 @@
 #include "Lang.h"
 #include "Mnc.h"
 #include "Size.h"
+#include "Sounds.h"
 #include "SKSEMenuFramework.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <format>
@@ -48,8 +50,19 @@ namespace Colossal {
             Load men = L(2.0f, 1.3f, 1.4f, 1.3f, 1.2f, 1.2f);
             bool creatures = true;         // (More Nasty Critters only)
             bool ww = true;                // 2.6i: men transformed into werewolves / werebears (no More Nasty Critters needed)
+            bool wwObf = true;             // 2.6j: with OStim Beast Form, only while its "Big loads" MCM option is on
             Load wwLoad = L(4.5f, 1.7f, 2.2f, 1.9f, 1.5f, 1.6f);
             float wwRing = 2.0f;           // x how much wells out round his rim while a werewolf fills him
+            float wwMoon = 0.5f;           // 2.6j: on a full-moon night a werewolf's load is this much bigger (half for a nearly full moon)
+            bool wwHowl = true;            // 2.6j: a werewolf howls when he finishes
+            float wwHowlChance = 0.6f;
+            float wwHowlVolume = 1.0f;
+            bool vl = true;                // 2.6j: Vampire Lords get their own big load (Beast Form leaves them normal)
+            bool vlObf = false;            //   ... only while OStim Beast Form's "Big loads" is on
+            Load vlLoad = L(3.5f, 1.5f, 1.8f, 1.6f, 1.4f, 1.4f);
+            float vlNight = 0.3f;          // 2.6j: at night a Vampire Lord's load is this much bigger...
+            float vlDay = -0.2f;           //   ... and by day this much (below 0 = smaller)
+            float vlHunger = 1.0f;         //   ... how much his hunger changes it: 100% = starving gives twice the load, 0 = none, below 0 = smaller
             std::map<std::string, Load> types;              // type key -> its load
             std::map<std::string, std::pair<bool, Load>> groups;   // MNC group -> own load on, the load
         } g;
@@ -72,6 +85,40 @@ namespace Colossal {
             return o;
         }
         bool Male(RE::Actor* a) { auto* b = a ? a->GetActorBase() : nullptr; return b && b->GetSex() != RE::SEX::kFemale; }
+        // 2.6j: OStim Beast Form's "Big loads" (its OCumBeastPie script, read on the main thread every 10 s)
+        std::atomic<int> g_obfBig{-1};   // -1 Beast Form not found / not read, 0 off, 1 on
+        std::atomic<double> g_obfAt{-100.0};
+        std::atomic<bool> g_obfAsked{false};
+        double Clock() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+        void ReadObf() {
+            int r = -1;
+            auto* dh = RE::TESDataHandler::GetSingleton();
+            auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+            RE::TESQuest* q = nullptr;
+            if (dh && vm)
+                for (const char* p : {"OStim_Beast_Form_Merged.esp", "OStim_Beast_Form.esp"})
+                    if (dh->LookupModByName(p) && (q = dh->LookupForm<RE::TESQuest>(0x822, p))) break;
+            if (q) {
+                auto* pol = vm->GetObjectHandlePolicy();
+                const auto h = pol ? pol->GetHandleForObject(RE::TESQuest::FORMTYPE, q) : 0;
+                RE::BSTSmartPointer<RE::BSScript::Object> obj;
+                if (h && vm->FindBoundObject(h, "OCumBeastPie", obj) && obj) {
+                    const auto* huge = obj->GetProperty("HugeLoad");
+                    const auto* on = obj->GetProperty("BeastLoadEnabled");
+                    r = (huge && huge->GetBool() && (!on || on->GetBool())) ? 1 : 0;
+                }
+            }
+            if (g_obfBig.exchange(r) != r && r >= 0) logger::info("Anatomica: OStim Beast Form's Big loads are {}", r == 1 ? "on" : "off");
+            g_obfAt = Clock();
+            g_obfAsked = false;
+        }
+        int ObfBig() {   // any thread
+            if (Clock() - g_obfAt > 10.0 && !g_obfAsked.exchange(true)) {
+                if (auto* t = SKSE::GetTaskInterface()) t->AddTask([]() { ReadObf(); });
+                else g_obfAsked = false;
+            }
+            return g_obfBig;
+        }
         bool Were(RE::Actor* a) {   // 2.6i: the vanilla werewolf / werebear beast races, or any race named like one
             auto* race = a ? a->GetRace() : nullptr;
             if (!race) return false;
@@ -87,6 +134,68 @@ namespace Colossal {
             std::string n = race->GetFullName() ? race->GetFullName() : "";
             std::transform(n.begin(), n.end(), n.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
             return n.find("werewolf") != std::string::npos || n.find("werebear") != std::string::npos;
+        }
+
+        // 2.6j: the player's vampire hunger (PlayerVampireQuest's script, read on the main thread every 10 s)
+        std::atomic<float> g_plHunger{-1.0f};
+        std::atomic<double> g_plAt{-100.0};
+        std::atomic<bool> g_plAsked{false};
+        std::unordered_map<RE::FormID, float> g_fedDay;   // NPC Vampire Lords: the game day each last finished (under g_mx)
+        float Today() { auto* c = RE::Calendar::GetSingleton(); return c ? c->GetDaysPassed() : 0.0f; }
+        void ReadPlayerHunger() {
+            float h = -1.0f;
+            auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+            auto* q = RE::TESForm::LookupByID<RE::TESQuest>(0x000EAFD5);   // PlayerVampireQuest
+            if (vm && q) {
+                auto* pol = vm->GetObjectHandlePolicy();
+                const auto hd = pol ? pol->GetHandleForObject(RE::TESQuest::FORMTYPE, q) : 0;
+                RE::BSTSmartPointer<RE::BSScript::Object> obj;
+                if (hd && vm->FindBoundObject(hd, "PlayerVampireQuestScript", obj) && obj) {
+                    if (const auto* last = obj->GetProperty("LastFeedTime"); last && last->IsFloat() && last->GetFloat() > 0.0f)
+                        h = std::clamp((Today() - last->GetFloat()) / 3.0f, 0.0f, 1.0f);   // starving after three days
+                    else if (const auto* st = obj->GetProperty("VampireStatus"); st && st->IsInt() && st->GetSInt() > 0)
+                        h = std::clamp((static_cast<float>(st->GetSInt()) - 1.0f) / 3.0f, 0.0f, 1.0f);   // stage 1 fed .. 4 starving
+                }
+            }
+            g_plHunger = h;
+            g_plAt = Clock();
+            g_plAsked = false;
+        }
+        float PlayerHunger() {   // any thread
+            if (Clock() - g_plAt > 10.0 && !g_plAsked.exchange(true)) {
+                if (auto* t = SKSE::GetTaskInterface()) t->AddTask([]() { ReadPlayerHunger(); });
+                else g_plAsked = false;
+            }
+            return g_plHunger;
+        }
+
+        bool Night() { auto* c = RE::Calendar::GetSingleton(); const float h = c ? c->GetHour() : 12.0f; return h >= 20.0f || h < 5.0f; }
+        // 2.6j: Skyrim's moons go through eight phases (the climate's phase length in days, 3 in vanilla); 1 full, 0.5 nearly full
+        float MoonNow() {
+            auto* sky = RE::Sky::GetSingleton();
+            auto* cal = RE::Calendar::GetSingleton();
+            if (!sky || !cal || !Night()) return 0.0f;
+            int len = sky->currentClimate ? sky->currentClimate->timing.GetPhaseLength() : 3;
+            if (len <= 0) len = 3;
+            const int phase = static_cast<int>(cal->GetDaysPassed() / static_cast<float>(len)) % 8;   // 0 full .. 4 new .. 7 waxing gibbous
+            return phase == 0 ? 1.0f : (phase == 1 || phase == 7) ? 0.5f : 0.0f;
+        }
+        Load Scaled(Load l, float f) {
+            f = std::max(0.25f, f);
+            l.amount = std::clamp(l.amount * f, 0.2f, 8.0f);
+            l.pulses = std::clamp(l.pulses * std::sqrt(f), 0.3f, 4.0f);
+            return l;
+        }
+
+        bool Lord(RE::Actor* a) {   // 2.6j: the Dawnguard Vampire Lord race, or any race named like one
+            auto* race = a ? a->GetRace() : nullptr;
+            if (!race) return false;
+            static RE::TESRace* vl = nullptr; static bool looked = false;
+            if (!looked) { looked = true; if (auto* dh = RE::TESDataHandler::GetSingleton()) vl = dh->LookupForm<RE::TESRace>(0x00283A, "Dawnguard.esm"); }
+            if (vl && race == vl) return true;
+            std::string n = race->GetFullName() ? race->GetFullName() : "";
+            std::transform(n.begin(), n.end(), n.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            return n.find("vampire lord") != std::string::npos;
         }
 
         void Help(const char* t) {
@@ -153,11 +262,26 @@ namespace Colossal {
         const std::string group = mnc ? Mnc::GroupName(giver) : std::string();
         const int cat = creature ? -1 : Size::Cat(giver);
         const bool were = Were(giver);
+        const bool lord = !were && Lord(giver);
+        const int obf = (were || lord) ? ObfBig() : -1;
+        const float plHunger = lord && giver->IsPlayerRef() ? PlayerHunger() : -1.0f;
         std::lock_guard lk(g_mx);
         if (!g.on) return false;
-        if (were && g.ww) {   // 2.6i: a man turned werewolf - his own huge load, More Nasty Critters or not
+        if (were && g.ww && !(g.wwObf && obf == 0)) {   // (2.6j: Beast Form installed with its Big loads off: a normal load)   // 2.6i: a man turned werewolf - his own huge load, More Nasty Critters or not
             weight = 1.0f;
-            load = g.wwLoad;
+            load = Scaled(g.wwLoad, 1.0f + g.wwMoon * MoonNow());   // 2.6j: the full moon
+            return true;
+        }
+        if (lord && g.vl && !(g.vlObf && obf == 0)) {   // 2.6j: a Vampire Lord's own big load
+            weight = 1.0f;
+            load = g.vlLoad;
+            float h = plHunger;   // his hunger
+            if (h < 0.0f) {
+                auto it = g_fedDay.find(giver->GetFormID());
+                h = it == g_fedDay.end() ? 0.5f : std::clamp((Today() - it->second) / 2.0f, 0.0f, 1.0f);
+            }
+            const float f = (1.0f + g.vlHunger * h) * (1.0f + (Night() ? g.vlNight : g.vlDay));   // his hunger, and the night
+            if (f != 1.0f) load = Scaled(load, f);
             return true;
         }
         if (creature) {   // without More Nasty Critters creatures stay as they are
@@ -184,6 +308,44 @@ namespace Colossal {
     }
 
     bool IsWerewolf(RE::Actor* a) { return Were(a); }
+    int BeastForm(RE::Actor* a) {   // 2.6j
+        if (Were(a)) {
+            auto* race = a->GetRace();
+            std::string n = race && race->GetFullName() ? race->GetFullName() : "";
+            std::transform(n.begin(), n.end(), n.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            static RE::TESRace* wb = nullptr; static bool looked = false;
+            if (!looked) { looked = true; if (auto* dh = RE::TESDataHandler::GetSingleton()) wb = dh->LookupForm<RE::TESRace>(0x01E17B, "Dragonborn.esm"); }
+            return (wb && race == wb) || n.find("werebear") != std::string::npos ? 2 : 1;
+        }
+        return Lord(a) ? 3 : 0;
+    }
+    float Hunger(RE::Actor* a) {
+        if (!a || !Lord(a)) return 0.0f;
+        if (a->IsPlayerRef()) { const float h = PlayerHunger(); if (h >= 0.0f) return h; }
+        std::lock_guard lk(g_mx);
+        auto it = g_fedDay.find(a->GetFormID());
+        return it == g_fedDay.end() ? 0.5f : std::clamp((Today() - it->second) / 2.0f, 0.0f, 1.0f);
+    }
+    float Moon() { return MoonNow(); }
+    void Climax(RE::Actor* giver) {
+        if (!giver || !Were(giver) || BeastForm(giver) != 1) return;   // a werewolf (a werebear does not howl)
+        float chance, vol;
+        { std::lock_guard lk(g_mx); if (!g.wwHowl) return; chance = g.wwHowlChance; vol = g.wwHowlVolume; }
+        if (std::uniform_real_distribution<float>(0.0f, 1.0f)(Rng()) >= chance) return;
+        const RE::ActorHandle h = giver->GetHandle();
+        if (auto* t = SKSE::GetTaskInterface()) t->AddTask([h, vol]() {
+            auto a = h.get();
+            if (!a) return;
+            if (Sounds::Count("Howl") > 0) { Sounds::Play("Howl", a.get(), vol); return; }   // your own (Sound\Fx\Anatomica\Howl)
+            if (!Sounds::PlayFile("Sound\\Fx\\NPC\\Werewolf\\npc_werewolf_shout_01.wav", a.get(), vol))   // else the game's werewolf howl
+                Sounds::PlayFile("Sound\\Fx\\NPC\\Werewolf\\npc_werewolf_shout_01.xwm", a.get(), vol);
+        });
+    }
+    void Finished(RE::Actor* giver) {
+        if (!giver || giver->IsPlayerRef() || !Lord(giver)) return;
+        std::lock_guard lk(g_mx);
+        g_fedDay[giver->GetFormID()] = Today();
+    }
     float RingBoost(RE::Actor* giver) {
         if (!giver || !Were(giver)) return 1.0f;
         std::lock_guard lk(g_mx);
@@ -220,11 +382,52 @@ namespace Colossal {
         }
         if (Tr::TreeNode("Werewolves (transformed men)###clww")) {   // 2.6i
             ch |= Tr::Checkbox("A man turned werewolf or werebear finishes with his own huge load", &g.ww);
-            Help("The beast forms of men (vampire lords not included). Works without More Nasty Critters.");
+            Help("The beast forms of men (Vampire Lords have their own, below). Works without More Nasty Critters.");
             if (g.ww) {
+                ch |= Tr::Checkbox("Follow OStim Beast Form's Big loads", &g.wwObf);
+                Help("With OStim Beast Form installed: only while its \"Big loads\" MCM option is on (Vampire Lords have their own setting below).");
+                if (ObfBig() >= 0) Tr::TextDisabled(ObfBig() == 1 ? "OStim Beast Form: Big loads on" : "OStim Beast Form: Big loads off");
                 ch |= Edit("ww", g.wwLoad);
                 ch |= Tr::SliderFloat("Wells out round his rim", &g.wwRing, 1.0f, 4.0f, "x%.1f");
+                float mp = g.wwMoon * 100.0f;   // 2.6j
+                if (Tr::SliderFloat("Full moon", &mp, 0.0f, 200.0f, "+%.0f%%")) { g.wwMoon = mp / 100.0f; ch = true; }
+                Help("On a full-moon night a werewolf's load is this much bigger (half as much when the moon is nearly full). Skyrim's moons go "
+                     "through eight phases, a few days each - the same ones you see in the sky (and that Moonlight Tales uses).");
+                if (const float mn = MoonNow(); mn > 0.0f) Tr::TextDisabled(mn >= 1.0f ? "Tonight the moon is full." : "Tonight the moon is nearly full.");
+                ch |= Tr::Checkbox("Howls when he finishes", &g.wwHowl);
+                Help("A werewolf throws his head back and howls as he finishes. Your own sounds: put WAV files in Data\\Sound\\Fx\\Anatomica\\Howl; "
+                     "without them it is the game's werewolf howl (or the one a werewolf sound mod replaced it with).");
+                if (g.wwHowl) {
+                    float hc = g.wwHowlChance * 100.0f;
+                    if (Tr::SliderFloat("Howl chance", &hc, 0.0f, 100.0f, "%.0f%%")) { g.wwHowlChance = hc / 100.0f; ch = true; }
+                    ch |= Tr::SliderFloat("Howl volume", &g.wwHowlVolume, 0.1f, 2.0f, "x%.1f");
+                }
                 Help("How much more of it wells straight back out round the bottom's rim while a werewolf fills him (Integrations page, OStrands: Wells out round his rim).");
+            }
+            ImGuiMCP::TreePop();
+        }
+        if (Tr::TreeNode("Vampire Lords (transformed men)###clvl")) {   // 2.6j
+            ch |= Tr::Checkbox("A man turned Vampire Lord finishes with his own big load", &g.vl);
+            Help("OStim Beast Form gives Vampire Lords a normal load; this gives them one of their own. Works without More Nasty Critters.");
+            if (g.vl) {
+                ch |= Tr::Checkbox("Only while OStim Beast Form's Big loads is on##vlobf", &g.vlObf);
+                Help("Off: Vampire Lords always get it. On: only while Beast Form's \"Big loads\" MCM option is on.");
+                ch |= Edit("vl", g.vlLoad);
+                float np = g.vlNight * 100.0f, dp = g.vlDay * 100.0f;   // 2.6j
+                if (Tr::SliderFloat("At night", &np, -100.0f, 200.0f, "%+.0f%%")) { g.vlNight = np / 100.0f; ch = true; }
+                if (Tr::SliderFloat("By day", &dp, -100.0f, 200.0f, "%+.0f%%")) { g.vlDay = dp / 100.0f; ch = true; }
+                Help("A Vampire Lord is strongest at night (8 pm to 5 am): his load changes by this much. It stacks with his hunger.");
+                float hp = g.vlHunger * 100.0f;
+                if (Tr::SliderFloat("Hunger", &hp, -100.0f, 300.0f, "%.0f%%")) { g.vlHunger = hp / 100.0f; ch = true; }
+                Help("How much his hunger for blood changes his load. 100% = starving, he gives twice it; 0% = hunger does nothing; "
+                     "below 0% a hungry Vampire Lord gives less instead. Your own hunger is your vampire stage (feeding resets it); "
+                     "another Vampire Lord's grows over two game days since he last finished.");
+                if (auto* pl = RE::PlayerCharacter::GetSingleton(); pl && Lord(pl)) {
+                    lk.unlock();
+                    const float h = Hunger(pl);
+                    lk.lock();
+                    Tr::TextDisabled("%s", Lang::Fmt("Your hunger now: {:.0f}%", h * 100.0f).c_str());
+                }
             }
             ImGuiMCP::TreePop();
         }
@@ -285,7 +488,11 @@ namespace Colossal {
         if (save) {
             ini.SetBoolValue(S, "On", g.on); ini.SetBoolValue(S, "BySize", g.bySize); ini.SetDoubleValue(S, "Chance", g.chance);
             ini.SetValue(S, "Men", g.men.Save().c_str()); ini.SetBoolValue(S, "Creatures", g.creatures);
-            ini.SetBoolValue(S, "Werewolves", g.ww); ini.SetValue(S, "Werewolf", g.wwLoad.Save().c_str()); ini.SetDoubleValue(S, "WerewolfRing", g.wwRing);
+            ini.SetBoolValue(S, "Werewolves", g.ww); ini.SetBoolValue(S, "WerewolvesFollowBeastForm", g.wwObf); ini.SetValue(S, "Werewolf", g.wwLoad.Save().c_str()); ini.SetDoubleValue(S, "WerewolfRing", g.wwRing);
+            ini.SetBoolValue(S, "VampireLords", g.vl); ini.SetBoolValue(S, "VampireLordsFollowBeastForm", g.vlObf); ini.SetValue(S, "VampireLord", g.vlLoad.Save().c_str()); ini.SetDoubleValue(S, "VampireLordHunger", g.vlHunger);
+            ini.SetDoubleValue(S, "VampireLordNight", g.vlNight); ini.SetDoubleValue(S, "VampireLordDay", g.vlDay);
+            ini.SetDoubleValue(S, "WerewolfFullMoon", g.wwMoon); ini.SetBoolValue(S, "WerewolfHowl", g.wwHowl);
+            ini.SetDoubleValue(S, "WerewolfHowlChance", g.wwHowlChance); ini.SetDoubleValue(S, "WerewolfHowlVolume", g.wwHowlVolume);
             ini.Delete("ColossalLoadTypes", nullptr);
             for (auto& [k, l] : g.types) ini.SetValue("ColossalLoadTypes", k.c_str(), l.Save().c_str());
             ini.Delete("ColossalLoadGroups", nullptr);
@@ -295,8 +502,13 @@ namespace Colossal {
         g.on = ini.GetBoolValue(S, "On", g.on); g.bySize = ini.GetBoolValue(S, "BySize", g.bySize);
         g.chance = std::clamp(static_cast<float>(ini.GetDoubleValue(S, "Chance", g.chance)), 0.0f, 1.0f);
         g.men = Load::Parse(ini.GetValue(S, "Men", ""), g.men); g.creatures = ini.GetBoolValue(S, "Creatures", g.creatures);
-        g.ww = ini.GetBoolValue(S, "Werewolves", g.ww); g.wwLoad = Load::Parse(ini.GetValue(S, "Werewolf", ""), g.wwLoad);
+        g.ww = ini.GetBoolValue(S, "Werewolves", g.ww); g.wwObf = ini.GetBoolValue(S, "WerewolvesFollowBeastForm", g.wwObf); g.wwLoad = Load::Parse(ini.GetValue(S, "Werewolf", ""), g.wwLoad);
         g.wwRing = std::clamp(static_cast<float>(ini.GetDoubleValue(S, "WerewolfRing", g.wwRing)), 1.0f, 4.0f);
+        g.vl = ini.GetBoolValue(S, "VampireLords", g.vl); g.vlObf = ini.GetBoolValue(S, "VampireLordsFollowBeastForm", g.vlObf); g.vlLoad = Load::Parse(ini.GetValue(S, "VampireLord", ""), g.vlLoad);
+        g.vlHunger = std::clamp(static_cast<float>(ini.GetDoubleValue(S, "VampireLordHunger", g.vlHunger)), -1.0f, 3.0f);
+        auto rd = [&](const char* k, float& v, float lo, float hi) { v = std::clamp(static_cast<float>(ini.GetDoubleValue(S, k, v)), lo, hi); };
+        rd("VampireLordNight", g.vlNight, -1.0f, 2.0f); rd("VampireLordDay", g.vlDay, -1.0f, 2.0f); rd("WerewolfFullMoon", g.wwMoon, 0.0f, 2.0f);
+        g.wwHowl = ini.GetBoolValue(S, "WerewolfHowl", g.wwHowl); rd("WerewolfHowlChance", g.wwHowlChance, 0.0f, 1.0f); rd("WerewolfHowlVolume", g.wwHowlVolume, 0.1f, 2.0f);
         CSimpleIniA::TNamesDepend keys;
         ini.GetAllKeys("ColossalLoadTypes", keys);
         for (auto& k : keys) g.types[k.pItem] = Load::Parse(ini.GetValue("ColossalLoadTypes", k.pItem, ""), TypeLoad(k.pItem));

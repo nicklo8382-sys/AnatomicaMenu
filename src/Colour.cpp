@@ -2,6 +2,7 @@
 #include "Lang.h"
 #include "SoftButt.h"
 #include "Colour.h"
+#include "Training.h"
 #include "OStrandsLink.h"
 #include "Drip.h"
 #include "Virgin.h"
@@ -2156,6 +2157,7 @@ namespace {
                 }
                 Tr::TextUnformatted(Drip::Status(a).c_str());
                 Tr::TextUnformatted(Virgin::Status(a).c_str());
+        if (const std::string ts = Training::Status(a); !ts.empty()) Tr::TextUnformatted(ts.c_str());   // 2.6j
             }
             if (moving) {
                 ImGuiMCP::Separator();
@@ -3119,6 +3121,7 @@ namespace Colour {
         }
         Tr::TextUnformatted(Drip::Status(a).c_str());
         Tr::TextUnformatted(Virgin::Status(a).c_str());
+        if (const std::string ts = Training::Status(a); !ts.empty()) Tr::TextUnformatted(ts.c_str());   // 2.6j
 
         Tr::SeparatorText("His own colour");
         const std::string key = RefKey(a);

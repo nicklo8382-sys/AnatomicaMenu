@@ -51,6 +51,14 @@ namespace Fluid {
     struct RimRead { bool ok = false; float q[3][16]{}; bool has[3][16]{}; std::vector<RE::NiPoint3> pts; float cx[3]{}, cy[3]{}; bool hasCen[3]{}; };   // cx/cy: the middle of each ring (right / up of origin)
     RimRead RimEdge(RE::Actor* a, const RE::NiPoint3& origin, const RE::NiPoint3& axis, const RE::NiPoint3& right, const RE::NiPoint3& up,
                     const std::vector<float>& ringDepths, int n, float band, bool wantPts);   // band: how thick each ring is (world units)
+    // 2.6j: layers on his face (and sweat on his body): clear / coloured copies of his head mesh with a mask drawn from
+    // the head mesh itself (where its vertices sit round his mouth, eyes and cheeks - found from his head bones, so it
+    // fits any head), faded in and out by amount 0-1
+    enum FaceLayer { kLipWet, kLipRed, kFlush, kTears, kFaceCum, kFaceSweat, kBodySweat, kFaceLayers };
+    struct FaceFit { float scale = 1.0f, up = 0.0f, out = 0.0f; };   // the layers' size and where they sit (Mouth & Face page)
+    void FaceLook(RE::FormID id, const float amount[kFaceLayers], const float cumRgb[3], const FaceFit* fit = nullptr);   // fit: his race's own (2.6j)
+    void SetFaceFit(const FaceFit& f);
+    std::string FaceInfo(RE::FormID id);           // one line for the menu
     std::string SchlongDesc(RE::Actor* giver);
     std::string SchlongBones(RE::Actor* giver);   // testing: the bones his schlong mesh is skinned to
     std::vector<RE::NiPoint3> SchlongSample(RE::Actor* giver, int n);   // testing: n points of his schlong mesh as posed

@@ -1671,6 +1671,214 @@ namespace {
         return g_cleftTex[key] = tex;
     }
 
+    // ---- 2.6j: his face. Clear / coloured copies of his head mesh, each with a mask drawn from the head mesh itself:
+    // where each vertex sits from his mouth (his head bone and its magic node give the mouth, forward and up), in units
+    // of the head-to-magic-node distance so any head size fits. Drawn once per head and kept in the gen folder.
+    Fluid::FaceFit g_fit;
+    struct FaceSt {
+        float want[Fluid::kFaceLayers]{}; float rgb[3] = {0.96f, 0.95f, 0.90f};
+        RE::NiAVObject* root3D = nullptr;
+        RE::BSGeometry* head = nullptr; RE::BSGeometry* body = nullptr;
+        bool frameOk = false, frameTried = false; V3 m, f, u, r; float L = 8.0f;
+        std::string tex[Fluid::kFaceLayers]; bool texTried[Fluid::kFaceLayers]{};
+        Actor::Sheen sh[Fluid::kFaceLayers]; float sent[Fluid::kFaceLayers]{};
+        float fitSent = -1.0f;
+        Fluid::FaceFit fit; bool ownFit = false;   // his race's own fitting (else the default)
+    };
+    std::unordered_map<RE::FormID, FaceSt> g_face;
+
+    Xf Inv(const Xf& a) {
+        Xf o;
+        for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) o.r[i][j] = a.r[j][i];
+        o.s = a.s != 0.0f ? 1.0f / a.s : 1.0f;
+        o.t = o.Rot(a.t) * -o.s;
+        return o;
+    }
+    std::uint32_t VertsOf(RE::BSGeometry* g_) {
+        auto* si = g_ ? g_->GetGeometryRuntimeData().skinInstance.get() : nullptr;
+        auto* sp = si ? si->skinPartition.get() : nullptr;
+        if (!sp && si && si->skinData) sp = si->skinData->skinPartition.get();
+        return sp ? sp->vertexCount : 0;
+    }
+    RE::BSGeometry* HeadGeo(RE::Actor* a, RE::NiAVObject* root) {
+        if (auto* npc = a->GetActorBase())
+            if (auto* hp = npc->GetCurrentHeadPartByType(RE::BGSHeadPart::HeadPartType::kFace); hp && !hp->formEditorID.empty())
+                if (auto* o = root->GetObjectByName(hp->formEditorID); o && o->AsGeometry() && VertsOf(o->AsGeometry())) return o->AsGeometry();
+        auto* fn = root->GetObjectByName(RE::BSFixedString("BSFaceGenNiNodeSkinned"));
+        if (!fn) return nullptr;
+        RE::BSGeometry* best = nullptr; std::uint32_t most = 0;
+        RE::BSVisit::TraverseScenegraphGeometries(fn, [&](RE::BSGeometry* geo) {
+            std::string n = geo->name.c_str() ? geo->name.c_str() : "";
+            for (auto& c : n) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (n == "anatomicasheen" || n.find("hair") != std::string::npos || n.find("brow") != std::string::npos || n.find("eye") != std::string::npos ||
+                n.find("beard") != std::string::npos || n.find("mouth") != std::string::npos || n.find("teeth") != std::string::npos || n.find("tongue") != std::string::npos)
+                return RE::BSVisit::BSVisitControl::kContinue;
+            const std::uint32_t v = VertsOf(geo);
+            if (v > most) { most = v; best = geo; }
+            return RE::BSVisit::BSVisitControl::kContinue;
+        });
+        return best;
+    }
+    // his mouth, forward, up and the head's size in the head mesh's own space (the mask is drawn there)
+    bool FaceFrame(FaceSt& F, RE::NiAVObject* root) {
+        auto* si = F.head ? F.head->GetGeometryRuntimeData().skinInstance.get() : nullptr;
+        if (!si || !si->skinData || !si->bones) return false;
+        auto* hb = root->GetObjectByName(RE::BSFixedString("NPC Head [Head]"));
+        auto* mg = root->GetObjectByName(RE::BSFixedString("NPC Head MagicNode [Hmag]"));
+        if (!hb || !mg) return false;
+        const std::uint32_t nb = si->skinData->GetBoneCount();
+        int b = -1;
+        for (std::uint32_t i = 0; i < nb; ++i) if (si->bones[i] && si->bones[i]->name == "NPC Head [Head]") { b = static_cast<int>(i); break; }
+        if (b < 0) for (std::uint32_t i = 0; i < nb; ++i) if (si->bones[i]) { b = static_cast<int>(i); break; }
+        if (b < 0) return false;
+        const Xf M = Mul(Xf(si->bones[b]->world), Xf(si->skinData->GetBoneDataSkinToBone(static_cast<std::uint32_t>(b))));
+        const Xf I = Inv(M);
+        const V3 h = I.Apply(V3(hb->world.translate)), g_ = I.Apply(V3(mg->world.translate));
+        F.L = std::max(Len(g_ - h), 2.0f);
+        F.f = Norm(g_ - h, {0, 1, 0});
+        F.u = Norm(I.Rot(Xf(hb->world).Axis(2)), {0, 0, 1});
+        F.r = Norm(Cross(F.f, F.u), {1, 0, 0});
+        F.u = Norm(Cross(F.r, F.f), {0, 0, 1});
+        const Fluid::FaceFit& fit = F.ownFit ? F.fit : g_fit;
+        F.m = Lerp(h, g_, 0.7f) + F.u * (fit.up * F.L) + F.f * (fit.out * F.L);
+        F.L *= fit.scale;
+        return true;
+    }
+    float Smooth(float w) { w = std::clamp(w, 0.0f, 1.0f); return w * w * (3.0f - 2.0f * w); }
+    float Blob(float s, float h, float a, float cs, float ch, float ca, float rad) {
+        const float d = std::sqrt((s - cs) * (s - cs) + (h - ch) * (h - ch) + (a - ca) * (a - ca) * 0.5f);
+        return Smooth(1.0f - d / rad);
+    }
+    // 0-1 for each layer at a point of his head mesh: s across (+ his left?), h up, a forward, in head units from his mouth
+    float FaceWeight(int layer, float s, float h, float a) {
+        const float front = Smooth((a + 0.75f) / 0.35f);   // not the back of his head
+        const float as = std::abs(s);
+        switch (layer) {
+            case Fluid::kLipWet:
+            case Fluid::kLipRed: {
+                const float e = (s / 0.40f) * (s / 0.40f) + (h / (layer == Fluid::kLipRed ? 0.17f : 0.21f)) * (h / (layer == Fluid::kLipRed ? 0.17f : 0.21f)) + (a / 0.55f) * (a / 0.55f);
+                return Smooth(1.0f - e) * front;
+            }
+            case Fluid::kFlush:
+                return std::max(Blob(as, h, a, 0.58f, 0.42f, -0.15f, 0.40f), 0.35f * Blob(as, h, a, 0.0f, 0.55f, 0.05f, 0.18f)) * front;
+            case Fluid::kTears: {
+                const float under = Blob(as, h, a, 0.38f, 0.80f, -0.05f, 0.11f);
+                float run = 0.0f;
+                if (h > -0.05f && h < 0.82f) {
+                    const float t = (0.82f - h) / 0.87f;   // 0 at the eye .. 1 at the jaw
+                    const float x0 = 0.38f + 0.06f * t + 0.015f * std::sin(h * 23.0f);
+                    const float wdt = 0.035f + 0.02f * t;
+                    run = Smooth(1.0f - std::abs(as - x0) / wdt) * (1.0f - 0.6f * t);
+                }
+                return std::max(under, run) * front;
+            }
+            case Fluid::kFaceCum: {
+                float w = 0.0f;
+                w = std::max(w, Blob(s, h, a, 0.05f, -0.35f, 0.05f, 0.27f));    // chin
+                w = std::max(w, Blob(s, h, a, 0.32f, -0.04f, 0.0f, 0.17f));     // a corner of his mouth
+                w = std::max(w, Blob(s, h, a, -0.22f, 0.12f, 0.05f, 0.14f));    // over his lip
+                w = std::max(w, Blob(s, h, a, 0.46f, 0.46f, -0.15f, 0.19f));    // a cheek
+                w = std::max(w, Blob(s, h, a, -0.08f, 0.58f, 0.1f, 0.13f));     // the nose
+                w = std::max(w, Blob(s, h, a, -0.50f, 0.30f, -0.2f, 0.12f));    // the other cheek
+                if (h < -0.25f && h > -0.95f) w = std::max(w, Smooth(1.0f - std::abs(s - 0.04f - 0.03f * std::sin(h * 9.0f)) / 0.06f) * Smooth((h + 0.95f) / 0.2f));   // a run off his chin
+                w *= 0.8f + 0.2f * std::sin(s * 31.0f + h * 17.0f);   // uneven edges
+                return std::clamp(w, 0.0f, 1.0f) * front;
+            }
+            case Fluid::kFaceSweat:
+                return (0.45f + 0.55f * Smooth((h - 0.6f) / 0.5f)) * front * Smooth((h + 0.7f) / 0.3f);
+            default: return 0.0f;
+        }
+    }
+    void DropFace(FaceSt& F, int i) {
+        auto& sh = F.sh[i];
+        if (sh.obj && sh.parent && sh.obj->parent == sh.parent.get()) sh.parent->DetachChild2(sh.obj.get());
+        sh = {};
+        F.sent[i] = 0.0f;
+    }
+    void DropFaces(FaceSt& F) { for (int i = 0; i < Fluid::kFaceLayers; ++i) DropFace(F, i); }
+
+    void TickFaces() {
+        for (auto it = g_face.begin(); it != g_face.end();) {
+            FaceSt& F = it->second;
+            bool wantAny = false, has = false;
+            for (int i = 0; i < Fluid::kFaceLayers; ++i) { wantAny |= F.want[i] > 0.01f; has |= static_cast<bool>(F.sh[i].obj); }
+            auto* a = RE::TESForm::LookupByID<RE::Actor>(it->first);
+            auto* root = a && a->Is3DLoaded() ? a->Get3D(false) : nullptr;
+            if (!root || F.root3D != root) { DropFaces(F); F.root3D = root; F.head = nullptr; F.body = nullptr; F.frameOk = F.frameTried = false; }
+            if (!wantAny) { if (has) DropFaces(F); it = g_face.erase(it); continue; }
+            if (!root) { ++it; continue; }
+            const Fluid::FaceFit& fit = F.ownFit ? F.fit : g_fit;
+            if (F.fitSent != fit.scale * 1000.0f + fit.up * 37.0f + fit.out * 11.0f) {   // refitted in the menu: draw again
+                F.fitSent = fit.scale * 1000.0f + fit.up * 37.0f + fit.out * 11.0f;
+                DropFaces(F); F.frameOk = F.frameTried = false;
+                for (int i = 0; i < Fluid::kFaceLayers; ++i) { F.tex[i].clear(); F.texTried[i] = false; }
+            }
+            auto* hg = HeadGeo(a, root);
+            if (hg != F.head) {
+                for (int i = 0; i < Fluid::kBodySweat; ++i) { DropFace(F, i); F.tex[i].clear(); F.texTried[i] = false; }
+                F.head = hg; F.frameOk = F.frameTried = false;
+            }
+            if (F.head && !F.frameTried) {
+                F.frameTried = true;
+                F.frameOk = FaceFrame(F, root);
+                logger::info("Anatomica face: {:08X} head {} ({} vertices) {}", it->first, F.head->name.c_str() ? F.head->name.c_str() : "?", VertsOf(F.head),
+                             F.frameOk ? std::format("- mouth found, head size {:.1f}", F.L) : std::string("- no head bones, no face layers"));
+            }
+            const bool dressed = !Extras::Exposed(a);
+            auto* bg = dressed ? nullptr : BodyGeo(a, root);
+            if (bg != F.body) { DropFace(F, Fluid::kBodySweat); F.body = bg; }
+            for (int i = 0; i < Fluid::kFaceLayers; ++i) {
+                const bool bodyL = i == Fluid::kBodySweat;
+                RE::BSGeometry* src = bodyL ? F.body : F.head;
+                const float w = F.want[i];
+                if (!src || w <= 0.01f || (!bodyL && !F.frameOk)) { if (F.sh[i].obj) DropFace(F, i); continue; }
+                // the colours: clear for wet / tears / sweat, red for lips and flush, the cum's own
+                std::uint8_t bgr[3] = {240, 236, 236};
+                float gloss = -1.0f, spec = -1.0f, top = 0.8f;
+                if (i == Fluid::kLipRed) { bgr[0] = 70; bgr[1] = 55; bgr[2] = 175; gloss = 6.0f; spec = 0.08f; top = 0.55f; }
+                if (i == Fluid::kFlush) { bgr[0] = 110; bgr[1] = 95; bgr[2] = 215; gloss = 6.0f; spec = 0.05f; top = 0.45f; }
+                if (i == Fluid::kTears) top = 0.9f;
+                if (i == Fluid::kFaceSweat) top = 0.55f;
+                if (i == Fluid::kBodySweat) top = 0.45f;
+                if (i == Fluid::kFaceCum) { for (int c = 0; c < 3; ++c) bgr[2 - c] = static_cast<std::uint8_t>(std::clamp(F.rgb[c], 0.0f, 1.0f) * 255.0f); top = 0.92f; }
+                if (!bodyL && F.tex[i].empty()) {
+                    if (F.texTried[i]) continue;
+                    F.texTried[i] = true;
+                    const FaceSt fr = F;   // copy of the frame for the weight function
+                    const V3 m = fr.m, ff = fr.f, uu = fr.u, rr = fr.r; const float L = fr.L; const int layer = i;
+                    F.tex[i] = MakeMask(F.head, std::format("ad_face{}_{}_{}_{}_{}", i, std::lround(m.x * 2), std::lround(m.y * 2), std::lround(m.z * 2), std::lround(L * 10)),
+                                        [=](const V3& p, const float*, const float*) {
+                                            const V3 d = (p - m) / L;
+                                            return FaceWeight(layer, Dot(d, rr), Dot(d, uu), Dot(d, ff));
+                                        }, nullptr, bgr);
+                    if (F.tex[i].empty()) continue;
+                }
+                auto& sh = F.sh[i];
+                if (!sh.obj || !sh.parent || sh.obj->parent != src->parent) {
+                    DropFace(F, i);
+                    if (auto* o = MakeSheen(src, bodyL ? kSheenTex : F.tex[i].c_str(), gloss, spec)) sh = {RE::NiPointer<RE::NiAVObject>(o), src, RE::NiPointer<RE::NiNode>(o->parent)};
+                    if (!sh.obj) { if (bodyL) F.body = nullptr; else F.tex[i].clear(); continue; }
+                }
+                auto* geo = sh.obj->AsGeometry();
+                const float al = std::clamp(w, 0.0f, 1.0f) * top;
+                if (std::abs(al - F.sent[i]) > 0.01f) { SetAlpha(geo, al); F.sent[i] = al; }
+                // his face moves (jaw, expressions): the copy takes the head's live shape every frame
+                auto* sdt = bodyL ? nullptr : netimmerse_cast<RE::BSDynamicTriShape*>(src);
+                auto* cdt = sdt && geo ? netimmerse_cast<RE::BSDynamicTriShape*>(geo) : nullptr;
+                if (sdt && cdt) {
+                    auto& sd = sdt->GetDynamicTrishapeRuntimeData();
+                    auto& cd = cdt->GetDynamicTrishapeRuntimeData();
+                    if (sd.dynamicData && cd.dynamicData && sd.dynamicData != cd.dynamicData && sd.dataSize == cd.dataSize) {
+                        sd.lock.Lock();
+                        std::memcpy(cd.dynamicData, sd.dynamicData, sd.dataSize);
+                        sd.lock.Unlock();
+                    }
+                }
+            }
+            ++it;
+        }
+    }
+
     void UpdateCleft(Actor& A, RE::Actor* a, float wet) {
         const float cw = std::clamp(wet, 0.0f, 1.0f);   // strength and fading: After sex page (glossy skin)
         const float q = std::round(cw * 20.0f) / 20.0f;
@@ -2014,7 +2222,9 @@ namespace {
         if (g_forgetMade.exchange(false)) {   // files deleted: check / make them again
             g_texCache.clear(); g_cleftTex.clear(); g_wetTex.clear();
             for (auto& [id, A] : g_act) { A.cleftTex.clear(); A.cleftC0ok = false; }
+            for (auto& [id, F] : g_face) { DropFaces(F); for (int i = 0; i < Fluid::kFaceLayers; ++i) { F.tex[i].clear(); F.texTried[i] = false; } }
         }
+        if (g_tplRope) TickFaces();   // 2.6j
         if (polled) {
             for (auto& [id, A] : g_act) A.wet = 0.0f, A.swet = 0.0f, A.gloss = 0.0f, A.lube = 0.0f;
             for (auto& w : wet) {
@@ -2162,7 +2372,7 @@ namespace {
             std::this_thread::sleep_for(std::chrono::milliseconds(6));
             {
                 std::lock_guard lk(g_mx);
-                if (g_act.empty()) {
+                if (g_act.empty() && g_face.empty()) {
                     // nobody wet or cummed on: still look every half second for a man who just got wet
                     g_lastTick = 0.0;
                     static auto idle = std::chrono::steady_clock::time_point{};
@@ -2193,9 +2403,40 @@ namespace Fluid {
     void Reset() {
         std::lock_guard lk(g_mx);
         for (auto& [id, A] : g_act) DropVisuals(A);
+        for (auto& [id, F] : g_face) DropFaces(F);
+        g_face.clear();
         g_texCache.clear();
         g_act.clear();
         g_land.clear();
+    }
+
+    void FaceLook(RE::FormID id, const float amount[kFaceLayers], const float cumRgb[3], const FaceFit* fit) {
+        std::lock_guard lk(g_mx);
+        auto it = g_face.find(id);
+        bool any = false;
+        for (int i = 0; i < kFaceLayers; ++i) any |= amount[i] > 0.01f;
+        if (it == g_face.end() && !any) return;
+        FaceSt& F = g_face[id];
+        for (int i = 0; i < kFaceLayers; ++i) F.want[i] = amount[i];
+        F.ownFit = fit != nullptr;
+        if (fit) F.fit = *fit;
+        if (cumRgb) {
+            const bool newCol = std::abs(cumRgb[0] - F.rgb[0]) + std::abs(cumRgb[1] - F.rgb[1]) + std::abs(cumRgb[2] - F.rgb[2]) > 0.06f;
+            for (int c = 0; c < 3; ++c) F.rgb[c] = cumRgb[c];
+            if (newCol) { DropFace(F, kFaceCum); F.tex[kFaceCum].clear(); F.texTried[kFaceCum] = false; }
+        }
+    }
+    void SetFaceFit(const FaceFit& f) { std::lock_guard lk(g_mx); g_fit = f; }
+    std::string FaceInfo(RE::FormID id) {
+        std::lock_guard lk(g_mx);
+        auto it = g_face.find(id);
+        if (it == g_face.end()) return {};
+        const FaceSt& F = it->second;
+        if (!F.head) return "no head found";
+        if (!F.frameOk) return "head found, no head bones";
+        int on = 0;
+        for (int i = 0; i < kFaceLayers; ++i) on += F.sh[i].obj ? 1 : 0;
+        return std::format("head {} ({} vertices), size {:.1f}, {} layers showing", F.head->name.c_str() ? F.head->name.c_str() : "?", VertsOf(F.head), F.L, on);
     }
 
     void Hang(RE::FormID id, float amount, float phase, const float rgb[3]) {

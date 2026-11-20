@@ -18,6 +18,11 @@ namespace Colossal {
     bool For(RE::Actor* giver, RE::Actor* receiver, float& weight, Load& load);
     std::string Describe(RE::Actor* giver);
     bool IsWerewolf(RE::Actor* a);              // 2.6i: a werewolf / werebear beast form
+    int BeastForm(RE::Actor* a);                // 2.6j: 1 werewolf, 2 werebear, 3 Vampire Lord, 0 none (OStim Beast Form)
+    float Hunger(RE::Actor* a);                 // 2.6j: a Vampire Lord's hunger, 0 fed .. 1 starving (the player's vampire stage; others: time since he last finished)
+    void Finished(RE::Actor* giver);
+    void Climax(RE::Actor* giver);              // 2.6j: a new finish starts (a werewolf may howl)
+    float Moon();                               // 2.6j: tonight's moon, 1 full, 0.5 nearly full, 0 otherwise (or by day)            // 2.6j: his load went into someone (an NPC Vampire Lord's hunger starts over)
     float RingBoost(RE::Actor* giver);          // 2.6i: x what wells out round the rim while he fills someone (werewolves)     // one line for the menu ("" = nothing to say)
     bool RenderSection();                       // Integrations page
     void Ini(CSimpleIniA& ini, bool save);      // [ColossalLoad], [ColossalLoadTypes], [ColossalLoadGroups]

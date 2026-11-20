@@ -10,6 +10,7 @@ namespace Talk {
     void Install();                               // SKSE load: the worker thread
     void Reset();                                 // a save was loaded: forget what was written (cleared as men come by)
     bool Installed();                             // DDF is loaded
+    void OnDataLoaded();                          // 2.6j: SKSE has loaded every plugin - 3 more looks for DDF, then stop
     bool RenderSection();                         // Integrations page
     void Ini(CSimpleIniA& ini, bool save);        // [DDF]
 }

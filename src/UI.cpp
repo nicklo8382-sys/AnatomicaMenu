@@ -7,6 +7,7 @@
 #include "Colour.h"
 #include "Drip.h"
 #include "Virgin.h"
+#include "Face.h"
 #include "Bridge.h"
 #include "Extras.h"
 
@@ -202,6 +203,7 @@ void UI::Register() {
     SKSEMenuFramework::AddSectionItem(PageName("Skin rules"), Colour::RenderRules);
     SKSEMenuFramework::AddSectionItem(PageName("After sex"), Colour::RenderAfter);
     SKSEMenuFramework::AddSectionItem(PageName("Virginity"), Virgin::RenderPage);
+    SKSEMenuFramework::AddSectionItem(PageName("Mouth & Face"), Face::RenderPage);   // 2.6j
     SKSEMenuFramework::AddSectionItem(PageName("Integrations"), Bridge::RenderPage);
     if (Extras::On()) SKSEMenuFramework::AddSectionItem(PageName("Extras"), Extras::RenderPage);   // only with the separate Anatomica Extras mod
     if (kCum) SKSEMenuFramework::AddSectionItem(PageName("Cum & drips"), Drip::RenderPage);   // off for now (Features.h)

@@ -1,4 +1,5 @@
 #include "OStrandsLink.h"
+#include "Training.h"
 #include "Lang.h"
 #include "Fluid.h"
 #include "Engine.h"
@@ -74,6 +75,12 @@ namespace {
         // 2.6i: cum on his skin (a RaceMenu cum overlay other mods can see)
         bool overlay = true;
         float overlayHours = 2.0f;      // game hours it stays after he is empty
+        // 2.6j: holding and overflow
+        bool gravity = true;            // how fast it runs out follows how he lies (bottom up holds it, standing / squatting drains)
+        bool squeeze = true;            // while he is full, thrusts squeeze some out round the shaft; a new man going in pushes more out
+        float squeezeShare = 0.04f;     // of what he holds, each deep thrust
+        bool pressure = true;           // lying on his full belly pushes spurts out
+        bool shift = true;              // 2.6j: changing into / out of a beast form squeezes some out (OStim Beast Form)
     } g;
 
     struct State {
@@ -108,8 +115,14 @@ namespace {
         float residueUntil = 0.0f;      // game hours
         double lateCheck = 0.0;
         float emptyAt = -1.0f;          // game hours he was emptied (overlay fades after)
-        int ovlSent = 0; float ovlAlphaSent = -1.0f; int ovlColSent = -1;
+        int ovlSent = 0; float ovlAlphaSent = -1.0f; int ovlColSent = -1; double ovlAt = 0.0;
         bool washed = false;            // washed since he was last filled: nothing hidden, no cum on his skin after
+        float lastDepth = -100.0f;      // 2.6j: how deep the last tick (thrusts)
+        float maxDepth = 0.0f; bool outStroke = false;
+        bool deepIn = false;
+        RE::FormID lastTaker = 0;       // 2.6j: the man in him last time (a new one pushes it out)
+        double pressAt = 0.0;
+        int beast = -1;                 // 2.6j: his beast form last look (-1 = not looked yet)
     };
     float GameHours() { auto* c = RE::Calendar::GetSingleton(); return c ? c->GetHoursPassed() : 0.0f; }
     bool Low(RE::Actor* a) {   // crouching, sitting or kneeling
@@ -258,12 +271,60 @@ namespace {
             s.plugWorn = worn;
         }
         if (s.plugWorn) { s.gushLeft = s.squirtLeft = s.ringLeft = 0.0f; return; }
+        // 2.6j gravity: bottom up it stays in, standing it runs, squatting (opening pointing down) it pours
+        const float grav = g.gravity ? 0.2f + 1.8f * std::pow(std::clamp(0.5f - 0.5f * out.z, 0.0f, 1.0f), 1.5f) : 1.0f;
+        // 2.6j: while he is full and being taken, each deep thrust squeezes a little out round the shaft, and a new man
+        // going in pushes out more
+        if (g.squeeze && s.vol > 0.2f) {
+            const Engine::During dn = Engine::DuringOf(a->GetFormID());
+            const bool in = dn.depth > 2.0f && now - s.lastWorked < 1.0;
+            if (in) {
+                const RE::FormID taker = s.giver ? s.giver : Engine::BulgeOf(a->GetFormID()).partner;
+                if (!s.deepIn && taker && s.lastTaker && taker != s.lastTaker) {   // someone else now: pushed out
+                    s.ringLeft += s.vol * 0.25f;
+                    if (s.ringLeft <= s.vol * 0.25f + 0.001f) s.ringStream = g_nextStream, g_nextStream += 8;
+                }
+                if (taker) s.lastTaker = taker;
+                // a thrust = back out past 60% of his deepest lately, then in past 85% again
+                s.maxDepth = std::max(dn.depth, s.maxDepth - dt * 0.5f);
+                if (dn.depth < s.maxDepth * 0.6f) s.outStroke = true;
+                const bool deepNow = s.outStroke && dn.depth > s.maxDepth * 0.85f;
+                if (deepNow) s.outStroke = false;
+                if (deepNow && s.ringLeft <= 0.0f) {   // a thrust: a little wells out round the shaft
+                    s.ringStream = g_nextStream, g_nextStream += 8;
+                    s.ringLeft += s.vol * g.squeezeShare * std::min(s.vol / 2.0f, 2.0f);
+                }
+            }
+            s.deepIn = in;
+            s.lastDepth = dn.depth;
+        }
+        // 2.6j: the change into / out of a beast form squeezes some out of him
+        {
+            const int bf = Colossal::BeastForm(a);
+            if (s.beast >= 0 && bf != s.beast && g.shift && s.vol > 0.3f && !plugged) {
+                s.gushLeft += s.vol * 0.3f;
+                s.stream = g_nextStream++;
+                logger::info("Anatomica: {} changed form with {:.2f} loads in him - a gush", a->GetName(), s.vol);
+            }
+            s.beast = bf;
+        }
+        // 2.6j: lying on his full belly - spurts pushed out
+        if (g.pressure && s.vol > 1.0f && !plugged && now - s.pressAt > 6.0) {
+            auto* pelvis = a->Get3D(false) ? a->Get3D(false)->GetObjectByName(RE::BSFixedString("NPC Pelvis [Pelv]")) : nullptr;
+            if (pelvis && pelvis->world.translate.z - a->GetPosition().z < 22.0f && out.z > 0.3f) {
+                s.pressAt = now + Rand(0.0f, 6.0f);
+                s.squirtLeft += s.vol * 0.08f;
+                s.squirtSpeed = Rand(10.0f, 18.0f);
+                s.squirtStream = g_nextStream++;
+            }
+        }
         // 2.6i: a little stays hidden in him once he seems empty; crouching / sitting can squirt it out later
         {
             const float gh = GameHours();
             s.peak = std::max(s.peak, s.vol);
             const bool flowing = s.gushLeft > 0.0f || s.squirtLeft > 0.0f || s.floodLeft > 0.0f || s.ringLeft > 0.0f;
             if (s.vol <= 0.03f && !flowing && s.peak >= 0.3f) {
+                Training::Emptied(a->GetFormID());   // 2.6j: the faster belly growth starts over
                 if (g.late && !s.washed) { s.residue = s.peak * g.lateShare; s.residueUntil = gh + g.lateHours; }
                 s.emptyAt = s.washed ? -100.0f : gh;
                 s.peak = 0.0f;
@@ -369,7 +430,7 @@ namespace {
         }
         if (s.vol <= 0.001f) return;
         if (g.walk && !plugged && speed > 30.0f) {   // 2.6e: it drips out of him as he walks (more running), down his thighs
-            s.walkAcc += g.walkRate / 60.0f * (speed > 250.0f ? 2.0f : 1.0f) * std::min(s.vol, 3.0f) * per * dt;
+            s.walkAcc += g.walkRate / 60.0f * (speed > 250.0f ? 2.0f : 1.0f) * std::min(s.vol, 3.0f) * per * dt * grav;
             const int n = static_cast<int>(s.walkAcc);
             if (n > 0) {
                 s.walkAcc -= static_cast<float>(n);
@@ -393,7 +454,8 @@ namespace {
         }
         // open: it oozes out, faster the wider he gapes (2.6e: not at all while he is closed, if he holds it in)
         if (g.holdIn && gape < 0.15f) return;
-        const float rate = 1.0f / std::max(g.leakMinutes * 60.0f, 10.0f) * (0.5f + 2.0f * gape) * (0.4f + 0.6f * std::min(s.vol, 2.0f));
+        const float rate = 1.0f / std::max(g.leakMinutes * 60.0f, 10.0f) * (0.5f + 2.0f * gape) * (0.4f + 0.6f * std::min(s.vol, 2.0f)) * grav *
+                           Training::ColdHold(a->GetFormID());   // 2.6j: a Vampire Lord's cold seed stays in him longer
         s.acc += rate * per * dt;
         const int n = static_cast<int>(s.acc);
         if (n <= 0) return;
@@ -450,10 +512,11 @@ namespace {
                 }
                 const int col = (static_cast<int>(std::clamp(s.rgb[0], 0.0f, 1.0f) * 255.0f) << 16) |
                                 (static_cast<int>(std::clamp(s.rgb[1], 0.0f, 1.0f) * 255.0f) << 8) | static_cast<int>(std::clamp(s.rgb[2], 0.0f, 1.0f) * 255.0f);
-                if (level != s.ovlSent || std::abs(alpha - s.ovlAlphaSent) > 0.04f || col != s.ovlColSent) {
+                // (2.6j: and again every few seconds while it shows - a rebuilt body loses a paint put straight on the 3D)
+                if (level != s.ovlSent || std::abs(alpha - s.ovlAlphaSent) > 0.04f || col != s.ovlColSent || (level > 0 && now - s.ovlAt > 5.0)) {
                     if (a->Is3DLoaded()) {
                         ovls.push_back({a, level, col, alpha});
-                        s.ovlSent = level; s.ovlAlphaSent = alpha; s.ovlColSent = col;
+                        s.ovlSent = level; s.ovlAlphaSent = alpha; s.ovlColSent = col; s.ovlAt = now;
                     }
                 }
             } else if (a && s.ovlSent) {
@@ -503,6 +566,7 @@ namespace {
         auto& s = g_st[recv->GetFormID()];
         const double now = Now();
         // 2.6f: who is filling him - one climax = loads arriving with less than 3 s between them
+        if (giver && (s.giver != giver->GetFormID() || now - s.climaxLast > 3.0)) Colossal::Climax(giver);   // 2.6j: a new finish (a werewolf howls)
         if (s.giver && (s.giver != (giver ? giver->GetFormID() : 0) || now - s.climaxLast > 3.0)) {
             g_filled.push_back({recv->GetFormID(), s.giver, s.climax, false});
             s.climax = 0.0f;
@@ -544,6 +608,14 @@ namespace {
         }
         s.vol += kept;
         s.lastIn = now;
+        if (kept > 0.0f) {   // 2.6j: inflation
+            float cw = 0.0f; Colossal::Load cl;
+            Training::Stuffed(recv->GetFormID(), kept, giver && Colossal::For(giver, recv, cw, cl) && cw > 0.0f);
+        }
+        if (giver) {   // 2.6j: a Vampire Lord's - the thrall count, his cold seed; his hunger is fed
+            Training::Bred(recv->GetFormID(), giver);
+            Colossal::Finished(giver);
+        }
         if (loads > kept) {   // full: the rest comes straight back out - 2.6g: squirting out round the shaft while he is still being filled
             if (s.lastWorked > 0.0 && now - s.lastWorked < 1.5) {
                 if (s.ringLeft <= 0.0f) s.ringStream = g_nextStream, g_nextStream += 8;
@@ -634,6 +706,19 @@ namespace OStrandsLink {
         if (!last.empty()) Tr::TextDisabled("%s", last.c_str());
     }
 
+    // 2.6j: precum from OStrands while he is taken - a little more in him, and it wets him (lube)
+    void PrecumIn(RE::Actor* recv, RE::Actor* giver, float loads) {
+        if (!recv || loads <= 0.0f || !Male(recv)) return;
+        (void)giver;
+        {
+            std::lock_guard lk(g_mx);
+            if (!g.on) return;
+            auto& s = g_st[recv->GetFormID()];
+            s.vol = std::min(s.vol + loads, g.maxLoads * 1.5f);
+            s.washed = false;
+        }
+        Colour::AddWet(recv, 0.15f);   // (outside our lock: Colour has its own)
+    }
     void Bathed(RE::FormID id) {
         std::lock_guard lk(g_mx);
         if (!g.on || !g.bath) return;
@@ -674,6 +759,14 @@ namespace OStrandsLink {
         h.most = g.maxLoads;
         return h;
     }
+    int GiverCount(RE::FormID id) {
+        std::lock_guard lk(g_mx);
+        auto it = g_st.find(id);
+        if (it == g_st.end()) return 0;
+        int n = 0;
+        for (auto& p : it->second.pools) if (p.vol > 0.05f) ++n;
+        return n;
+    }
     std::vector<Filled> TakeFilled() {
         std::lock_guard lk(g_mx);
         std::vector<Filled> out;
@@ -690,9 +783,9 @@ namespace OStrandsLink {
         std::lock_guard lk(g_mx);
         if (!g.on || !g.belly) return 0.0f;
         auto it = g_st.find(id);
-        if (it == g_st.end() || it->second.vol <= 0.0f) return 0.0f;
-        const float f = std::clamp(it->second.vol / std::max(g.bellyFull, 0.5f), 0.0f, 1.0f);
-        return g.bellyMax * f * (2.0f - f);   // rounds out fast at first, then more slowly
+        if (it == g_st.end() || it->second.vol <= 0.0f) return g.bellyMax * Training::Lasting(id);   // 2.6j: a lasting belly stays when he is empty
+        const float f = std::clamp(it->second.vol * Training::Faster(id) / std::max(g.bellyFull, 0.5f), 0.0f, 1.0f);   // 2.6j: faster growth
+        return g.bellyMax * (f * (2.0f - f) + Training::Lasting(id));   // rounds out fast at first, then more slowly (+ 2.6j lasting)
     }
 
     std::string Status(RE::Actor* a) {
@@ -771,6 +864,7 @@ namespace OStrandsLink {
                 float bm = g.bellyMax * 100.0f;
                 if (Tr::SliderFloat("Belly when full", &bm, 10.0f, 200.0f, "%.0f%%")) { g.bellyMax = bm / 100.0f; ch = true; }
                 ch |= Tr::SliderFloat("Full at", &g.bellyFull, 1.0f, 10.0f, "%.1f loads");
+                Training::RenderInflation();   // 2.6j
                 ImGuiMCP::Unindent();
             }
             ch |= Tr::SliderFloat("Most he holds", &g.maxLoads, 1.0f, 10.0f, "%.1f loads");
@@ -819,6 +913,19 @@ namespace OStrandsLink {
             Help("A RaceMenu body overlay round his anus while he holds cum, dripping when full or running out, fading after he is empty "
                  "(washing takes it off). Other mods that look for cum overlays (DDF, cum-overlay mods) see it. Uses one free body overlay slot.");
             if (g.overlay) ch |= Tr::SliderFloat("Stays after he is empty", &g.overlayHours, 0.1f, 48.0f, "%.1f game hours");
+            ch |= Tr::Checkbox("It runs out by how he lies", &g.gravity);   // 2.6j
+            Help("Bottom up it stays in him, standing it runs out, squatting it pours.");
+            ch |= Tr::Checkbox("Thrusts squeeze it out", &g.squeeze);
+            Help("While he is full and being taken, each deep thrust squeezes a little out round the shaft, and a new man going in pushes out more.");
+            if (g.squeeze) {
+                ImGuiMCP::SameLine();
+                ImGuiMCP::SetNextItemWidth(140.0f);
+                float sq = g.squeezeShare * 100.0f;
+                if (Tr::SliderFloat("##sq", &sq, 0.0f, 20.0f, "%.0f%% a thrust")) { g.squeezeShare = sq / 100.0f; ch = true; }
+            }
+            ch |= Tr::Checkbox("Lying on his full belly pushes it out", &g.pressure);
+            ch |= Tr::Checkbox("Changing form squeezes it out", &g.shift);
+            Help("OStim Beast Form: turning into a werewolf, werebear or Vampire Lord (or back) while he holds cum pushes a gush out of him.");
             ch |= Tr::Checkbox("Washing lets it all out", &g.bath);
             Help("Bathing in Skyrim: when he washes, it all slowly runs out of him.");
             ch |= Tr::SliderFloat("Stuffed full at", &g.stuffedAt, 1.0f, 10.0f, "%.1f loads");
@@ -872,6 +979,7 @@ namespace OStrandsLink {
         B("Late", g.late); F("LateShare", g.lateShare, 0.0f, 0.8f); F("LateHours", g.lateHours, 0.5f, 48.0f); F("LateChance", g.lateChance, 0.0f, 1.0f);
         B("InnerStrings", g.innerStrings); F("InnerChance", g.innerChance, 0.0f, 1.0f);
         B("Overlay", g.overlay); F("OverlayHours", g.overlayHours, 0.1f, 48.0f);
+        B("Gravity", g.gravity); B("Squeeze", g.squeeze); F("SqueezeShare", g.squeezeShare, 0.0f, 0.2f); B("Pressure", g.pressure); B("ShiftGush", g.shift);
         B("Ring", g.ring); B("RingFullOnly", g.ringFullOnly); F("RingDepth", g.ringDepth, 2.0f, 30.0f); F("RingShare", g.ringShare, 0.05f, 0.8f);
         F("RingRadius", g.ringRadius, 0.8f, 4.0f);
         B("Stand", g.stand); F("StandChance", g.standChance, 0.0f, 1.0f); F("StandDrain", g.standDrain, 0.05f, 1.0f); F("StandFree", g.standFree, 0.0f, 1.0f);
@@ -914,6 +1022,11 @@ extern "C" {
     }
 
     // OStrands put this much in him (loads: 1 = one full load; rgb 0-1 or null)
+    // 2.6j: OStrands 0.8.0.8+ - precum into his anus (he holds it, it wets him)
+    __declspec(dllexport) void Anatomica_Precum(RE::Actor* recv, RE::Actor* giver, float loads) {
+        OStrandsLink::PrecumIn(recv, giver, loads);
+    }
+
     __declspec(dllexport) void Anatomica_SemenIn(RE::Actor* recv, RE::Actor* giver, float loads, const float* rgb) {
         SemenIn(recv, giver, loads, rgb);
     }

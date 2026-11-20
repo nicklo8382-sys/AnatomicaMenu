@@ -1,4 +1,5 @@
 #include "Virgin.h"
+#include "Training.h"
 #include "Lang.h"
 #include "Colour.h"
 #include "Bridge.h"
@@ -516,6 +517,7 @@ namespace Virgin {
             }
         }
         Flush(out);
+        Training::Apply(id, o.open, o.build, o.close, o.tender);   // 2.6j: what training has done to him
         return o;
     }
 
@@ -710,6 +712,7 @@ namespace Virgin {
             Tr::TextDisabled("Redness, bruising and swelling: After sex page (healing clears them).");
         }
         }
+        Training::RenderTraining();   // 2.6j
         if (ch) Colour::SaveNow();
     }
 

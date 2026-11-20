@@ -31,6 +31,7 @@ namespace Size {
 
     struct K { float open = 1.0f, build = 1.0f, loose = 1.0f, tender = 1.0f; };
     K For(RE::Actor* partner);               // size x shape; neutral when off or not known
+    float BeastBulge(RE::Actor* partner);    // 2.6j: x the belly bulge for a werewolf / Vampire Lord (1 = anyone else)
     bool HasTNG();
 
     bool RenderSection();                    // its part of the Integrations page (true = a setting changed)

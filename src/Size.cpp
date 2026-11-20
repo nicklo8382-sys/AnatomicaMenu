@@ -3,6 +3,7 @@
 #include "SKSEMenuFramework.h"
 #include "Mnc.h"
 #include "During.h"
+#include "Colossal.h"
 
 #include <algorithm>
 #include <chrono>
@@ -28,6 +29,11 @@ namespace {
         int creatureCat = Size::kCreature;   // 3 = L, 4 = XL, 5 = bigger than any man
         bool shape = true;         // the shape of his schlong matters too (cut / uncut, knotted, flared, ridged...)
         float shapeStrength = 1.0f;
+        // 2.6j: OStim Beast Form - transformed men, each form on its own (not More Nasty Critters creatures)
+        int wwCat = Size::kCreature;   // a werewolf / werebear counts as: 3 L, 4 XL, 5 bigger than any man
+        int vlCat = 4;                 // a Vampire Lord
+        float wwBulge = 1.0f;          // x his belly bulge
+        float vlBulge = 1.0f;
     } g;
     //                               XS     S     M     L     XL   creature
     constexpr float kOpen[6]   = {0.75f, 0.88f, 1.0f, 1.15f, 1.30f, 1.50f};
@@ -368,6 +374,12 @@ namespace Size {
         if (save) ini.SetLongValue(S, "CreatureSize", g.creatureCat);
         else g.creatureCat = std::clamp(static_cast<int>(ini.GetLongValue(S, "CreatureSize", g.creatureCat)), 3, 5);
         B("Shape", g.shape); F("ShapeStrength", g.shapeStrength, 0.0f, 2.0f);
+        if (save) { ini.SetLongValue(S, "WerewolfSize", g.wwCat); ini.SetLongValue(S, "VampireLordSize", g.vlCat); }
+        else {
+            g.wwCat = std::clamp(static_cast<int>(ini.GetLongValue(S, "WerewolfSize", g.wwCat)), 2, 5);
+            g.vlCat = std::clamp(static_cast<int>(ini.GetLongValue(S, "VampireLordSize", g.vlCat)), 2, 5);
+        }
+        F("WerewolfBulge", g.wwBulge, 0.0f, 3.0f); F("VampireLordBulge", g.vlBulge, 0.0f, 3.0f);
         ShapesIni(ini, save);
     }
 
@@ -379,6 +391,7 @@ namespace Size {
 
     int Cat(RE::Actor* p) {
         if (!p) return kUnknown;
+        if (const int bf = Colossal::BeastForm(p); bf != 0) return bf == 3 ? g.vlCat : g.wwCat;   // 2.6j: a transformed man
         if (IsCreature(p)) return g.creatures ? g.creatureCat : kUnknown;
         if (!HasTNG()) return kUnknown;
         const RE::FormID id = p->GetFormID();
@@ -395,6 +408,7 @@ namespace Size {
     }
 
     int CatOf(RE::FormID id) {
+        if (auto* a = RE::TESForm::LookupByID<RE::Actor>(id); a && Colossal::BeastForm(a) != 0) return Colossal::BeastForm(a) == 3 ? g.vlCat : g.wwCat;   // 2.6j
         if (auto* a = RE::TESForm::LookupByID<RE::Actor>(id); a && IsCreature(a)) return g.creatures ? g.creatureCat : kUnknown;
         std::lock_guard lk(g_mx);
         auto it = g_known.find(id);
@@ -810,8 +824,29 @@ namespace Size {
         }
         return ch;
     }
+    float BeastBulge(RE::Actor* p) {   // 2.6j
+        const int bf = p ? Colossal::BeastForm(p) : 0;
+        return bf == 0 ? 1.0f : bf == 3 ? g.vlBulge : g.wwBulge;
+    }
+    bool RenderBeastSection() {   // 2.6j
+        if (!Section("Beast forms (OStim Beast Form)###beastsize")) return false;
+        bool ch = false;
+        Tr::TextWrapped("Men transformed by OStim Beast Form, each form on its own. They count whatever the creature settings are.");
+        static const char* items[] = {"Like an average man", "Like an L man", "Like an XL man", "Bigger than any man"};
+        int ww = std::clamp(g.wwCat - 2, 0, 3);
+        if (Tr::Combo("A werewolf or werebear counts", &ww, items, 4)) { g.wwCat = ww + 2; ch = true; }
+        float wb = g.wwBulge * 100.0f;
+        if (Tr::SliderFloat("Werewolf belly bulge", &wb, 0.0f, 300.0f, "%.0f%%")) { g.wwBulge = wb / 100.0f; ch = true; }
+        int vl = std::clamp(g.vlCat - 2, 0, 3);
+        if (Tr::Combo("A Vampire Lord counts", &vl, items, 4)) { g.vlCat = vl + 2; ch = true; }
+        float vb = g.vlBulge * 100.0f;
+        if (Tr::SliderFloat("Vampire Lord belly bulge", &vb, 0.0f, 300.0f, "%.0f%%")) { g.vlBulge = vb / 100.0f; ch = true; }
+        Help("How far he opens, loosens and makes sore, and how big his belly bulge is (x the bulge strength on the During sex page).");
+        return ch;
+    }
     bool RenderSection() {
         bool ch = RenderTngSection();
+        ch |= RenderBeastSection();
         ch |= RenderMncSection();
         return ch;
     }

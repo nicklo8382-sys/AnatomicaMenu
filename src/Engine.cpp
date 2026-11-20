@@ -509,7 +509,7 @@ namespace {
                         s.twWant *= std::max(0.0f, 1.0f - dt / 0.18f);             // ...that settles again
                         p = std::clamp(p + s.tw, 0.0f, 1.0f);
                     }
-                    float A = (test ? 0.6f : dw.bulge * std::clamp(Size::For(partner).open, 0.7f, 1.5f)) *
+                    float A = (test ? 0.6f : dw.bulge * std::clamp(Size::For(partner).open, 0.7f, 1.5f) * Size::BeastBulge(partner)) *
                               (1.0f + s.pulse) * (1.0f + 0.4f * s.rndA);
                     if (dw.build[shape] && !test) {   // build-up: grows to the full shape over the build time
                         s.grow = std::min(1.0f, s.grow + dt / std::max(1.0f, dw.buildTime));
@@ -740,35 +740,7 @@ namespace {
         PutInt(a, node.c_str(), 7, col);
     }
 
-    // 2.6i: cum on his skin round the anus, as a RaceMenu body overlay whose texture path has "cumoverlays" in it, so
-    // other mods that look for cum overlays (DDF's cum conditions, cum-overlay mods) see it. level 0 = take it off.
-    void CumOverlayOne(RE::Actor* a, int level, int col, float alpha) {
-        if (!g_ovl || !g_ovr || !a) return;
-        static const char* kTex[3] = {"", "textures\\actors\\character\\male\\Anatomica\\cumoverlays\\anatomica_anal_1.dds",
-                                      "textures\\actors\\character\\male\\Anatomica\\cumoverlays\\anatomica_anal_2.dds"};
-        if (level > 0 && !g_ovl->HasOverlays(a)) g_ovl->AddOverlays(a, true);
-        const std::uint32_t n = g_vOvl >= 2 ? g_ovl->GetOverlayCount(SKEE::IOverlayInterface::OverlayType::Normal, SKEE::IOverlayInterface::OverlayLocation::Body) : 6;
-        int found = -1, freeSlot = -1;
-        for (std::uint32_t i = 0; i < n && i < 64; ++i) {
-            const std::string node = std::format("Body [Ovl{}]", i);
-            std::string tex = GetStr(a, node.c_str(), 9, 0);
-            std::transform(tex.begin(), tex.end(), tex.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-            if (tex.find("anatomica\\cumoverlays") != std::string::npos) { found = static_cast<int>(i); break; }
-            if (freeSlot < 0 && (tex.empty() || tex.find("default.dds") != std::string::npos)) freeSlot = static_cast<int>(i);
-        }
-        if (level <= 0) {
-            if (found < 0) return;
-            const std::string node = std::format("Body [Ovl{}]", found);
-            Remove(a, node.c_str(), 9, 0); Remove(a, node.c_str(), 7, -1); Remove(a, node.c_str(), 8, -1);
-            return;
-        }
-        const int slot = found >= 0 ? found : freeSlot;
-        if (slot < 0) return;   // no free body overlay slot
-        const std::string node = std::format("Body [Ovl{}]", slot);
-        PutStr(a, node.c_str(), 9, 0, kTex[std::min(level, 2)]);
-        PutInt(a, node.c_str(), 7, col);
-        PutFloat(a, node.c_str(), 8, std::clamp(alpha, 0.05f, 1.0f));
-    }
+    void CumOverlayOne(RE::Actor* a, int level, int col, float alpha);   // (below: it needs the paint-slot helpers)
 
     // the inside (the canal, 3BA_Anus): its own colour texture (Colours page > Inside colour) and "always moist inside".
     // With RaceMenu's C++ override interface straight on it, else through NiOverride's Papyrus functions (older RaceMenu).
@@ -1065,6 +1037,91 @@ namespace {
         last = line;
         logger::info("Anatomica {}", line);
     }
+    // 2.6i: cum on his skin round the anus, as a RaceMenu body paint whose texture path has "cumoverlays" in it, so other
+    // mods that look for cum overlays (DDF's cum conditions, cum-overlay mods) see it. level 0 = take it off.
+    // 2.6j: with RaceMenu's override interface (v2+) it is kept with the save; otherwise (older RaceMenu, as on Nick's game)
+    // it goes straight on the paint slot in the 3D, the way the ring does - redone every few seconds in case the body is rebuilt.
+    void CumOverlayOne(RE::Actor* a, int level, int col, float alpha) {
+        (void)col;   // (the game does not draw a tint on these paints; the texture is cream white)
+        if (!a) return;
+        static const char* kTex[3] = {"textures\\actors\\character\\overlays\\default.dds",
+                                      "textures\\actors\\character\\male\\Anatomica\\cumoverlays\\anatomica_anal_1.dds",
+                                      "textures\\actors\\character\\male\\Anatomica\\cumoverlays\\anatomica_anal_2.dds"};
+        level = std::clamp(level, 0, 2);
+        alpha = std::clamp(alpha, 0.05f, 1.0f);
+        if (g_ovr && g_ovl) {
+            if (level > 0 && !g_ovl->HasOverlays(a)) g_ovl->AddOverlays(a, true);
+            const std::uint32_t n = g_vOvl >= 2 ? g_ovl->GetOverlayCount(SKEE::IOverlayInterface::OverlayType::Normal, SKEE::IOverlayInterface::OverlayLocation::Body) : 6;
+            int found = -1, freeSlot = -1;
+            for (std::uint32_t i = 0; i < n && i < 64; ++i) {
+                const std::string node = std::format("Body [Ovl{}]", i);
+                const std::string tex = Lower(GetStr(a, node.c_str(), 9, 0));
+                if (tex.find("anatomica\\cumoverlays") != std::string::npos) { found = static_cast<int>(i); break; }
+                if (freeSlot < 0 && (tex.empty() || tex.find("default.dds") != std::string::npos)) freeSlot = static_cast<int>(i);
+            }
+            if (level <= 0) {
+                if (found < 0) return;
+                const std::string node = std::format("Body [Ovl{}]", found);
+                Remove(a, node.c_str(), 9, 0); Remove(a, node.c_str(), 8, -1);
+                PutStr(a, node.c_str(), 9, 0, kTex[0], false); PutFloat(a, node.c_str(), 8, 0.0f, false);
+                return;
+            }
+            const int slot = found >= 0 ? found : freeSlot;
+            if (slot < 0) return;
+            const std::string node = std::format("Body [Ovl{}]", slot);
+            PutStr(a, node.c_str(), 9, 0, kTex[level]);
+            PutFloat(a, node.c_str(), 8, alpha);
+            return;
+        }
+        auto* root = a->Get3D(false);
+        if (!root) return;
+        RE::BSGeometry* ours = nullptr;
+        RE::BSGeometry* freeSlot = nullptr;
+        bool any = false;
+        for (int i = 0; i < 32; ++i) {
+            auto* o = Node(root, std::format("Body [Ovl{}]", i).c_str());
+            auto* geo = o ? o->AsGeometry() : nullptr;
+            if (!geo) continue;
+            any = true;
+            const std::string d = DiffuseOf(geo);
+            if (d.find("anatomica\\cumoverlays") != std::string::npos) { ours = geo; break; }
+            if (!freeSlot && (d.empty() || d.find("default.dds") != std::string::npos)) freeSlot = geo;
+        }
+        if (level <= 0) {
+            if (ours) RingLook(ours, kTex[0], -1, 0.0f);
+            return;
+        }
+        if (!ours && !any) { AskOverlays(a); return; }   // no paint slots yet: RaceMenu adds them, next pass puts it on
+        RE::BSGeometry* geo = ours ? ours : freeSlot;
+        if (geo) RingLook(geo, kTex[level], -1, alpha);
+    }
+
+    // 2.6j: OBlush's face blush (its "dd2blush" paint on the face) - made stronger for a moment, then put back
+    struct BlushNow { RE::NiPointer<RE::BSGeometry> geo; float base = -1.0f; };
+    std::unordered_map<RE::FormID, BlushNow> g_blush;
+    bool BlushBoostOne(RE::Actor* a, float add) {
+        auto* root = a ? a->Get3D(false) : nullptr;
+        if (!root) return false;
+        auto& b = g_blush[a->GetFormID()];
+        if (add <= 0.0f) {   // back to OBlush's own strength
+            if (b.geo && b.base >= 0.0f) if (auto* l = b.geo->lightingShaderProp_cast()) l->SetMaterialAlpha(b.base);
+            g_blush.erase(a->GetFormID());
+            return true;
+        }
+        if (!b.geo) {
+            for (int i = 0; i < 32 && !b.geo; ++i) {
+                auto* o = Node(root, std::format("Face [Ovl{}]", i).c_str());
+                auto* geo = o ? o->AsGeometry() : nullptr;
+                if (geo && DiffuseOf(geo).find("dd2blush") != std::string::npos) b.geo = RE::NiPointer<RE::BSGeometry>(geo);
+            }
+            if (!b.geo) { g_blush.erase(a->GetFormID()); return false; }   // OBlush is not blushing him right now
+            auto* m = MatOf(b.geo.get());
+            b.base = m ? m->materialAlpha : 0.5f;
+        }
+        if (auto* l = b.geo->lightingShaderProp_cast()) l->SetMaterialAlpha(std::clamp(b.base + add, 0.0f, 1.0f));
+        return true;
+    }
+
     void RingOne(RE::Actor* a) {
         auto* root = a->Get3D(false);
         if (!root) return;
@@ -1200,6 +1257,38 @@ namespace Engine {
     float MorphSum(RE::Actor* a, const char* name) { return (g_morph && a) ? g_morph->GetBodyMorphs(a, name) : 0.0f; }
     void ClearMorphKey(RE::Actor* a, const char* key) { if (g_morph && a) g_morph->ClearBodyMorphKeys(a, key); }
     void CumOverlay(RE::Actor* a, int level, int col, float alpha) { CumOverlayOne(a, level, col, alpha); }
+    // 2.6j: a Vampire Lord's thrall - a faint red glow over his skin (a RaceMenu body paint slot of its own; 0 = off)
+    bool BondGlow(RE::Actor* a, float strength) {
+        if (!g_ovr || !g_ovl || !a) return false;
+        static const char* kGlow = "textures\\actors\\character\\male\\Anatomica\\bond_glow.dds";
+        static const char* kNone = "textures\\actors\\character\\overlays\\default.dds";
+        strength = std::clamp(strength, 0.0f, 1.0f);
+        if (strength > 0.0f && !g_ovl->HasOverlays(a)) g_ovl->AddOverlays(a, true);
+        const std::uint32_t n = g_vOvl >= 2 ? g_ovl->GetOverlayCount(SKEE::IOverlayInterface::OverlayType::Normal, SKEE::IOverlayInterface::OverlayLocation::Body) : 6;
+        int found = -1, freeSlot = -1;
+        for (std::uint32_t i = 0; i < n && i < 64; ++i) {
+            const std::string node = std::format("Body [Ovl{}]", i);
+            const std::string tex = Lower(GetStr(a, node.c_str(), 9, 0));
+            if (tex.find("anatomica\\bond_glow") != std::string::npos) { found = static_cast<int>(i); break; }
+            if (freeSlot < 0 && (tex.empty() || tex.find("default.dds") != std::string::npos)) freeSlot = static_cast<int>(i);
+        }
+        if (strength <= 0.0f) {
+            if (found < 0) return true;
+            const std::string node = std::format("Body [Ovl{}]", found);
+            PutStr(a, node.c_str(), 9, 0, kNone, false); PutFloat(a, node.c_str(), 8, 0.0f, false); PutFloat(a, node.c_str(), 1, 0.0f, false);
+            return true;
+        }
+        const int slot = found >= 0 ? found : freeSlot;
+        if (slot < 0) return false;
+        const std::string node = std::format("Body [Ovl{}]", slot);
+        PutStr(a, node.c_str(), 9, 0, kGlow, false);
+        PutInt(a, node.c_str(), 7, 0x9E1010, false);             // tint
+        PutFloat(a, node.c_str(), 8, 0.12f + 0.25f * strength, false);   // alpha
+        PutInt(a, node.c_str(), 0, 0xFF1A1A, false);             // emissive colour
+        PutFloat(a, node.c_str(), 1, 0.8f * strength, false);    // emissive strength
+        return true;
+    }
+    bool BlushBoost(RE::Actor* a, float add) { return BlushBoostOne(a, add); }
     std::vector<RE::FormID> DuringIds() {
         std::lock_guard gl(g_gapeMx);
         std::vector<RE::FormID> v;

@@ -2,9 +2,11 @@
 #include "Colossal.h"
 #include "Colour.h"
 #include "Engine.h"
+#include "Face.h"
 #include "Lang.h"
 #include "OStrandsLink.h"
 #include "Size.h"
+#include "Training.h"
 #include "Virgin.h"
 #include "SKSEMenuFramework.h"
 
@@ -27,7 +29,7 @@ namespace Talk {
         constexpr const char* kPack = "Data/TMSDynamicDialogue/Packs/Anatomica.json";
 
         // kinds of lines: each can be switched off, and allowed only in some scenes (chance rolled per man per scene)
-        enum Cat { kCFirst, kCStretch, kCFilled, kCRemarks, kCAfter, kCSore, kCRegular, kCShape, kCPairs, kCPlug, kCN };
+        enum Cat { kCFirst, kCStretch, kCFilled, kCRemarks, kCAfter, kCSore, kCRegular, kCShape, kCPairs, kCPlug, kCOral, kCBeast, kCBreed, kCN };
         struct CatDef { const char* ini; const char* name; const char* help; };
         constexpr CatDef kCats[kCN] = {
             {"FirstTime", "First time and experience", "A virgin's first time, a man still getting used to it, one who has taken plenty."},
@@ -40,6 +42,9 @@ namespace Talk {
             {"Shape", "Schlong shape", "Knotted (and tied), flared, ridged, barbed or uncut - each has its own lines."},
             {"Pairs", "Back and forth", "A question from his partner and his answer (\"Can you take more?\" - \"Give me everything.\")."},
             {"Plug", "Plugs", "A plug going in at the end to keep it inside him, and him wearing it. Needs the OStrands link."},
+            {"Oral", "Mouth and face", "While he sucks: how used to it he is, going deep and gagging, swallowing, cum on his face - and the man he is sucking says things too."},
+            {"Beast", "Beast forms", "OStim Beast Form: him taken while he is a werewolf, werebear or Vampire Lord, being taken by one, and what the beast says."},
+            {"Breeding", "Breeding talk", "Dirty talk about being bred while he is filled, stuffed full, knotted or taken by one man after another (talk only)."},
         };
         struct Settings {
             bool on = true;
@@ -51,13 +56,20 @@ namespace Talk {
 
         // the morphs the pack reads (on the man being taken unless noted)
         enum M { kTaken, kFirst, kExp, kOpen, kBulge, kDeep, kBig, kFilled, kFilling, kColossal, kFull, kFlood, kPlug,
-                 kRemarks /*top*/, kGaping, kSeesGape /*top*/, kSore, kRegular, kHisFirst, kShape, kKnotTied, kPairs /*top*/, kPlugIn, kN };
+                 kRemarks /*top*/, kGaping, kSeesGape /*top*/, kSore, kRegular, kHisFirst, kShape, kKnotTied, kPairs /*top*/, kPlugIn,
+                 kSucking, kOralExp, kThroat, kGag, kSwallow, kFacial, kSucked /*top*/, kBeast, kByBeast, kBeastTop /*top*/, kTrained, kTooBig, kBred, kBreedTop /*top*/,
+                 kThrall, kColdSeed, kLordUsed, kThrallTop /*top*/, kBond, kScentTop /*top*/, kMoonTop /*top*/, kN };   // 2.6j: Vampire Lords
         constexpr std::array<const char*, kN> kNames{
             "AnatomicaDDF Taken", "AnatomicaDDF First", "AnatomicaDDF Exp", "AnatomicaDDF Open", "AnatomicaDDF Bulge",
             "AnatomicaDDF Deep", "AnatomicaDDF Big", "AnatomicaDDF Filled", "AnatomicaDDF Filling", "AnatomicaDDF Colossal",
             "AnatomicaDDF Full", "AnatomicaDDF Flood", "AnatomicaDDF Plug", "AnatomicaDDF Remarks", "AnatomicaDDF Gaping",
             "AnatomicaDDF SeesGape", "AnatomicaDDF Sore", "AnatomicaDDF Regular", "AnatomicaDDF HisFirst", "AnatomicaDDF Shape",
-            "AnatomicaDDF KnotTied", "AnatomicaDDF Pairs", "AnatomicaDDF PlugIn"};
+            "AnatomicaDDF KnotTied", "AnatomicaDDF Pairs", "AnatomicaDDF PlugIn",
+            "AnatomicaDDF Sucking", "AnatomicaDDF OralExp", "AnatomicaDDF Throat", "AnatomicaDDF Gag", "AnatomicaDDF Swallow", "AnatomicaDDF Facial", "AnatomicaDDF Sucked",
+            "AnatomicaDDF Beast", "AnatomicaDDF ByBeast", "AnatomicaDDF BeastTop",
+            "AnatomicaDDF Trained", "AnatomicaDDF TooBig", "AnatomicaDDF Bred", "AnatomicaDDF BreedTop",
+            "AnatomicaDDF Thrall", "AnatomicaDDF ColdSeed", "AnatomicaDDF LordUsed", "AnatomicaDDF ThrallTop",
+            "AnatomicaDDF Bond", "AnatomicaDDF ScentTop", "AnatomicaDDF MoonTop"};
         using Vals = std::array<float, kN>;
 
         struct Man {
@@ -67,6 +79,8 @@ namespace Talk {
             bool plugWas = false;
             double plugAt = -1e9;             // a plug just went in
             RE::FormID top = 0;               // the man taking him (kept for the afterwards remarks)
+            double oralAt = -1e9;             // 2.6j: when he last sucked
+            std::vector<RE::FormID> bredBy;   // 2.6j: the men who have filled him this scene
         };
 
         std::mutex g_mx;
@@ -75,12 +89,28 @@ namespace Talk {
         std::unordered_map<RE::FormID, double> g_fillAt, g_colAt;
         std::atomic<bool> g_sweep{true};
         std::atomic<bool> g_queued{false};
-        int g_have = -1, g_net = -1;
+        std::atomic<int> g_have{-1};   // 1 = DDF is loaded, 0 = not (yet), -2 = not there and we stopped asking
+        int g_net = -1;
+        std::atomic<bool> g_loaded{false};   // SKSE finished loading (kDataLoaded): every plugin is in by now
+        std::atomic<int> g_checksLeft{3};    // after that, this many more looks before a "no" is final
+        // ask Windows whether DDF's DLL is loaded (the worker thread only, so the 3 checks are not used up by the menu)
+        bool Probe() {
+            if (g_have == 1) return true;
+            if (g_have == -2) return false;
+            if (g_loaded && g_checksLeft-- <= 0) {
+                g_have = -2;
+                logger::info("Anatomica: Dynamic Dialogue Framework not installed - stopped looking for it");
+                return false;
+            }
+            g_have = REX::W32::GetModuleHandleW(L"TMS_DynamicDialogue.dll") ? 1 : 0;
+            if (g_have == 1) logger::info("Anatomica: Dynamic Dialogue Framework found - Anatomica's DDF lines can play");
+            return g_have == 1;
+        }
         int g_live = 0;
         std::mt19937 g_rng{std::random_device{}()};
 
-        bool Net() {
-            if (g_net < 0) g_net = REX::W32::GetModuleHandleW(L"SkyrimNet.dll") ? 1 : 0;
+        bool Net() {   // (only a "yes" is kept: SKSE may not have loaded it yet the first time we look)
+            if (g_net != 1) g_net = REX::W32::GetModuleHandleW(L"SkyrimNet.dll") ? 1 : 0;
             return g_net == 1;
         }
         double Now() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
@@ -93,6 +123,8 @@ namespace Talk {
         }
 
         void Write(RE::Actor* a, const Vals& v) {
+            if (!g_sent.contains(a->GetFormID()) && v[kTaken] > 0.0f)
+                logger::info("Anatomica DDF: lines possible for {} (exp {:.0f}, first {:.0f}, open {:.2f}, filled {:.2f})", a->GetName(), v[kExp], v[kFirst], v[kOpen], v[kFilled]);
             auto& sent = g_sent[a->GetFormID()];
             for (int i = 0; i < kN; ++i) {
                 if (std::abs(sent[i] - v[i]) > 0.02f) {
@@ -137,6 +169,7 @@ namespace Talk {
                 const OStrandsLink::Held h = OStrandsLink::HeldOf(id);
                 Man& m = g_men[id];
                 if (now && t - m.lastNow > 60.0) {   // a new scene: roll which kinds may talk, how sore he came in
+                    m.bredBy.clear();
                     for (int c = 0; c < kCN; ++c) m.allow[c] = g.cat[c] && Roll(g.chance[c]);
                     const Colour::Snapshot sn = Colour::SnapshotOf(a);
                     m.soreAt = std::max({sn.tender, sn.swell, sn.loose});
@@ -168,7 +201,7 @@ namespace Talk {
                         v[kBulge] = b.on ? 1.0f : 0.0f;
                         v[kDeep] = b.deep ? 1.0f : 0.0f;
                         const int cat = m.top ? Size::CatOf(m.top) : Size::kUnknown;
-                        v[kBig] = (cat >= 0 && cat <= 4) ? static_cast<float>(cat) : 2.0f;   // 0 XS .. 4 XL (2 = average / not known)
+                        v[kBig] = cat == Size::kCreature ? 4.0f : (cat >= 0 && cat <= 4) ? static_cast<float>(cat) : 2.0f;   // 0 XS .. 4 XL (2 = average / not known; 2.6j: a beast form counts as XL)
                     }
                     if (OStrandsLink::Installed()) {
                         if (on(kCFilled)) {
@@ -200,16 +233,64 @@ namespace Talk {
                         v[kShape] = static_cast<float>(ShapeCode(tp));
                         if (v[kShape] == 1.0f && (b.deep || d.held)) v[kKnotTied] = 1.0f;
                     }
+                    if (on(kCStretch)) {   // 2.6j: training
+                        const float tl = Training::Level(id);
+                        v[kTrained] = std::max(0.0f, tl);
+                        if (now && m.top) v[kTooBig] = Training::TooBig(id, Size::CatOf(m.top)) ? 1.0f : 0.0f;
+                    }
+                    if (h.filling && h.giver && std::find(m.bredBy.begin(), m.bredBy.end(), h.giver) == m.bredBy.end()) m.bredBy.push_back(h.giver);
+                    if (on(kCBreed)) {   // 2.6j: breeding talk
+                        v[kBred] = static_cast<float>(m.bredBy.size());
+                        if (m.top && (h.filling || now)) top(m.top)[kBreedTop] = 1.0f;
+                    }
+                    if (on(kCBeast) && now) {   // 2.6j: OStim Beast Form
+                        v[kBeast] = static_cast<float>(Colossal::BeastForm(a));
+                        if (tp) v[kByBeast] = static_cast<float>(Colossal::BeastForm(tp));
+                    }
+                    if (on(kCBeast)) {   // 2.6j: Vampire Lords - their cold seed in him; while one takes him, his thrall mark and how used to them he is
+                        v[kColdSeed] = Training::Cold(id) ? 1.0f : 0.0f;
+                        if (now && tp && Colossal::BeastForm(tp) == 3) {
+                            v[kThrall] = Training::Thrall(id);
+                            v[kLordUsed] = Training::LordLevel(id);
+                            if (v[kThrall] > 0.0f) top(m.top)[kThrallTop] = 1.0f;
+                        }
+                        v[kBond] = Training::Bond(id) > 0.0f ? 1.0f : 0.0f;
+                        if (now && tp && (Colossal::BeastForm(tp) == 1 || Colossal::BeastForm(tp) == 2)) {   // a werewolf taking him
+                            if (const RE::FormID sc = Training::Scent(id); sc && sc != m.top) top(m.top)[kScentTop] = 1.0f;   // smells another wolf on him
+                            top(m.top)[kMoonTop] = Colossal::Moon();
+                        }
+                    }
                     if (m.top) {   // the man taking him
                         Vals& tv = top(m.top);
+                        if (on(kCBeast) && now && tp && Colossal::BeastForm(tp)) tv[kBeastTop] = static_cast<float>(Colossal::BeastForm(tp));   // 1 werewolf, 2 werebear, 3 Vampire Lord
                         if (on(kCRemarks) && now) tv[kRemarks] = 1.0f;
                         if (on(kCRemarks) && on(kCAfter) && v[kGaping] > 0.0f) tv[kSeesGape] = 1.0f;
                         if (on(kCPairs) && now) tv[kPairs] = 1.0f;
                     }
                 }
                 Vals& w = want[id];
-                for (int i : {kRemarks, kSeesGape, kPairs}) v[i] = std::max(v[i], w[i]);   // (a man can be taken and take someone at once)
+                for (int i : {kRemarks, kSeesGape, kPairs, kSucked, kBeastTop, kBreedTop, kThrallTop, kScentTop, kMoonTop}) v[i] = std::max(v[i], w[i]);   // (a man can be taken and take someone at once)
                 w = v;
+            }
+            // 2.6j: his mouth (Mouth & Face page) - merged into what he has from being taken
+            if (!quiet && g.cat[kCOral]) {
+                for (const Face::OralState& o : Face::OralNow()) {
+                    auto* a = RE::TESForm::LookupByID<RE::Actor>(o.id);
+                    if (!a || !a->Is3DLoaded()) continue;
+                    Man& m = g_men[o.id];
+                    if (o.sucking && t - m.lastNow > 60.0 && t - m.oralAt > 60.0) m.allow[kCOral] = Roll(g.chance[kCOral]);
+                    if (o.sucking) m.oralAt = t;
+                    if (!m.allow[kCOral]) continue;
+                    ++live;
+                    Vals& v = want[o.id];
+                    v[kSucking] = o.sucking ? 1.0f : 0.5f;
+                    v[kOralExp] = o.exp < 0.05f ? 0.0f : o.exp < 1.0f ? 1.0f : o.exp < 4.0f ? 2.0f : 3.0f;
+                    v[kThroat] = o.sucking && o.deep ? 1.0f : 0.0f;
+                    v[kGag] = o.gagging ? 1.0f : 0.0f;
+                    v[kSwallow] = o.swallowed ? 1.0f : 0.0f;
+                    v[kFacial] = o.faceCum > 0.05f ? 1.0f : 0.0f;
+                    if (o.partner && o.sucking) want[o.partner][kSucked] = 1.0f;
+                }
             }
             g_live = live;
             for (auto& [id, v] : want) {
@@ -226,7 +307,11 @@ namespace Talk {
         void Loop() {
             for (;;) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(400));
-                if (!Installed()) { std::this_thread::sleep_for(std::chrono::seconds(5)); continue; }
+                if (!Probe()) {
+                    if (g_have == -2) return;   // not installed: nothing more runs (the thread ends)
+                    std::this_thread::sleep_for(std::chrono::seconds(5));
+                    continue;
+                }
                 auto* ui = RE::UI::GetSingleton();
                 if (!ui || ui->GameIsPaused()) continue;
                 if (g_queued.exchange(true)) continue;
@@ -236,10 +321,10 @@ namespace Talk {
         }
     }
 
-    bool Installed() {
-        if (g_have < 0) g_have = REX::W32::GetModuleHandleW(L"TMS_DynamicDialogue.dll") ? 1 : 0;
-        return g_have == 1;
-    }
+    // 2.6j: Anatomica's thread starts while SKSE is still loading the other plugins (TMS_DynamicDialogue.dll loads after
+    // AnatomicaMenu.dll), so the worker keeps looking until SKSE has finished, then 3 more times, then stops for good.
+    bool Installed() { return g_have == 1; }
+    void OnDataLoaded() { g_loaded = true; }
     void Install() { std::thread(Loop).detach(); }
     void Reset() {
         std::lock_guard lk(g_mx);

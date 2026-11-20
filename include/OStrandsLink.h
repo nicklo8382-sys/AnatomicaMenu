@@ -19,9 +19,11 @@ namespace OStrandsLink {
     // 2.6f: for SkyrimNet - what he holds now, and the fillings that just finished
     struct Held { float vol = 0.0f; bool flooding = false, leaking = false, filling = false, plugged = false; double floodAt = 0.0;
                   RE::FormID giver = 0; bool stuffed = false; float most = 0.0f; };   // 2.6i: who is filling him, over "stuffed", the most he holds
-    void Bathed(RE::FormID id);                                   // 2.6g: he washed (Bathing in Skyrim) - it all runs out
+    void Bathed(RE::FormID id);
+    void PrecumIn(RE::Actor* recv, RE::Actor* giver, float loads);   // 2.6j: OStrands precum into him: held, and it wets him                                   // 2.6g: he washed (Bathing in Skyrim) - it all runs out
     std::vector<RE::FormID> TakeStuffed();                        // 2.6g: men who just got stuffed full (SkyrimNet)
     Held HeldOf(RE::FormID id);
+    int GiverCount(RE::FormID id);                                // 2.6j: how many men's cum he holds now
     struct Filled { RE::FormID man = 0, giver = 0; float loads = 0.0f; bool colossal = false; };
     std::vector<Filled> TakeFilled();                                   // 2.6e: the Stomach shape for what he holds (0 = none)
     void RenderTests(RE::Actor* a);                               // 2.6d: Testing page buttons (fill, gush, squirt, ooze, empty)

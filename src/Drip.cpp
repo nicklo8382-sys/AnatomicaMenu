@@ -1,4 +1,6 @@
 #include "Talk.h"
+#include "Training.h"
+#include "Face.h"
 #include "Drip.h"
 #include "Lang.h"
 #include "Virgin.h"
@@ -788,6 +790,8 @@ namespace {
     void OnSave(SKSE::SerializationInterface* a) {
         Virgin::Save(a);   // the plugin has one set of co-save callbacks: they live here
         Kinds::Save(a);    // 2.5o
+        Face::Save(a);     // 2.6j
+        Training::Save(a); // 2.6j
         std::lock_guard lk(g_mx);
         if (!a->OpenRecord(kRec, 1)) return;
         const std::uint32_t n = static_cast<std::uint32_t>(g_puddles.size());
@@ -800,6 +804,8 @@ namespace {
         while (a->GetNextRecordInfo(type, ver, len)) {
             if (Virgin::Load(a, type, ver, len)) continue;
             if (Kinds::Load(a, type, ver, len)) continue;
+            if (Face::Load(a, type, ver, len)) continue;
+            if (Training::Load(a, type, ver, len)) continue;
             if (type != kRec) continue;
             std::uint32_t n = 0;
             a->ReadRecordData(&n, sizeof n);
@@ -813,6 +819,8 @@ namespace {
     void OnRevert(SKSE::SerializationInterface*) {
         Virgin::Revert();
         Kinds::Revert();
+        Face::Revert();
+        Training::Revert();
         std::lock_guard lk(g_mx);
         g_puddles.clear();
     }
@@ -866,6 +874,8 @@ namespace Drip {
         Fluid::Install();
         OStrandsLink::Install();   // 2.5w
         Talk::Install();           // 2.6i
+        Face::Install();           // 2.6j
+        Training::Install();       // 2.6j
     }
 
     void RegisterFuncs(RE::BSScript::IVirtualMachine* vm) {
