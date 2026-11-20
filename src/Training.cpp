@@ -146,7 +146,7 @@ namespace Training {
             const double t = Now();
             if (t < next) return;
             next = t + 3.0;
-            std::vector<RE::Actor*> near;
+            std::vector<RE::Actor*> nearby
             if (auto* pl = RE::PlayerCharacter::GetSingleton()) near.push_back(pl);
             if (auto* pl = RE::ProcessLists::GetSingleton())
                 for (auto& h : pl->highActorHandles) if (auto a = h.get(); a && a->Is3DLoaded()) near.push_back(a.get());
