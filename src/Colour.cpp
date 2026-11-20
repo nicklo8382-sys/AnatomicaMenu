@@ -548,6 +548,9 @@ namespace {
         bool cumSkin = false;        // 2.6f: (old switch, read once into cumMode)
         int cumMode = 3;             // 2.6g: OStrands cum colour - 0 plain, 1 per race, 2 skin tint (race first), 3 skin rules (then race, then tint)
         float cumSkinAmt = 0.25f;
+        bool glowVamp = false, glowDaedra = false;   // 2.6i: glowing cum (OStrands 0.8.0.7+)
+        float glowVampCol[3] = {0.95f, 0.15f, 0.12f}, glowDaedraCol[3] = {0.70f, 0.35f, 1.0f};
+        float glowStrength = 1.0f;
         bool slowClose = true;       // the gape closes slower while he is tender
         float slowCloseAmt = 0.5f;
         bool rested = true;          // first time in a while = redder
@@ -592,6 +595,7 @@ namespace {
         int pool = -1;                          // own random colours (bits as the Colours page), -1 = use those
         bool cumOwn = false;                    // own wetness colour when a man of this race is the giver
         float cum[3] = {0.95f, 0.93f, 0.88f};
+        bool cumGlow = false;                   // 2.6i: this race's cum glows (in its cum colour)
         float palette[6][3] = {{0.45f, 0.22f, 0.30f}, {0.60f, 0.35f, 0.38f}, {0.38f, 0.26f, 0.22f},
                                {0.50f, 0.28f, 0.45f}, {0.30f, 0.32f, 0.40f}, {0.55f, 0.40f, 0.30f}};
     };
@@ -759,6 +763,8 @@ namespace {
         if (save) ini.SetLongValue(S, "CumMode", g.cumMode);
         else g.cumMode = std::clamp(static_cast<int>(ini.GetLongValue(S, "CumMode", g.cumMode)), 0, 3);
         if (save) ini.SetDoubleValue(S, "CumSkinAmount", g.cumSkinAmt); else g.cumSkinAmt = std::clamp(static_cast<float>(ini.GetDoubleValue(S, "CumSkinAmount", g.cumSkinAmt)), 0.0f, 1.0f);
+        B("CumGlowVampires", g.glowVamp); C("CumGlowVampireColour", g.glowVampCol); B("CumGlowDaedra", g.glowDaedra); C("CumGlowDaedraColour", g.glowDaedraCol);
+        F("CumGlowStrength", g.glowStrength, 0.0f, 5.0f);
         B("SlowClose", g.slowClose); F("SlowCloseAmt", g.slowCloseAmt, 0.0f, 2.0f);
         B("Rested", g.rested); F("RestedMinutes", g.restedMinutes, 5.0f, 600.0f); F("RestedExtra", g.restedExtra, 0.0f, 1.0f);
         B("Loose", g.loose); F("LooseAdd", g.looseAdd, 0.0f, 0.2f); F("LooseCap", g.looseCap, 0.0f, 0.6f);
@@ -917,6 +923,9 @@ namespace {
                 for (auto& c : r.cum) c = std::clamp(c, 0.0f, 1.0f);
             }
             keys.clear();
+            ini.GetAllKeys("ColourRaceGlow", keys);   // 2.6i
+            for (const auto& k : keys) g_races[k.pItem].cumGlow = ini.GetBoolValue("ColourRaceGlow", k.pItem, false);
+            keys.clear();
             ini.GetAllKeys("ColourMan", keys);
             for (const auto& k : keys) {
                 ManSet m;
@@ -1019,6 +1028,7 @@ namespace {
         ini.Delete("ColourRacePool", nullptr);
         ini.Delete("ColourRacePalette", nullptr);
         ini.Delete("ColourRaceCum", nullptr);
+        ini.Delete("ColourRaceGlow", nullptr);
         ini.Delete("ColourRules", nullptr);
         ini.SetLongValue("ColourRules", "Count", static_cast<long>(g_rules.size()));
         for (size_t i = 0; i < g_rules.size(); ++i) {
@@ -1046,6 +1056,7 @@ namespace {
                 ini.SetValue("ColourRacePalette", k.c_str(), pal.c_str());
             }
             if (v.cumOwn) ini.SetValue("ColourRaceCum", k.c_str(), std::format("{:.3f},{:.3f},{:.3f}", v.cum[0], v.cum[1], v.cum[2]).c_str());
+            if (v.cumGlow) ini.SetBoolValue("ColourRaceGlow", k.c_str(), true);
         }
         ini.Delete("ColourMan", nullptr);
         for (const auto& [k, m] : g_perMan)
@@ -2402,6 +2413,25 @@ namespace Colour {
     }
 
     // the giver's race cum colour (Cum & drips page); false = none set
+    // 2.6i: glowing cum - vampires, daedra, and races ticked in the list (OStrands 0.8.0.7+ draws it)
+    bool CumGlow(RE::Actor* giver, float out[4]) {
+        if (!giver || !OStrandsLink::Installed()) return false;
+        float rgb[3] = {0.925f, 0.914f, 0.871f};
+        const bool coloured = CumColour(giver, rgb);
+        std::lock_guard lk(g_lock);
+        if (!g_loaded) LoadIni();
+        auto* race = giver->GetRace();
+        const float* c = nullptr;
+        if (auto it = g_races.find(RaceKey(race)); it != g_races.end() && it->second.cumGlow) c = rgb;
+        else if (g.glowVamp && (giver->HasKeywordString("Vampire") || (race && race->HasKeywordString("Vampire")))) c = g.glowVampCol;
+        else if (g.glowDaedra && (giver->HasKeywordString("ActorTypeDaedra") || (race && race->HasKeywordString("ActorTypeDaedra")))) c = g.glowDaedraCol;
+        if (!c || g.glowStrength <= 0.0f) return false;
+        (void)coloured;
+        for (int i = 0; i < 3; ++i) out[i] = c[i];
+        out[3] = g.glowStrength;
+        return true;
+    }
+
     bool CumColour(RE::Actor* giver, float out[3]) {
         if (!giver) return false;
         std::lock_guard lk(g_lock);
@@ -2448,6 +2478,14 @@ namespace Colour {
                 float a = g.cumSkinAmt * 100.0f;
                 if (Tr::SliderFloat("How much of his skin colour", &a, 5.0f, 100.0f, "%.0f%%")) { g.cumSkinAmt = a / 100.0f; changed = true; }
             }
+            // 2.6i: glow
+            Tr::TextDisabled("Glow (OStrands 0.8.0.7 or newer). OStrands' own Glow switch makes everyone's glow; these make only some men's:");
+            changed |= Tr::Checkbox("Vampires' cum glows", &g.glowVamp);
+            if (g.glowVamp) { ImGuiMCP::SameLine(); changed |= Tr::ColorEdit3("##gv", g.glowVampCol, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs); }
+            changed |= Tr::Checkbox("Daedra's cum glows", &g.glowDaedra);
+            if (g.glowDaedra) { ImGuiMCP::SameLine(); changed |= Tr::ColorEdit3("##gd", g.glowDaedraCol, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs); }
+            changed |= Tr::SliderFloat("Glow strength", &g.glowStrength, 0.0f, 5.0f, "%.1f");
+            Help("A race can glow too: tick \"glows\" next to it in the race list below (it glows in its cum colour).");
             if (changed) SaveIni();
         }
         RenderCumColours();
@@ -2475,6 +2513,10 @@ namespace Colour {
                     ImGuiMCP::SameLine();
                 }
                 Tr::TextUnformatted(r.name.c_str());
+                if (OStrandsLink::Installed()) {   // 2.6i
+                    ImGuiMCP::SameLine();
+                    changed |= Tr::Checkbox("glows##glw", &rs.cumGlow);
+                }
                 ImGuiMCP::PopID();
             }
             if (ConfirmButton("Clear all race cum colours")) {

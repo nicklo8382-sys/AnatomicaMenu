@@ -740,6 +740,36 @@ namespace {
         PutInt(a, node.c_str(), 7, col);
     }
 
+    // 2.6i: cum on his skin round the anus, as a RaceMenu body overlay whose texture path has "cumoverlays" in it, so
+    // other mods that look for cum overlays (DDF's cum conditions, cum-overlay mods) see it. level 0 = take it off.
+    void CumOverlayOne(RE::Actor* a, int level, int col, float alpha) {
+        if (!g_ovl || !g_ovr || !a) return;
+        static const char* kTex[3] = {"", "textures\\actors\\character\\male\\Anatomica\\cumoverlays\\anatomica_anal_1.dds",
+                                      "textures\\actors\\character\\male\\Anatomica\\cumoverlays\\anatomica_anal_2.dds"};
+        if (level > 0 && !g_ovl->HasOverlays(a)) g_ovl->AddOverlays(a, true);
+        const std::uint32_t n = g_vOvl >= 2 ? g_ovl->GetOverlayCount(SKEE::IOverlayInterface::OverlayType::Normal, SKEE::IOverlayInterface::OverlayLocation::Body) : 6;
+        int found = -1, freeSlot = -1;
+        for (std::uint32_t i = 0; i < n && i < 64; ++i) {
+            const std::string node = std::format("Body [Ovl{}]", i);
+            std::string tex = GetStr(a, node.c_str(), 9, 0);
+            std::transform(tex.begin(), tex.end(), tex.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            if (tex.find("anatomica\\cumoverlays") != std::string::npos) { found = static_cast<int>(i); break; }
+            if (freeSlot < 0 && (tex.empty() || tex.find("default.dds") != std::string::npos)) freeSlot = static_cast<int>(i);
+        }
+        if (level <= 0) {
+            if (found < 0) return;
+            const std::string node = std::format("Body [Ovl{}]", found);
+            Remove(a, node.c_str(), 9, 0); Remove(a, node.c_str(), 7, -1); Remove(a, node.c_str(), 8, -1);
+            return;
+        }
+        const int slot = found >= 0 ? found : freeSlot;
+        if (slot < 0) return;   // no free body overlay slot
+        const std::string node = std::format("Body [Ovl{}]", slot);
+        PutStr(a, node.c_str(), 9, 0, kTex[std::min(level, 2)]);
+        PutInt(a, node.c_str(), 7, col);
+        PutFloat(a, node.c_str(), 8, std::clamp(alpha, 0.05f, 1.0f));
+    }
+
     // the inside (the canal, 3BA_Anus): its own colour texture (Colours page > Inside colour) and "always moist inside".
     // With RaceMenu's C++ override interface straight on it, else through NiOverride's Papyrus functions (older RaceMenu).
     struct InnerSent { std::string path = "\x02"; float moist = -1.0f; };
@@ -1168,6 +1198,15 @@ namespace Engine {
     void Install() { std::thread(Loop).detach(); }
     void BodyMorph(RE::Actor* a, const char* name, const char* key, float v) { if (g_morph && a) g_morph->SetMorph(a, name, key, v); }
     float MorphSum(RE::Actor* a, const char* name) { return (g_morph && a) ? g_morph->GetBodyMorphs(a, name) : 0.0f; }
+    void ClearMorphKey(RE::Actor* a, const char* key) { if (g_morph && a) g_morph->ClearBodyMorphKeys(a, key); }
+    void CumOverlay(RE::Actor* a, int level, int col, float alpha) { CumOverlayOne(a, level, col, alpha); }
+    std::vector<RE::FormID> DuringIds() {
+        std::lock_guard gl(g_gapeMx);
+        std::vector<RE::FormID> v;
+        v.reserve(g_during.size());
+        for (auto& [id, d] : g_during) v.push_back(id);
+        return v;
+    }
 
     void Connect() {
         if (g_asked) return;

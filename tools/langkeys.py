@@ -100,7 +100,7 @@ def keys_of(path):
             if cur is not None: found.append(cur)
             i += 2; continue
         # tables of structs whose strings are menu text: Type NAME[] = {{...}, ...} - which fields (0-based) are text
-        TABLES = {"Rec": (2, 3), "GlobalSetting": (2, 6, 7), "JigglePart": (1,)}
+        TABLES = {"Rec": (2, 3), "GlobalSetting": (2, 6, 7), "JigglePart": (1,), "CatDef": (1, 2)}
         if t[0] == "id" and t[1] in TABLES and i + 4 < len(toks) and toks[i+1][0] == "id" and toks[i+2][1] == "[":
             fields = TABLES[t[1]]
             m = i + 2

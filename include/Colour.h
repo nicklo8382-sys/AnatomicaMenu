@@ -10,7 +10,8 @@ namespace Colour {
     float TenderLevel(RE::FormID id);   // 0-1 reddening right now (0 when "sensitivity" is off)
     float SensClench();                 // how much sharper clenches get while tender (0-1)
     float SensBreath();                 // how much slower breathing gets while tender (0-1)
-    bool CumColour(RE::Actor* giver, float out[3]);   // his race's cum colour (Per race page); false = none
+    bool CumColour(RE::Actor* giver, float out[3]);
+    bool CumGlow(RE::Actor* giver, float out[4]);     // 2.6i: his cum glows (rgb + strength); false = it does not   // his race's cum colour (Per race page); false = none
     void SaveNow();                     // write AnatomicaMenu.ini now
     int RingTexLevel();                 // ring colour textures: mip levels to drop (0 = 2048, 1 = 1024, 2 = 512)
     bool RingStrong();                  // "Stronger skin-blend ring": ring colour textures with doubled opacity

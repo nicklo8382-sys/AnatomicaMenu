@@ -58,10 +58,22 @@ namespace {
         bool ringFullOnly = true;
         float ringDepth = 9.0f;         // units in (the tip) that count as fully in
         float ringShare = 0.25f;        // share of what goes in that squirts back out round the shaft
+        float ringRadius = 1.8f;        // 2.6h: how far round his hole the string lies (units; about the shaft's radius)
         bool plug = true;               // 2.6g: a worn plug holds it all in; pulling it out floods
         float plugDrain = 0.85f;
         bool bath = true;               // 2.6g: washing (Bathing in Skyrim) lets it all out, slowly
         float stuffedAt = 3.0f;         // 2.6g: "stuffed full" from this many loads (SkyrimNet)
+        // 2.6i: some stays hidden in him after he seems empty - crouching or sitting can squirt it out for a few game hours
+        bool late = true;
+        float lateShare = 0.2f;         // share of the most he held
+        float lateHours = 4.0f;         // game hours it can still come out
+        float lateChance = 0.35f;       // chance per check (every ~8 s) while he crouches / sits / kneels
+        // 2.6i: strings of it ease out from inside his canal as it oozes
+        bool innerStrings = true;
+        float innerChance = 0.25f;
+        // 2.6i: cum on his skin (a RaceMenu cum overlay other mods can see)
+        bool overlay = true;
+        float overlayHours = 2.0f;      // game hours it stays after he is empty
     } g;
 
     struct State {
@@ -78,8 +90,9 @@ namespace {
         float walkAcc = 0.0f;
         float ringLeft = 0.0f;          // 2.6f: loads still to squirt round the shaft
         std::uint32_t ringStream = 0;
+        float ringParts = 0.0f;         // 2.6h: particles waiting to make the next string round his rim
         double floodAt = 0.0, leakAt = 0.0;   // 2.6f: when it last started flooding / dripped (SkyrimNet)
-        struct Pool { RE::FormID giver = 0; float rgb[3]{}; float vol = 0.0f; };
+        struct Pool { RE::FormID giver = 0; float rgb[3]{}; float vol = 0.0f; float glow[4]{}; };   // 2.6i: glow (rgb + strength, 0 = none)
         std::vector<Pool> pools;        // 2.6g: each giver's cum and its colour (streaks in a flood)
         bool plugWorn = false;          // 2.6g
         double plugCheck = 0.0;
@@ -89,7 +102,22 @@ namespace {
         double climaxLast = 0.0;
         float acc = 0.0f;               // particles owed (fractions carried over)
         std::uint32_t stream = 0, squirtStream = 0;
+        // 2.6i
+        float peak = 0.0f;              // the most he held this time
+        float residue = 0.0f;           // hidden in him after he seems empty (a late squirt)
+        float residueUntil = 0.0f;      // game hours
+        double lateCheck = 0.0;
+        float emptyAt = -1.0f;          // game hours he was emptied (overlay fades after)
+        int ovlSent = 0; float ovlAlphaSent = -1.0f; int ovlColSent = -1;
+        bool washed = false;            // washed since he was last filled: nothing hidden, no cum on his skin after
     };
+    float GameHours() { auto* c = RE::Calendar::GetSingleton(); return c ? c->GetHoursPassed() : 0.0f; }
+    bool Low(RE::Actor* a) {   // crouching, sitting or kneeling
+        if (!a) return false;
+        if (a->IsSneaking()) return true;
+        auto* st = a->AsActorState();
+        return st && st->GetSitSleepState() == RE::SIT_SLEEP_STATE::kIsSitting;
+    }
 
     using clock_t_ = std::chrono::steady_clock;
     double Now() { return std::chrono::duration<double>(clock_t_::now().time_since_epoch()).count(); }
@@ -104,7 +132,8 @@ namespace {
     // ---- OStrands (0_OStrands.dll): its exports
     using EmitFn = bool (*)(RE::Actor*, std::uint32_t, const float*, const float*, int, const float*);
     using OnFn = bool (*)();
-    struct Api { bool tried = false; int version = 0; EmitFn emit = nullptr; OnFn semenOn = nullptr; } g_api;
+    using EmitGlowFn = bool (*)(RE::Actor*, std::uint32_t, const float*, const float*, int, const float*, const float*);
+    struct Api { bool tried = false; int version = 0; EmitFn emit = nullptr; OnFn semenOn = nullptr; EmitGlowFn emitGlow = nullptr; } g_api;
     void Resolve() {
         if (g_api.tried) return;
         g_api.tried = true;
@@ -114,6 +143,7 @@ namespace {
         auto ver = reinterpret_cast<VerFn>(REX::W32::GetProcAddress(m, "OStrands_ApiVersion"));
         g_api.emit = reinterpret_cast<EmitFn>(REX::W32::GetProcAddress(m, "OStrands_Emit"));
         g_api.semenOn = reinterpret_cast<OnFn>(REX::W32::GetProcAddress(m, "OStrands_SemenOn"));
+        g_api.emitGlow = reinterpret_cast<EmitGlowFn>(REX::W32::GetProcAddress(m, "OStrands_EmitGlow"));
         if (!ver || !g_api.emit) { g_api.emit = nullptr; return; }
         g_api.version = ver();
         logger::info("Anatomica: OStrands link v{} - OStrands draws his cum", g_api.version);
@@ -146,12 +176,19 @@ namespace {
     }
 
     // 2.6g: the colour for this bit of what comes out - one giver's, picked by how much of his is in there (streaks)
+    const float* g_pickGlow = nullptr;   // 2.6i: the glow of the pool PickRgb just picked (Out sends it along)
     const float* PickRgb(const auto& s) {
         float total = 0.0f;
         for (auto& p : s.pools) total += p.vol;
-        if (s.pools.size() < 2 || total <= 0.0f) return s.pools.empty() ? s.rgb : s.pools[0].rgb;
+        g_pickGlow = nullptr;
+        if (s.pools.size() < 2 || total <= 0.0f) {
+            if (s.pools.empty()) return s.rgb;
+            g_pickGlow = s.pools[0].glow;
+            return s.pools[0].rgb;
+        }
         float r = Rand(0.0f, total);
-        for (auto& p : s.pools) { if ((r -= p.vol) <= 0.0f) return p.rgb; }
+        for (auto& p : s.pools) { if ((r -= p.vol) <= 0.0f) { g_pickGlow = p.glow; return p.rgb; } }
+        g_pickGlow = s.pools.back().glow;
         return s.pools.back().rgb;
     }
     // 2.6g: a plug in him (Devious Devices / any worn item with an anal plug keyword)
@@ -174,9 +211,12 @@ namespace {
 
     // emit n particles from his lip (centre c, pointing out along o) with this speed (units/s) and spread
     void Out(RE::Actor* a, std::uint32_t stream, const RE::NiPoint3& at, const RE::NiPoint3& vel, int n, const float rgb[3]) {
+        const float* glow = g_pickGlow;
+        g_pickGlow = nullptr;
         if (n <= 0 || !g_api.emit) return;
         const float p[3] = {at.x, at.y, at.z}, v[3] = {vel.x, vel.y, vel.z};
-        g_api.emit(a, stream, p, v, n, rgb);
+        if (glow && glow[3] > 0.0f && g_api.emitGlow) g_api.emitGlow(a, stream, p, v, n, rgb, glow);   // 2.6i: his glowing cum (OStrands 0.8.0.7+)
+        else g_api.emit(a, stream, p, v, n, rgb);
     }
 
     void StepOne(RE::Actor* a, State& s, float dt, double now) {
@@ -218,6 +258,31 @@ namespace {
             s.plugWorn = worn;
         }
         if (s.plugWorn) { s.gushLeft = s.squirtLeft = s.ringLeft = 0.0f; return; }
+        // 2.6i: a little stays hidden in him once he seems empty; crouching / sitting can squirt it out later
+        {
+            const float gh = GameHours();
+            s.peak = std::max(s.peak, s.vol);
+            const bool flowing = s.gushLeft > 0.0f || s.squirtLeft > 0.0f || s.floodLeft > 0.0f || s.ringLeft > 0.0f;
+            if (s.vol <= 0.03f && !flowing && s.peak >= 0.3f) {
+                if (g.late && !s.washed) { s.residue = s.peak * g.lateShare; s.residueUntil = gh + g.lateHours; }
+                s.emptyAt = s.washed ? -100.0f : gh;
+                s.peak = 0.0f;
+            }
+            if (s.residue > 0.0f && gh > s.residueUntil) s.residue = 0.0f;
+            if (g.late && s.residue > 0.01f && !plugged && now - s.lateCheck > 8.0 && !(g.dressed && Covered(a))) {
+                s.lateCheck = now;
+                if (Low(a) && Rand(0.0f, 1.0f) < g.lateChance) {
+                    const float r = std::min(s.residue, std::max(0.08f, s.residue * Rand(0.4f, 1.0f)));
+                    s.residue -= r;
+                    s.vol += r;
+                    s.squirtLeft += r;
+                    s.squirtSpeed = Rand(14.0f, 24.0f);
+                    s.squirtStream = g_nextStream++;
+                    s.leakAt = now;
+                    if (g.wetTrail) Wet(a, 0.6f);
+                }
+            }
+        }
         // 2.6e flood: each time he opens up past the threshold, a chance it all starts pouring out in one stream
         const float lvl = Lvl(a->GetFormID());
         if (g.flood && !plugged && gape >= g.floodGape && s.lastGape < g.floodGape && s.vol > 0.05f && s.floodLeft <= 0.0f &&
@@ -246,17 +311,34 @@ namespace {
                 s.floodFree = Rand(0.0f, 1.0f) < g.standFree;
             }
         }
-        if (s.ringLeft > 0.0f) {   // 2.6f: squirting out all round the shaft while a load is pumped into him
+        if (s.ringLeft > 0.0f) {   // 2.6h: what is pumped into him fully in wells out round his rim as a string lying on the edge
             const float now_ = take(std::min(s.ringLeft, s.ringLeft * dt / 0.3f + 0.01f));
             s.ringLeft = s.vol <= 0.001f ? 0.0f : s.ringLeft - now_;
-            const int n = static_cast<int>(std::lround(now_ * per));
-            const int k = std::max(1, std::min(8, n));
+            s.ringParts += now_ * per;
             const RE::NiPoint3 up = out.Cross(side);
-            for (int i = 0; i < k; ++i) {
-                const float t = 6.2831853f * (static_cast<float>(i) + Rand(0.0f, 0.6f)) / static_cast<float>(k);
-                const RE::NiPoint3 radial = side * std::cos(t) + up * std::sin(t);
-                Out(a, s.ringStream + static_cast<std::uint32_t>(i), c + radial * 1.3f + out * 0.2f, radial * Rand(3.0f, 6.0f) + out * Rand(2.0f, 4.0f), n / k + (i < n % k ? 1 : 0), PickRgb(s));
+            const float hole = std::clamp(Engine::DuringOf(a->GetFormID()).hole, 0.0f, 1.0f);
+            const float r = g.ringRadius * (0.8f + 0.4f * hole);
+            // OStrands links consecutive particles of one stream that sit closer than ~0.8 units: points ~0.45 apart all
+            // the way round make one closed string; a bigger load lays two particles per point (a thicker string)
+            const int pts = std::clamp(static_cast<int>(6.2831853f * r / 0.45f), 12, 48);
+            const bool last = s.ringLeft <= 0.0f;
+            while (s.ringParts >= static_cast<float>(pts) || (last && s.ringParts >= 6.0f)) {
+                const int thick = s.ringParts >= 2.5f * pts ? 2 : 1;
+                const int use = std::min(static_cast<int>(s.ringParts), pts * thick);
+                const int n = std::max(6, use / thick);
+                s.ringStream = g_nextStream++;
+                const float t0 = Rand(0.0f, 6.2831853f);
+                for (int i = 0; i <= n; ++i) {   // one past the start, so the string closes on itself
+                    const float t = t0 + 6.2831853f * static_cast<float>(i) / static_cast<float>(n);
+                    const RE::NiPoint3 radial = side * std::cos(t) + up * std::sin(t);
+                    const float swell = Rand(0.9f, 1.1f);
+                    Out(a, s.ringStream, c + radial * (r * swell) + out * 0.35f, radial * Rand(6.0f, 10.0f) + out * Rand(4.0f, 8.0f),
+                        thick, PickRgb(s));
+                }
+                s.ringParts -= static_cast<float>(use);
+                if (last) { s.ringParts = 0.0f; break; }
             }
+            if (last) s.ringParts = 0.0f;
         }
         if (s.floodLeft > 0.0f) {   // a steady pour from his lip, down and a little out, as one stream
             if (g.wetTrail) Wet(a, 0.8f);
@@ -306,7 +388,7 @@ namespace {
             take(static_cast<float>(n) / per);
             const float t = Rand(0.0f, 6.2831853f);
             const RE::NiPoint3 radial = side * std::cos(t) + out.Cross(side) * std::sin(t);
-            Out(a, g_nextStream++, c + radial * 1.2f + out * 0.2f, radial * 4.0f + out * 3.0f + down * 2.0f, n, PickRgb(s));
+            Out(a, g_nextStream++, c + radial * g.ringRadius + out * 0.35f, radial * 4.0f + out * 3.0f + down * 2.0f, n, PickRgb(s));   // 2.6h: at his rim, outside the shaft
             return;
         }
         // open: it oozes out, faster the wider he gapes (2.6e: not at all while he is closed, if he holds it in)
@@ -317,6 +399,21 @@ namespace {
         if (n <= 0) return;
         s.acc -= static_cast<float>(n);
         take(static_cast<float>(n) / per);
+        if (g.innerStrings && s.vol > 0.05f && Rand(0.0f, 1.0f) < g.innerChance * 0.2f) {
+            // 2.6i: a string eases out from inside his canal: a linked rope that starts deep and slides out over the rim
+            const int k = static_cast<int>(Rand(6.0f, 11.0f));
+            take(static_cast<float>(k) / per);
+            const std::uint32_t rs = g_nextStream++;
+            RE::NiPoint3 in = d - c;
+            if (in.Unitize() < 1e-3f) in = out * -1.0f;
+            const float len = 0.38f * static_cast<float>(k);
+            for (int i = 0; i < k; ++i) {
+                const float t = 1.0f - static_cast<float>(i) / static_cast<float>(k - 1);   // deepest first, so it follows the string out
+                const RE::NiPoint3 p = c + in * (len * t * 0.55f) + out * 0.15f;
+                Out(a, rs, p, out * Rand(1.5f, 2.6f) + down * 0.6f, 1, PickRgb(s));
+            }
+            return;
+        }
         if (Rand(0.0f, 1.0f) < 0.05f) s.stream = g_nextStream++;
         Out(a, s.stream, low, out * Rand(1.0f, 3.0f) + down * 2.0f, n, PickRgb(s));
     }
@@ -330,6 +427,9 @@ namespace {
         last = now;
         if (g_api.semenOn && !g_api.semenOn()) return;
         std::vector<std::pair<RE::Actor*, float>> wets;
+        struct Ovl { RE::Actor* a; int level; int col; float alpha; };
+        std::vector<Ovl> ovls;
+        const float gh = GameHours();
         {
         std::lock_guard lk(g_mx);
         g_wets = &wets;
@@ -337,7 +437,31 @@ namespace {
             auto* a = RE::TESForm::LookupByID<RE::Actor>(it->first);
             State& s = it->second;
             if (s.giver && now - s.climaxLast > 3.0) { g_filled.push_back({it->first, s.giver, s.climax, false}); s.giver = 0; s.climax = 0.0f; }
-            const bool done = s.vol <= 0.001f && s.gushLeft <= 0.0f && s.squirtLeft <= 0.0f && s.floodLeft <= 0.0f && s.ringLeft <= 0.0f && !s.giver;
+            // 2.6i: cum on his skin - film while he holds it, dripping when full or running out; fades after he is empty
+            int level = 0; float alpha = 0.0f;
+            if (g.overlay && a) {
+                const bool running = now - s.floodAt < 30.0 || now - s.leakAt < 10.0;
+                if (s.vol > 0.05f || running) {
+                    level = (s.vol >= 1.5f || (running && s.vol > 0.3f)) ? 2 : 1;
+                    alpha = 0.55f + 0.15f * std::min(s.vol, 3.0f);
+                } else if (s.emptyAt >= 0.0f && gh - s.emptyAt < g.overlayHours) {
+                    level = 1;
+                    alpha = 0.65f * (1.0f - (gh - s.emptyAt) / std::max(g.overlayHours, 0.1f)) + 0.1f;
+                }
+                const int col = (static_cast<int>(std::clamp(s.rgb[0], 0.0f, 1.0f) * 255.0f) << 16) |
+                                (static_cast<int>(std::clamp(s.rgb[1], 0.0f, 1.0f) * 255.0f) << 8) | static_cast<int>(std::clamp(s.rgb[2], 0.0f, 1.0f) * 255.0f);
+                if (level != s.ovlSent || std::abs(alpha - s.ovlAlphaSent) > 0.04f || col != s.ovlColSent) {
+                    if (a->Is3DLoaded()) {
+                        ovls.push_back({a, level, col, alpha});
+                        s.ovlSent = level; s.ovlAlphaSent = alpha; s.ovlColSent = col;
+                    }
+                }
+            } else if (a && s.ovlSent) {
+                ovls.push_back({a, 0, 0, 0.0f});
+                s.ovlSent = 0;
+            }
+            const bool done = s.vol <= 0.001f && s.gushLeft <= 0.0f && s.squirtLeft <= 0.0f && s.floodLeft <= 0.0f && s.ringLeft <= 0.0f && !s.giver &&
+                              s.residue <= 0.01f && s.ovlSent == 0;
             if (!a || a->IsDead() || (done && now - s.lastWorked > 5.0)) { it = g_st.erase(it); continue; }
             if (s.stuffed && s.vol < g.stuffedAt * 0.5f) s.stuffed = false;
             if (a->Is3DLoaded()) StepOne(a, s, dt, now);
@@ -346,6 +470,7 @@ namespace {
         g_wets = nullptr;
         }
         for (auto& [a, w] : wets) Colour::AddWet(a, w);   // (outside our lock: Colour has its own)
+        for (auto& o : ovls) Engine::CumOverlay(o.a, o.level, o.col, o.alpha);
     }
 
     void Loop() {
@@ -383,6 +508,7 @@ namespace {
             s.climax = 0.0f;
         }
         s.giver = giver ? giver->GetFormID() : 0;
+        s.washed = false;   // 2.6i
         s.climax += loads;
         s.climaxLast = now;
         // 2.6f: the ring - pumped in while fully in, some squirts straight back out all round the shaft
@@ -390,7 +516,7 @@ namespace {
             const Engine::During d = Engine::DuringOf(recv->GetFormID());
             if (!g.ringFullOnly || d.depth >= g.ringDepth) {
                 if (s.ringLeft <= 0.0f) s.ringStream = g_nextStream, g_nextStream += 8;
-                s.ringLeft += loads * g.ringShare;
+                s.ringLeft += loads * g.ringShare * Colossal::RingBoost(giver);   // 2.6i: a werewolf's wells out far more
             }
         }
         const float cap = g.maxLoads * ByExp(g.holdTight, g.holdUsed, Lvl(recv->GetFormID()));   // 2.6f: a well-used man holds more
@@ -410,6 +536,7 @@ namespace {
                 }
                 State::Pool np; np.giver = gid;
                 for (int i = 0; i < 3; ++i) np.rgb[i] = rgb ? rgb[i] : s.rgb[i];
+                if (giver) Colour::CumGlow(giver, np.glow);   // 2.6i
                 s.pools.push_back(np);
                 it = s.pools.end() - 1;
             }
@@ -483,11 +610,11 @@ namespace OStrandsLink {
             return std::string("a squirt, as from a full clench");
         });
         ImGuiMCP::SameLine();
-        act("Squirt round the shaft", [&](State& s) {
+        act("Ring round his rim", [&](State& s) {
             if (s.vol <= 0.02f) return std::string("he holds nothing - fill him first");
             if (s.ringLeft <= 0.0f) s.ringStream = g_nextStream, g_nextStream += 8;
             s.ringLeft += std::min(s.vol, 0.5f);
-            return std::string("a ring of squirts, as when he is filled fully in");
+            return std::string("a string of cum round his rim, as when he is filled fully in");
         });
         ImGuiMCP::SameLine();
         act("Flood now", [&](State& s) {
@@ -511,8 +638,12 @@ namespace OStrandsLink {
         std::lock_guard lk(g_mx);
         if (!g.on || !g.bath) return;
         auto it = g_st.find(id);
-        if (it == g_st.end() || it->second.vol <= 0.05f || it->second.plugWorn) return;
+        if (it == g_st.end()) return;
+        it->second.washed = true;
+        if (it->second.vol <= 0.05f || it->second.plugWorn) { it->second.residue = 0.0f; it->second.emptyAt = -100.0f; return; }
         State& s = it->second;
+        s.residue = 0.0f;       // 2.6i: washed out: nothing hidden left, and the cum on his skin goes
+        s.emptyAt = -100.0f;
         s.floodLeft = s.vol;
         s.floodRate = s.floodLeft / std::max(g.floodSeconds * 2.5f, 3.0f);
         s.floodStream = g_nextStream++;
@@ -538,6 +669,9 @@ namespace OStrandsLink {
         h.leaking = now - it->second.leakAt < 4.0 || h.flooding;
         h.filling = it->second.giver != 0;
         h.plugged = it->second.plugWorn;
+        h.giver = it->second.giver;
+        h.stuffed = it->second.stuffed || it->second.vol >= g.maxLoads * 0.95f;
+        h.most = g.maxLoads;
         return h;
     }
     std::vector<Filled> TakeFilled() {
@@ -641,14 +775,17 @@ namespace OStrandsLink {
             }
             ch |= Tr::SliderFloat("Most he holds", &g.maxLoads, 1.0f, 10.0f, "%.1f loads");
             Help("More than this comes straight back out.");
-            ch |= Tr::Checkbox("Squirts out round the shaft while he is filled", &g.ring);
-            Help("While a load is pumped into him, some squirts straight back out all round the shaft, as when he is too full to take it all.");
+            ch |= Tr::Checkbox("Wells out round his rim while he is filled", &g.ring);
+            Help("While a load is pumped into him, some wells straight back out and lies round the edge of his hole as a string of cum, as when he is too full to take it all.");
             if (g.ring) {
                 ImGuiMCP::Indent();
                 float rs = g.ringShare * 100.0f;
-                if (Tr::SliderFloat("How much squirts back out", &rs, 5.0f, 80.0f, "%.0f%% of each load")) { g.ringShare = rs / 100.0f; ch = true; }
+                if (Tr::SliderFloat("How much wells back out", &rs, 5.0f, 80.0f, "%.0f%% of each load")) { g.ringShare = rs / 100.0f; ch = true; }
                 ch |= Tr::Checkbox("Only when he is fully in", &g.ringFullOnly);
                 if (g.ringFullOnly) ch |= Tr::SliderFloat("Fully in from", &g.ringDepth, 2.0f, 30.0f, "%.0f units deep");
+                ch |= Tr::SliderFloat("Size of the ring", &g.ringRadius, 0.8f, 4.0f, "%.1f units round his hole");
+                Help("It wells out of him as a string of cum lying round the edge of his hole. Make it bigger if it sits inside "
+                     "a thick schlong, smaller if it stands off his rim.");
                 ImGuiMCP::Unindent();
             }
             ch |= Tr::Checkbox("A plug holds it in", &g.plug);
@@ -659,6 +796,29 @@ namespace OStrandsLink {
                 if (Tr::SliderFloat("Pulling it out lets out", &pd, 10.0f, 100.0f, "%.0f%% of what he holds")) { g.plugDrain = pd / 100.0f; ch = true; }
                 ImGuiMCP::Unindent();
             }
+            ch |= Tr::Checkbox("Some stays hidden in him", &g.late);   // 2.6i
+            Help("After he seems empty, a little is still in him for a while: crouching, sitting or kneeling can squirt it out.");
+            if (g.late) {
+                ImGuiMCP::Indent();
+                float ls = g.lateShare * 100.0f;
+                if (Tr::SliderFloat("How much stays", &ls, 0.0f, 80.0f, "%.0f%% of the most he held")) { g.lateShare = ls / 100.0f; ch = true; }
+                ch |= Tr::SliderFloat("For", &g.lateHours, 0.5f, 48.0f, "%.1f game hours");
+                float lc = g.lateChance * 100.0f;
+                if (Tr::SliderFloat("Chance when he crouches or sits", &lc, 0.0f, 100.0f, "%.0f%% (checked every few seconds)")) { g.lateChance = lc / 100.0f; ch = true; }
+                ImGuiMCP::Unindent();
+            }
+            ch |= Tr::Checkbox("Strings ease out from inside him", &g.innerStrings);
+            Help("While it oozes out of him, now and then a string of it slides out from inside his canal over the rim.");
+            if (g.innerStrings) {
+                ImGuiMCP::SameLine();
+                ImGuiMCP::SetNextItemWidth(140.0f);
+                float ic = g.innerChance * 100.0f;
+                if (Tr::SliderFloat("##inner", &ic, 0.0f, 100.0f, "%.0f%% as often")) { g.innerChance = ic / 100.0f; ch = true; }
+            }
+            ch |= Tr::Checkbox("Cum shows on his skin", &g.overlay);
+            Help("A RaceMenu body overlay round his anus while he holds cum, dripping when full or running out, fading after he is empty "
+                 "(washing takes it off). Other mods that look for cum overlays (DDF, cum-overlay mods) see it. Uses one free body overlay slot.");
+            if (g.overlay) ch |= Tr::SliderFloat("Stays after he is empty", &g.overlayHours, 0.1f, 48.0f, "%.1f game hours");
             ch |= Tr::Checkbox("Washing lets it all out", &g.bath);
             Help("Bathing in Skyrim: when he washes, it all slowly runs out of him.");
             ch |= Tr::SliderFloat("Stuffed full at", &g.stuffedAt, 1.0f, 10.0f, "%.1f loads");
@@ -709,7 +869,11 @@ namespace OStrandsLink {
         B("WetTrail", g.wetTrail); B("ByExp", g.byExp); F("HoldTight", g.holdTight, 0.2f, 3.0f); F("HoldUsed", g.holdUsed, 0.2f, 3.0f);
         F("SquirtTight", g.squirtTight, 0.2f, 3.0f); F("SquirtUsed", g.squirtUsed, 0.2f, 3.0f); F("FloodTight", g.floodTight, 0.2f, 3.0f); F("FloodUsed", g.floodUsed, 0.2f, 3.0f);
         B("Plug", g.plug); F("PlugDrain", g.plugDrain, 0.1f, 1.0f); B("Bath", g.bath); F("StuffedAt", g.stuffedAt, 1.0f, 10.0f);
+        B("Late", g.late); F("LateShare", g.lateShare, 0.0f, 0.8f); F("LateHours", g.lateHours, 0.5f, 48.0f); F("LateChance", g.lateChance, 0.0f, 1.0f);
+        B("InnerStrings", g.innerStrings); F("InnerChance", g.innerChance, 0.0f, 1.0f);
+        B("Overlay", g.overlay); F("OverlayHours", g.overlayHours, 0.1f, 48.0f);
         B("Ring", g.ring); B("RingFullOnly", g.ringFullOnly); F("RingDepth", g.ringDepth, 2.0f, 30.0f); F("RingShare", g.ringShare, 0.05f, 0.8f);
+        F("RingRadius", g.ringRadius, 0.8f, 4.0f);
         B("Stand", g.stand); F("StandChance", g.standChance, 0.0f, 1.0f); F("StandDrain", g.standDrain, 0.05f, 1.0f); F("StandFree", g.standFree, 0.0f, 1.0f);
     }
 }
@@ -731,6 +895,11 @@ extern "C" {
     // the giver's cum colour from the Per race page (0-1). false = none set (only with Anatomica's cum on, Features.h)
     __declspec(dllexport) bool Anatomica_CumColour(RE::Actor* giver, float* rgb) {
         return giver && rgb && Colour::CumColour(giver, rgb);
+    }
+
+    // 2.6i: does this man's cum glow (vampires, daedra, races picked on the Cum colour (OStrands) section)? rgb 0-1 + strength
+    __declspec(dllexport) bool Anatomica_CumGlow(RE::Actor* giver, float* out) {
+        return giver && out && Colour::CumGlow(giver, out);
     }
 
     // true: give Anatomica what goes into this man's anus (it lets it out again through OStrands)

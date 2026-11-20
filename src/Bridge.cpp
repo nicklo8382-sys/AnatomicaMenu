@@ -1,3 +1,4 @@
+#include "Talk.h"
 #include "Bridge.h"
 #include "Lang.h"
 #include "Mu.h"
@@ -521,6 +522,7 @@ namespace Bridge {
         Mu::Ini(ini, save);
         OStrandsLink::Ini(ini, save);   // 2.5w
         Colossal::Ini(ini, save);       // 2.6c
+        Talk::Ini(ini, save);           // 2.6i
         Extras::Ini(ini, save);
     }
 
@@ -960,6 +962,7 @@ namespace Bridge {
         ch |= OStrandsLink::RenderSection();   // 2.5w
         ch |= Colossal::RenderSection();       // 2.6c
         Colour::RenderOStrandsCum();           // 2.6f
+        ch |= Talk::RenderSection();           // 2.6i
         if (ch) Colour::SaveNow();
     }
 }

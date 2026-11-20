@@ -17,7 +17,8 @@ namespace OStrandsLink {
     std::string Status(RE::Actor* a);                             // one line for the Status page ("" = nothing)
     float Belly(RE::FormID id);
     // 2.6f: for SkyrimNet - what he holds now, and the fillings that just finished
-    struct Held { float vol = 0.0f; bool flooding = false, leaking = false, filling = false, plugged = false; double floodAt = 0.0; };
+    struct Held { float vol = 0.0f; bool flooding = false, leaking = false, filling = false, plugged = false; double floodAt = 0.0;
+                  RE::FormID giver = 0; bool stuffed = false; float most = 0.0f; };   // 2.6i: who is filling him, over "stuffed", the most he holds
     void Bathed(RE::FormID id);                                   // 2.6g: he washed (Bathing in Skyrim) - it all runs out
     std::vector<RE::FormID> TakeStuffed();                        // 2.6g: men who just got stuffed full (SkyrimNet)
     Held HeldOf(RE::FormID id);

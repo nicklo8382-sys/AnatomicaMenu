@@ -47,6 +47,9 @@ namespace Colossal {
             float chance = 0.10f;          // any other man, per scene
             Load men = L(2.0f, 1.3f, 1.4f, 1.3f, 1.2f, 1.2f);
             bool creatures = true;         // (More Nasty Critters only)
+            bool ww = true;                // 2.6i: men transformed into werewolves / werebears (no More Nasty Critters needed)
+            Load wwLoad = L(4.5f, 1.7f, 2.2f, 1.9f, 1.5f, 1.6f);
+            float wwRing = 2.0f;           // x how much wells out round his rim while a werewolf fills him
             std::map<std::string, Load> types;              // type key -> its load
             std::map<std::string, std::pair<bool, Load>> groups;   // MNC group -> own load on, the load
         } g;
@@ -69,6 +72,22 @@ namespace Colossal {
             return o;
         }
         bool Male(RE::Actor* a) { auto* b = a ? a->GetActorBase() : nullptr; return b && b->GetSex() != RE::SEX::kFemale; }
+        bool Were(RE::Actor* a) {   // 2.6i: the vanilla werewolf / werebear beast races, or any race named like one
+            auto* race = a ? a->GetRace() : nullptr;
+            if (!race) return false;
+            static RE::TESRace* ww = nullptr; static RE::TESRace* wb = nullptr; static bool looked = false;
+            if (!looked) {
+                looked = true;
+                if (auto* dh = RE::TESDataHandler::GetSingleton()) {
+                    ww = dh->LookupForm<RE::TESRace>(0x0CDD84, "Skyrim.esm");
+                    wb = dh->LookupForm<RE::TESRace>(0x01E17B, "Dragonborn.esm");
+                }
+            }
+            if (race == ww || (wb && race == wb)) return true;
+            std::string n = race->GetFullName() ? race->GetFullName() : "";
+            std::transform(n.begin(), n.end(), n.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            return n.find("werewolf") != std::string::npos || n.find("werebear") != std::string::npos;
+        }
 
         void Help(const char* t) {
             ImGuiMCP::SameLine();
@@ -133,8 +152,14 @@ namespace Colossal {
         const std::string key = mnc ? Mnc::TypeFor(giver) : std::string();
         const std::string group = mnc ? Mnc::GroupName(giver) : std::string();
         const int cat = creature ? -1 : Size::Cat(giver);
+        const bool were = Were(giver);
         std::lock_guard lk(g_mx);
         if (!g.on) return false;
+        if (were && g.ww) {   // 2.6i: a man turned werewolf - his own huge load, More Nasty Critters or not
+            weight = 1.0f;
+            load = g.wwLoad;
+            return true;
+        }
         if (creature) {   // without More Nasty Critters creatures stay as they are
             if (!mnc || !g.creatures) return true;
             if (auto it = g.groups.find(group); !group.empty() && it != g.groups.end() && it->second.first) load = it->second.second;
@@ -156,6 +181,13 @@ namespace Colossal {
         weight = w;
         load = Mix(g.men, w);
         return true;
+    }
+
+    bool IsWerewolf(RE::Actor* a) { return Were(a); }
+    float RingBoost(RE::Actor* giver) {
+        if (!giver || !Were(giver)) return 1.0f;
+        std::lock_guard lk(g_mx);
+        return g.on && g.ww ? g.wwRing : 1.0f;
     }
 
     std::string Describe(RE::Actor* giver) {
@@ -184,6 +216,16 @@ namespace Colossal {
             Help("Rolled once per man per scene: when it hits, his finish is a full Colossal Load whatever his size. 0% = off.");
             Tr::TextDisabled("A man's Colossal Load (x his normal load):");
             ch |= Edit("men", g.men);
+            ImGuiMCP::TreePop();
+        }
+        if (Tr::TreeNode("Werewolves (transformed men)###clww")) {   // 2.6i
+            ch |= Tr::Checkbox("A man turned werewolf or werebear finishes with his own huge load", &g.ww);
+            Help("The beast forms of men (vampire lords not included). Works without More Nasty Critters.");
+            if (g.ww) {
+                ch |= Edit("ww", g.wwLoad);
+                ch |= Tr::SliderFloat("Wells out round his rim", &g.wwRing, 1.0f, 4.0f, "x%.1f");
+                Help("How much more of it wells straight back out round the bottom's rim while a werewolf fills him (Integrations page, OStrands: Wells out round his rim).");
+            }
             ImGuiMCP::TreePop();
         }
         if (Mnc::Active()) {
@@ -243,6 +285,7 @@ namespace Colossal {
         if (save) {
             ini.SetBoolValue(S, "On", g.on); ini.SetBoolValue(S, "BySize", g.bySize); ini.SetDoubleValue(S, "Chance", g.chance);
             ini.SetValue(S, "Men", g.men.Save().c_str()); ini.SetBoolValue(S, "Creatures", g.creatures);
+            ini.SetBoolValue(S, "Werewolves", g.ww); ini.SetValue(S, "Werewolf", g.wwLoad.Save().c_str()); ini.SetDoubleValue(S, "WerewolfRing", g.wwRing);
             ini.Delete("ColossalLoadTypes", nullptr);
             for (auto& [k, l] : g.types) ini.SetValue("ColossalLoadTypes", k.c_str(), l.Save().c_str());
             ini.Delete("ColossalLoadGroups", nullptr);
@@ -252,6 +295,8 @@ namespace Colossal {
         g.on = ini.GetBoolValue(S, "On", g.on); g.bySize = ini.GetBoolValue(S, "BySize", g.bySize);
         g.chance = std::clamp(static_cast<float>(ini.GetDoubleValue(S, "Chance", g.chance)), 0.0f, 1.0f);
         g.men = Load::Parse(ini.GetValue(S, "Men", ""), g.men); g.creatures = ini.GetBoolValue(S, "Creatures", g.creatures);
+        g.ww = ini.GetBoolValue(S, "Werewolves", g.ww); g.wwLoad = Load::Parse(ini.GetValue(S, "Werewolf", ""), g.wwLoad);
+        g.wwRing = std::clamp(static_cast<float>(ini.GetDoubleValue(S, "WerewolfRing", g.wwRing)), 1.0f, 4.0f);
         CSimpleIniA::TNamesDepend keys;
         ini.GetAllKeys("ColossalLoadTypes", keys);
         for (auto& k : keys) g.types[k.pItem] = Load::Parse(ini.GetValue("ColossalLoadTypes", k.pItem, ""), TypeLoad(k.pItem));

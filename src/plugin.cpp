@@ -6,6 +6,7 @@
 #include "Bridge.h"
 #include "Colour.h"
 #include "Lang.h"
+#include "Talk.h"
 
 void OnMessage(SKSE::MessagingInterface::Message* message) {
     switch (message->type) {
@@ -22,6 +23,7 @@ void OnMessage(SKSE::MessagingInterface::Message* message) {
             Engine::Reset();
             Wink::Reset();
             Bridge::OnGameLoaded();   // SkyrimNet decorators / actions, bathing
+            Talk::Reset();            // 2.6i
             UI::ApplySavedSettings();
             break;
         default:

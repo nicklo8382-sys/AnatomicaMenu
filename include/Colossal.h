@@ -16,7 +16,9 @@ namespace Colossal {
     };
     // weight 0 = a normal load, 1 = his full Colossal Load (in between for TNG L); false = Colossal Load is off
     bool For(RE::Actor* giver, RE::Actor* receiver, float& weight, Load& load);
-    std::string Describe(RE::Actor* giver);     // one line for the menu ("" = nothing to say)
+    std::string Describe(RE::Actor* giver);
+    bool IsWerewolf(RE::Actor* a);              // 2.6i: a werewolf / werebear beast form
+    float RingBoost(RE::Actor* giver);          // 2.6i: x what wells out round the rim while he fills someone (werewolves)     // one line for the menu ("" = nothing to say)
     bool RenderSection();                       // Integrations page
     void Ini(CSimpleIniA& ini, bool save);      // [ColossalLoad], [ColossalLoadTypes], [ColossalLoadGroups]
 }

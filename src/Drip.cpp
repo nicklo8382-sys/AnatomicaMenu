@@ -1,3 +1,4 @@
+#include "Talk.h"
 #include "Drip.h"
 #include "Lang.h"
 #include "Virgin.h"
@@ -864,6 +865,7 @@ namespace Drip {
         std::thread(Loop).detach();
         Fluid::Install();
         OStrandsLink::Install();   // 2.5w
+        Talk::Install();           // 2.6i
     }
 
     void RegisterFuncs(RE::BSScript::IVirtualMachine* vm) {
