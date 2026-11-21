@@ -142,11 +142,25 @@ namespace {
     }
     // how deep o's schlong is in him: the tip (past the last bone) measured along his canal axis, and where it is
     struct Tip { bool ok = false; float depth = 0.0f; V p; };
+    // 2.6m: the schlong's bones base to tip - a werewolf / Vampire Lord / werebear's hangs on its own bones (their
+    // skeletons carry the human genital bones too, unused: he never counted as in, so the anus did not react)
+    std::vector<const char*> ShaftBones(RE::Actor* o, RE::NiAVObject* root) {
+        static const std::vector<const char*> kHuman{"NPC Genitals01 [Gen01]", "NPC Genitals02 [Gen02]", "NPC Genitals03 [Gen03]",
+                                                     "NPC Genitals04 [Gen04]", "NPC Genitals05 [Gen05]", "NPC Genitals06 [Gen06]"};
+        static const std::vector<std::vector<const char*>> kBeast{
+            {"WWD 2", "WWD 3", "WWD 4", "WWD 5", "WWD 6", "WWD 7", "WWD 8", "WWD 9"},
+            {"VLDick02", "VLDick03", "VLDick04", "VLDick05", "VLDick06"},
+            {"BearD 4", "BearD 5", "BearD 6", "BearD 7", "BearD 8", "BearD 9"}};
+        if (o && root && Colossal::BeastForm(o) != 0)
+            for (auto& c : kBeast) if (Node(root, c.front()) && Node(root, c.back())) return c;
+        return kHuman;
+    }
     Tip TipIn(const Canal& c, RE::Actor* o) {
         Tip t;
         auto* root = o ? o->Get3D(false) : nullptr;
-        auto* g6 = Node(root, "NPC Genitals06 [Gen06]");
-        auto* g5 = Node(root, "NPC Genitals05 [Gen05]");
+        const auto bones = ShaftBones(o, root);
+        auto* g6 = Node(root, bones[bones.size() - 1]);
+        auto* g5 = Node(root, bones[bones.size() - 2]);
         if (!g6 || !g5) return t;
         V d = V(g6->world.translate) - V(g5->world.translate);
         const float ld = Len(d);
@@ -160,8 +174,8 @@ namespace {
     int Inside(const Canal& c, RE::Actor* o, float rad) {
         auto* root = o->Get3D(false);
         if (!root) return 0;
-        static const char* kGen[] = {"NPC Genitals06 [Gen06]", "NPC Genitals05 [Gen05]", "NPC Genitals04 [Gen04]",
-                                     "NPC Genitals03 [Gen03]", "NPC Genitals02 [Gen02]", "NPC Genitals01 [Gen01]"};
+        auto kGen = ShaftBones(o, root);   // 2.6m: tip first
+        std::reverse(kGen.begin(), kGen.end());
         const float r = rad * c.sc, tol = -0.5f * r, r2 = r * r, tmax = 8.0f * c.sc;
         const float nearT = -3.0f * c.sc, nr2 = r2 * 2.6f;   // ~1.6x the radius, up to 3 units in front of the hole
         int best = 0;

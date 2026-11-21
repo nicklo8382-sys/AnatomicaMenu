@@ -743,7 +743,7 @@ namespace OStrandsLink {
         const int each = kind == 1 ? 34 : kind == 2 ? 8 : 18;
         for (int i = 0; i < spurts; ++i) {   // fanned a little: some across his lips, some higher on his cheek and nose
             const float sx = Rand(-1.0f, 1.0f), sy = Rand(-0.3f, 1.0f);
-            const RE::NiPoint3 from = mouth + fwd * 3.0f + side * (sx * 1.0f) + up * (sy * 1.0f - 1.0f);   // 2.6l: right by his lips (was 9 out)
+            const RE::NiPoint3 from = mouth + fwd * 1.2f + side * (sx * 0.8f) + up * (sy * 0.8f - 0.6f);   // 2.6m: at his lips (2.6l: 3 out, 2.6k: 9)
             const RE::NiPoint3 to = mouth + side * (sx * 2.2f) + up * (sy * 2.5f);
             RE::NiPoint3 dir = to - from;
             dir = dir / std::max(dir.Length(), 0.01f);

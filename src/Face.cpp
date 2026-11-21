@@ -29,7 +29,7 @@ namespace Face {
         struct Settings {
             bool on = true;
             bool jaw = true;
-            bool toDeepFit = true;        // 2.6k: with SMP Head - DeepFit installed, the mouth (lips, jaw, throat) is DeepFit's alone
+            bool toDeepFit = true;        // 2.6n: with SMP Head - DeepFit installed the mouth (jaw, lips, throat) is DeepFit's alone - it opens it to the schlong
             float jawMax = 0.8f;          // how wide (0-1 of the "big aah" shape) for the thickest schlong
             float jawMin = 0.6f;          // 2.6k: at least this wide for any schlong in his mouth (a slim one still needs room)
             bool throat = false;          // experimental: neck bone scale
@@ -631,7 +631,7 @@ namespace Face {
                 if (Tr::CollapsingHeader("Jaw###fjaw")) {
                     if (DeepFitHere()) {
                         ch |= Tr::Checkbox("Leave the mouth to SMP Head - DeepFit", &g.toDeepFit);
-                        Help("DeepFit is installed: it opens the lips round the schlong and bulges the throat on High Poly Heads. On: Anatomica moves no one's mouth (a head without DeepFit's mouth bones keeps its own). Gags still squeeze his eyes and brows.");
+                        Help("DeepFit is installed: it opens the mouth as wide as the schlong is thick (or as wide as it goes, its Mega mouth), fits the lips round it and bulges the throat (DeepFit.ini). On: Anatomica leaves the mouth to it. Off: Anatomica opens the jaw too (Widest / At least below). Gags still squeeze his eyes and brows.");
                     }
                     ch |= Tr::Checkbox("His mouth opens as wide as the schlong is thick", &g.jaw);
                     Help("Uses his face's own open-mouth shape, on top of OStim's expression. Thickness from The New Gentleman's size (XS to XL); average when not known.");

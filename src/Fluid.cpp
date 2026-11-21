@@ -1,4 +1,5 @@
 #include "Fluid.h"
+#include "Colossal.h"
 #include "Lang.h"
 #include "Extras.h"
 #include "Colour.h"
@@ -1435,6 +1436,23 @@ namespace {
             if (si->boneWorldTransforms && so->boneWorldTransforms) si->boneWorldTransforms[b] = so->boneWorldTransforms[b];
         }
         si->rootParent = so->rootParent;
+        // 2.6m: a face (BSDynamicTriShape) draws from its own dynamic vertex buffer - the copy needs one of its own (a clone
+        // came without one, or shared the face's), filled from the face now and every frame after (TickFaces)
+        if (auto* sdt = netimmerse_cast<RE::BSDynamicTriShape*>(src)) {
+            if (auto* cdt = netimmerse_cast<RE::BSDynamicTriShape*>(geo)) {
+                auto& sd = sdt->GetDynamicTrishapeRuntimeData();
+                auto& cd = cdt->GetDynamicTrishapeRuntimeData();
+                if (!sd.dynamicData || sd.dataSize == 0) return nullptr;
+                if (!cd.dynamicData || cd.dynamicData == sd.dynamicData || cd.dataSize != sd.dataSize) {
+                    cd.dynamicData = RE::malloc(sd.dataSize);
+                    if (!cd.dynamicData) return nullptr;
+                    cd.dataSize = sd.dataSize;
+                }
+                sd.lock.Lock();
+                std::memcpy(cd.dynamicData, sd.dynamicData, sd.dataSize);
+                sd.lock.Unlock();
+            }
+        }
         // the glassy look of the cum template, with the sheen texture
         RE::NiPointer<RE::NiObject> lc(tplLsp->Clone());
         auto* lsp = lc ? netimmerse_cast<RE::BSLightingShaderProperty*>(lc.get()) : nullptr;
@@ -1822,6 +1840,7 @@ namespace {
             if (!root || F.root3D != root) { DropFaces(F); F.root3D = root; F.head = nullptr; F.body = nullptr; F.frameOk = F.frameTried = false; }
             if (!wantAny) { if (has) DropFaces(F); it = g_face.erase(it); continue; }
             if (!root) { ++it; continue; }
+            if (Colossal::BeastForm(a) != 0) { if (has) DropFaces(F); ++it; continue; }   // 2.6m: none on fur (they painted his head, chest and arms white)
             const Fluid::FaceFit& fit = F.ownFit ? F.fit : g_fit;
             if (F.fitSent != fit.scale * 1000.0f + fit.up * 37.0f + fit.out * 11.0f) {   // refitted in the menu: draw again
                 F.fitSent = fit.scale * 1000.0f + fit.up * 37.0f + fit.out * 11.0f;
@@ -2082,9 +2101,19 @@ namespace {
         };
         if (sq > 0.0f) {
             std::string told;
+            const bool beast = Colossal::BeastForm(a) != 0;
             for (auto* geo : geos) {
                 static const std::uint8_t grey[3] = {255, 255, 255};
                 float cover = 0.0f;
+                if (beast) {   // 2.6n: a werewolf / Vampire Lord / werebear: the bare penis shapes glisten whole, never the sheath or balls (fur)
+                    std::string nm = geo->name.c_str() ? geo->name.c_str() : "";
+                    for (auto& ch : nm) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                    const bool penis = (nm.find("penis") != std::string::npos || nm.find("dick") != std::string::npos || nm.find("cock") != std::string::npos) &&
+                                       nm.find("sheath") == std::string::npos && nm.find("ball") == std::string::npos && nm.find("scrot") == std::string::npos;
+                    Shine(geo, penis ? sq : 0.0f, penis ? 450.0f : 0.0f, penis ? 14.0f * g.shine : 0.0f);
+                    told += std::format(" [{}: {}]", geo->name.c_str() ? geo->name.c_str() : "?", penis ? "whole shape (beast form)" : "left dry (beast form: sheath / balls)");
+                    continue;
+                }
                 if (IsMSN(geo)) {
                     const std::string tex = MakeMask(geo, "ad_glanspec", glans, tipBones, grey, 20, &cover);
                     if (tex.empty()) { Shine(geo, 0.0f, 0.0f, 0.0f); continue; }

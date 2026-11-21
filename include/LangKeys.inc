@@ -191,7 +191,7 @@ const char* const kKeys[] = {
     "How forceful it is, from how fast and deep the strokes go: a slow, gentle blowjob gags him about a third as often, a rough one half again more.",
     "How much it matters",
     "Leave the mouth to SMP Head - DeepFit",
-    "DeepFit is installed: it opens the lips round the schlong and bulges the throat on High Poly Heads. On: Anatomica moves no one's mouth (a head without DeepFit's mouth bones keeps its own). Gags still squeeze his eyes and brows.",
+    "DeepFit is installed: it opens the mouth as wide as the schlong is thick (or as wide as it goes, its Mega mouth), fits the lips round it and bulges the throat (DeepFit.ini). On: Anatomica leaves the mouth to it. Off: Anatomica opens the jaw too (Widest / At least below). Gags still squeeze his eyes and brows.",
     "Gag sounds",
     "WAV files in Data\\Sound\\Fx\\Anatomica\\gag (any names; add or replace them) - one plays when he gags, louder when it is rough. None are included yet.",
     "Gag volume",
