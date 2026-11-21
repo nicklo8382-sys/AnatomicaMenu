@@ -1586,12 +1586,27 @@ namespace {
         const bool onDisk = std::filesystem::exists(path, ec);
         // every vertex: how much layer, and where it is on the texture
         const std::uint8_t* d = part0.buffData->rawVertexData;
+        // 2.6l: a face (BSDynamicTriShape) keeps its positions in its own dynamic data, not in the vertex buffer (which then
+        // has no position at all) - read there, or every face layer found "nothing to cover"
+        std::vector<V3> dynPos;
+        if (auto* dts = netimmerse_cast<RE::BSDynamicTriShape*>(geo)) {
+            auto& dd = dts->GetDynamicTrishapeRuntimeData();
+            if (dd.dynamicData && dd.dataSize / 16 >= nv) {
+                dd.lock.Lock();
+                const float* f4 = static_cast<const float*>(dd.dynamicData);
+                dynPos.resize(nv);
+                for (std::uint32_t i = 0; i < nv; ++i) dynPos[i] = {f4[i * 4], f4[i * 4 + 1], f4[i * 4 + 2]};
+                dd.lock.Unlock();
+            }
+        }
+        if (dynPos.empty() && !desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX)) return {};
         std::vector<float> w(nv), u(nv), v(nv);
         int any = 0;
         for (std::uint32_t i = 0; i < nv; ++i) {
             const std::uint8_t* q = d + static_cast<size_t>(i) * stride;
             V3 pos;
-            if (full) { float f3[3]; std::memcpy(f3, q + oP, 12); pos = {f3[0], f3[1], f3[2]}; }
+            if (!dynPos.empty()) pos = dynPos[i];
+            else if (full) { float f3[3]; std::memcpy(f3, q + oP, 12); pos = {f3[0], f3[1], f3[2]}; }
             else { std::uint16_t h3[3]; std::memcpy(h3, q + oP, 6); pos = {Half(h3[0]), Half(h3[1]), Half(h3[2])}; }
             std::uint16_t t2[2]; std::memcpy(t2, q + oT, 4);
             u[i] = Half(t2[0]); v[i] = Half(t2[1]);

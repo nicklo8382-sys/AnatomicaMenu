@@ -1,4 +1,5 @@
 #include "Align.h"
+#include "Colossal.h"
 #include "Lang.h"
 #include "Engine.h"
 #include "Size.h"
@@ -223,8 +224,23 @@ namespace {
         for (auto* o : all) {
             if (!o || o == a || o->GetPosition().GetDistance(a->GetPosition()) > 150.0f) continue;
             auto* orr = o->Get3D(false);
-            auto* b = orr ? orr->GetObjectByName(RE::BSFixedString("NPC GenitalsBase [GenBase]")) : nullptr;
-            auto* tp = orr ? orr->GetObjectByName(RE::BSFixedString("NPC Genitals06 [Gen06]")) : nullptr;
+            RE::NiAVObject* b = nullptr;
+            RE::NiAVObject* tp = nullptr;
+            // 2.6m: a werewolf / Vampire Lord / werebear's schlong hangs on its own bones (the beast skeletons carry the
+            // human genital bones too, unused - measuring along those moved the bottom 15 units out of place)
+            if (orr && Colossal::BeastForm(o) != 0) {
+                static const char* kChains[][2] = { { "WWD 2", "WWD 9" }, { "VLDick02", "VLDick06" }, { "BearD 4", "BearD 9" } };
+                for (auto& c : kChains) {
+                    b = orr->GetObjectByName(RE::BSFixedString(c[0]));
+                    tp = orr->GetObjectByName(RE::BSFixedString(c[1]));
+                    if (b && tp) break;
+                    b = tp = nullptr;
+                }
+            }
+            if (!b || !tp) {
+                b = orr ? orr->GetObjectByName(RE::BSFixedString("NPC GenitalsBase [GenBase]")) : nullptr;
+                tp = orr ? orr->GetObjectByName(RE::BSFixedString("NPC Genitals06 [Gen06]")) : nullptr;
+            }
             if (!b || !tp) continue;
             RE::NiPoint3 ax = Sub(tp->world.translate, b->world.translate);
             const float L = Length(ax);

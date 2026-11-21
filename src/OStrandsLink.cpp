@@ -722,14 +722,28 @@ namespace OStrandsLink {
         fwd = fwd / len;
         const RE::NiPoint3 up = head->world.rotate * RE::NiPoint3{0.0f, 0.0f, 1.0f};
         const RE::NiPoint3 side = fwd.Cross(up);
-        const RE::NiPoint3 mouth = head->world.translate + (mg->world.translate - head->world.translate) * 0.7f;
+        RE::NiPoint3 mouth = head->world.translate + (mg->world.translate - head->world.translate) * 0.7f;
+        // 2.6l: a High Poly Head (SMP Head) has lip bones - his mouth is right between them
+        {
+            RE::NiAVObject* upper = nullptr; RE::NiAVObject* lower = nullptr;
+            std::function<void(RE::NiAVObject*)> walk = [&](RE::NiAVObject* o) {
+                if (!o || (upper && lower)) return;
+                const std::string_view n = o->name.c_str() ? o->name.c_str() : "";
+                if (!upper && n.ends_with("Upper Lip Center")) upper = o;
+                if (!lower && n.ends_with("Bottom Lip Center")) lower = o;
+                if (auto* nd = o->AsNode()) for (auto& c : nd->GetChildren()) walk(c.get());
+            };
+            walk(head);
+            if (!(upper && lower)) walk(root);
+            if (upper && lower) mouth = (upper->world.translate + lower->world.translate) * 0.5f;
+        }
         float rgb[3] = {0.925f, 0.914f, 0.871f};
         if (kind == 3 && giver) Colour::CumColour(giver, rgb);
         const int spurts = kind == 1 ? 7 : kind == 2 ? 3 : 5;
         const int each = kind == 1 ? 34 : kind == 2 ? 8 : 18;
         for (int i = 0; i < spurts; ++i) {   // fanned a little: some across his lips, some higher on his cheek and nose
             const float sx = Rand(-1.0f, 1.0f), sy = Rand(-0.3f, 1.0f);
-            const RE::NiPoint3 from = mouth + fwd * 9.0f + side * (sx * 1.5f) + up * (sy * 1.5f - 1.0f);
+            const RE::NiPoint3 from = mouth + fwd * 3.0f + side * (sx * 1.0f) + up * (sy * 1.0f - 1.0f);   // 2.6l: right by his lips (was 9 out)
             const RE::NiPoint3 to = mouth + side * (sx * 2.2f) + up * (sy * 2.5f);
             RE::NiPoint3 dir = to - from;
             dir = dir / std::max(dir.Length(), 0.01f);

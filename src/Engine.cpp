@@ -6,6 +6,7 @@
 #include "Extras.h"
 #include "SoftButt.h"
 #include "Engine.h"
+#include "Colossal.h"
 #include "Align.h"
 #include "Mu.h"
 #include "Virgin.h"
@@ -1145,6 +1146,7 @@ namespace {
         RingDone done{root, nullptr, nullptr, w.col, w.swap, w.add, texSet};
         struct Mark { RingDone& d; RE::FormID id; ~Mark() { if (d.geo) if (auto* l = d.geo->lightingShaderProp_cast()) d.mat = l->material; g_ringDone[id] = d; } } mark{done, a->GetFormID()};
         if (!Node(root, "3BA_AnusRim")) return;
+        if (Colossal::BeastForm(a) != 0) return;   // 2.6m: a beast body's paint slots are laid out for its fur - the ring painted white patches on his arms and legs
         const auto* npc = a->GetActorBase();
         if (!npc || npc->GetSex() != RE::SEX::kMale) return;
         RE::BSGeometry* ring = nullptr;
@@ -1162,7 +1164,11 @@ namespace {
         if (!ring) {
             if (w.add < 0) { RingReport(a, any ? "no Anatomica ring among his RaceMenu paints, none to add" : "no RaceMenu paint slots", nullptr, w); return; }
             if (!any) { RingReport(a, "no RaceMenu paint slots yet: asked RaceMenu for them", nullptr, w); AskOverlays(a); done.root = nullptr; return; }   // look again once RaceMenu has added them
-            if (!freeSlot) { RingReport(a, "no free RaceMenu paint slot for a ring", nullptr, w); return; }
+            if (!freeSlot) {   // 2.6l: right after loading RaceMenu may still be filling its slots - look again a few times
+                static std::unordered_map<RE::FormID, int> tries;
+                if (++tries[a->GetFormID()] <= 10) { done.root = nullptr; if (tries[a->GetFormID()] == 1) RingReport(a, "no free RaceMenu paint slot yet: looking again", nullptr, w); return; }
+                RingReport(a, "no free RaceMenu paint slot for a ring", nullptr, w); return;
+            }
             const std::string tt = TintedRing(w.add);
             if (tt == kRingPending) { RingReport(a, "his ring colour is being made", nullptr, w); done.root = nullptr; return; }   // look again next pass
             if (!tt.empty()) RingLook(freeSlot, tt.c_str(), -1, 1.0f);   // a ring for a man without one (NPC ring option)
