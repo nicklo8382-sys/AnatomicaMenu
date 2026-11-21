@@ -1132,7 +1132,15 @@ namespace {
             // still the ring he wears? (a rebuilt body puts a new overlay shape there)
             const bool same = !d.geo || Node(root, d.geo->name.c_str()) == d.geo.get();
             auto* lsp = d.geo ? d.geo->lightingShaderProp_cast() : nullptr;
-            if (same && d.root == root && d.col == w.col && d.swap == w.swap && d.add == w.add && d.tex == texSet && (!d.geo || (lsp && lsp->material == d.mat))) return;
+            // 2.6k: his ring colour drifts a little as he flushes and calms (a new 1024 texture every 3 s made the game hitch);
+            // small drifts (8 of 255 a channel) keep the ring he has
+            auto close = [](int x, int y) {
+                if (x == y) return true;
+                if (x < 0 || y < 0) return false;
+                for (int sh : {16, 8, 0}) if (std::abs(((x >> sh) & 255) - ((y >> sh) & 255)) > 8) return false;
+                return true;
+            };
+            if (same && d.root == root && close(d.col, w.col) && d.swap == w.swap && close(d.add, w.add) && d.tex == texSet && (!d.geo || (lsp && lsp->material == d.mat))) return;
         }
         RingDone done{root, nullptr, nullptr, w.col, w.swap, w.add, texSet};
         struct Mark { RingDone& d; RE::FormID id; ~Mark() { if (d.geo) if (auto* l = d.geo->lightingShaderProp_cast()) d.mat = l->material; g_ringDone[id] = d; } } mark{done, a->GetFormID()};

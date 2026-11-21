@@ -83,6 +83,8 @@ namespace Face {
             float gag = 0.0f;             // 0-1 how strong the gag face is now
             double gagUntil = 0.0, lastSeen = 0.0, lastOral = -1e9, blushUntil = 0.0;
             float throatSent = 0.0f;
+            float throatCur = 0.0f, throatWant = 0.0f;   // 2.6j: eased - it swells over a few strokes and goes down slowly
+            double deepAt = -1e9;
             float depth = -100.0f;
             bool deep = false, blushing = false;
             float faceSent = -1.0f;
@@ -298,8 +300,17 @@ namespace Face {
                     }
                     if (g.exp && in) g_exp[a->GetFormID()].exp = std::min(12.0f, g_exp[a->GetFormID()].exp + dt / 60.0f * (deep ? 1.0f : 0.3f));
                     // throat bulge (experimental)
-                    const float th = (g.throat && deep) ? g.throatMax * k * std::clamp((s.depth - g.deepFrom) / 4.0f + 0.4f, 0.0f, 1.0f) : 0.0f;
-                    if (std::abs(th - s.throatSent) > 0.008f) { ThroatScale(a, th); s.throatSent = th; }
+                    // 2.6j: it used to follow each stroke in and out 4 times a second, so the neck (and the head on it) jumped with
+                    // every change - now it holds while he keeps going deep and eases up and down in steps too small to see
+                    if (g.throat && deep) {
+                        s.deepAt = now;
+                        s.throatWant = std::max(s.throatWant * 0.98f, g.throatMax * k * std::clamp((s.depth - g.deepFrom) / 4.0f + 0.4f, 0.0f, 1.0f));
+                    }
+                    const float th = (g.throat && now - s.deepAt < 2.0) ? s.throatWant : 0.0f;
+                    const float rate = (th > s.throatCur ? 0.03f : 0.02f) * dt;   // a full +10% neck takes ~3 s to come, ~5 s to go
+                    s.throatCur = th > s.throatCur ? std::min(th, s.throatCur + rate) : std::max(th, s.throatCur - rate);
+                    if (th <= 0.0f && s.throatCur <= 0.0f) s.throatWant = 0.0f;
+                    if (std::abs(s.throatCur - s.throatSent) > 0.003f || (s.throatCur <= 0.0f && s.throatSent > 0.0f)) { ThroatScale(a, s.throatCur); s.throatSent = s.throatCur; }
                 }
             }
             // gulps: one for about every quarter load swallowed, a second or so apart (at most 4 a finish)
@@ -321,7 +332,7 @@ namespace Face {
                 auto* a = RE::TESForm::LookupByID<RE::Actor>(it->first);
                 const bool gone = !a || !a->Is3DLoaded() || now - s.lastSeen > 0.6;
                 if (gone) { s.jawTarget = 0.0f; s.deep = false; }
-                if (gone && s.throatSent > 0.0f && a) { ThroatScale(a, 0.0f); s.throatSent = 0.0f; }
+                if (gone && s.throatSent > 0.0f && a) { ThroatScale(a, 0.0f); s.throatSent = 0.0f; s.throatCur = 0.0f; s.throatWant = 0.0f; }
                 if (s.blushing && now > s.blushUntil && a) { Engine::BlushBoost(a, 0.0f); s.blushing = false; }
                 if (!s.blushing && now < s.blushUntil && a) s.blushing = Engine::BlushBoost(a, g.blushBoost);
                 if (gone && s.jaw < 0.01f && s.gag < 0.01f && !s.blushing && s.faceSent <= 0.0f) { it = g_st.erase(it); continue; }

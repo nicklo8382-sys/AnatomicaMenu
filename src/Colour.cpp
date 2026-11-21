@@ -514,7 +514,7 @@ namespace {
         bool tender = true;
         float tenderStrength = 0.6f;
         float tenderTime = 600.0f;
-        bool tenderBlend = true;
+        bool tenderBlend = false;   // 2.6k: off - the ring keeps his body colour (set once; redone when his colour or the anus colours change)
         bool tenderStages = true;    // bright red first, deep red later
         float tenderCol1[3] = {1.0f, 0.55f, 0.6f};
         float tenderCol2[3] = {0.78f, 0.45f, 0.52f};
@@ -3444,6 +3444,7 @@ namespace Colour {
             changed |= Pct("Reddening strength", &g.tenderStrength);
             changed |= Minutes("Fades in", &g.tenderTime, 0.5f, 60.0f);
             changed |= Tr::Checkbox("Also redden the skin-blend ring", &g.tenderBlend);
+            Help("Off (default): the ring round the anus takes his body colour once, and changes only when his colour or the anus colours change. On: it reddens and fades with the rim (a new ring texture as it changes).");
             changed |= Tr::Checkbox("Colour changes as it fades", &g.tenderStages);
             Help("Starts as the first colour, turns into the second, then fades back to normal.");
             Indented(g.tenderStages, [&] {

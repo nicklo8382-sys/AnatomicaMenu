@@ -183,6 +183,7 @@ const char* const kKeys[] = {
     "His scent",
     "A werewolf who breeds him leaves his scent on him: other werewolves can smell who marked him (SkyrimNet).",
     "It lasts",
+    "Off (default): the ring round the anus takes his body colour once, and changes only when his colour or the anus colours change. On: it reddens and fades with the rim (a new ring texture as it changes).",
     "Creatures (More Nasty Critters)",
     "Creatures finish with a Colossal Load",
     "Each by its type (set for each More Nasty Critters group on this page, under More Nasty Critters). A group can have its own below.",
