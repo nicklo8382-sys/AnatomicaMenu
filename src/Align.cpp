@@ -432,7 +432,8 @@ namespace Align {
                         }
                     }
                 }
-            } else {
+            } else if (!OApi()) {   // 2.6n: only without OStim's API - while a scene starts (no thread / position yet) moving him
+                                    // ourselves crashed the game in Havok (his character controller being set up): wait for the API
                 RE::NiPoint3 pos = a->GetPosition();
                 if (s.haveExpect && Length(Sub(pos, s.expect)) > 0.25f) { s.applied = {}; if (Length(s.cur) > 0.05f) ++s.resets; }
                 const RE::NiPoint3 d = Sub(s.cur, s.applied);

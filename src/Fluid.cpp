@@ -1417,19 +1417,21 @@ namespace {
         return out;
     }
     // a clear, glassy copy of a schlong shape lying right on it (decal, so it never fights the skin)
+    std::string g_sheenWhy;   // 2.6n: why the last MakeSheen gave nothing (face layers: logged)
     RE::NiAVObject* MakeSheen(RE::BSGeometry* src, const char* tex = kSheenTex, float gloss = -1.0f, float spec = -1.0f) {
-        if (!g_tplRope || !src || !src->parent) return nullptr;
+        g_sheenWhy.clear();
+        if (!g_tplRope || !src || !src->parent) { g_sheenWhy = !g_tplRope ? "no template" : "no shape / parent"; return nullptr; }
         RE::BSGeometry* tplGeo = nullptr;
         RE::BSVisit::TraverseScenegraphGeometries(g_tplRope.get(), [&](RE::BSGeometry* g_) { if (!tplGeo) tplGeo = g_; return RE::BSVisit::BSVisitControl::kContinue; });
         auto* tplLsp = tplGeo ? tplGeo->lightingShaderProp_cast() : nullptr;
-        if (!tplLsp) return nullptr;
+        if (!tplLsp) { g_sheenWhy = "template has no shader"; return nullptr; }
         RE::NiPointer<RE::NiObject> cl(src->Clone());
         auto* geo = cl ? cl->AsGeometry() : nullptr;
-        if (!geo) return nullptr;
+        if (!geo) { g_sheenWhy = "copy failed"; return nullptr; }
         // the copy moves with the same bones as the original
         auto* si = geo->GetGeometryRuntimeData().skinInstance.get();
         auto* so = src->GetGeometryRuntimeData().skinInstance.get();
-        if (!si || !so || !si->skinData || !so->skinData || !si->bones || !so->bones) return nullptr;
+        if (!si || !so || !si->skinData || !so->skinData || !si->bones || !so->bones) { g_sheenWhy = std::format("skin missing (copy {} / src {})", si != nullptr, so != nullptr); return nullptr; }
         const std::uint32_t nb = so->skinData->GetBoneCount();
         for (std::uint32_t b = 0; b < nb; ++b) {
             si->bones[b] = so->bones[b];
@@ -1442,10 +1444,10 @@ namespace {
             if (auto* cdt = netimmerse_cast<RE::BSDynamicTriShape*>(geo)) {
                 auto& sd = sdt->GetDynamicTrishapeRuntimeData();
                 auto& cd = cdt->GetDynamicTrishapeRuntimeData();
-                if (!sd.dynamicData || sd.dataSize == 0) return nullptr;
+                if (!sd.dynamicData || sd.dataSize == 0) { g_sheenWhy = "face has no dynamic data"; return nullptr; }
                 if (!cd.dynamicData || cd.dynamicData == sd.dynamicData || cd.dataSize != sd.dataSize) {
                     cd.dynamicData = RE::malloc(sd.dataSize);
-                    if (!cd.dynamicData) return nullptr;
+                    if (!cd.dynamicData) { g_sheenWhy = "no memory for the face copy"; return nullptr; }
                     cd.dataSize = sd.dataSize;
                 }
                 sd.lock.Lock();
@@ -1456,7 +1458,7 @@ namespace {
         // the glassy look of the cum template, with the sheen texture
         RE::NiPointer<RE::NiObject> lc(tplLsp->Clone());
         auto* lsp = lc ? netimmerse_cast<RE::BSLightingShaderProperty*>(lc.get()) : nullptr;
-        if (!lsp) return nullptr;
+        if (!lsp) { g_sheenWhy = "shader copy failed"; return nullptr; }
         geo->GetGeometryRuntimeData().shaderProperty.reset(lsp);
         if (auto* tplA = tplGeo->GetGeometryRuntimeData().alphaProperty.get()) {
             RE::NiPointer<RE::NiObject> ac(tplA->Clone());
@@ -1891,6 +1893,14 @@ namespace {
                 if (!sh.obj || !sh.parent || sh.obj->parent != src->parent) {
                     DropFace(F, i);
                     if (auto* o = MakeSheen(src, bodyL ? kSheenTex : F.tex[i].c_str(), gloss, spec)) sh = {RE::NiPointer<RE::NiAVObject>(o), src, RE::NiPointer<RE::NiNode>(o->parent)};
+                    {   // 2.6n: say what happened (face layers did not show and nothing said why)
+                        auto* sg = sh.obj ? sh.obj->AsGeometry() : nullptr;
+                        auto* cdt = sg ? netimmerse_cast<RE::BSDynamicTriShape*>(sg) : nullptr;
+                        logger::info("Anatomica face layer {} on {:08X} ({}): {}", i, it->first, src->name.c_str() ? src->name.c_str() : "?",
+                            sh.obj ? std::format("drawn as a copy of the {} under {}{}", cdt ? "animated face" : "shape", sh.obj->parent && sh.obj->parent->name.c_str() ? sh.obj->parent->name.c_str() : "?",
+                                         cdt ? std::format(", its own vertex buffer {} bytes", cdt->GetDynamicTrishapeRuntimeData().dataSize) : std::string())
+                                   : std::format("NOT drawn - {}", g_sheenWhy.empty() ? "unknown" : g_sheenWhy));
+                    }
                     if (!sh.obj) { if (bodyL) F.body = nullptr; else F.tex[i].clear(); continue; }
                 }
                 auto* geo = sh.obj->AsGeometry();
