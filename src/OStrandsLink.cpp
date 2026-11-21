@@ -6,6 +6,7 @@
 #include "Colour.h"
 #include "Virgin.h"
 #include "Colossal.h"
+#include "Face.h"
 #include <vector>
 
 #include <algorithm>
@@ -704,6 +705,38 @@ namespace OStrandsLink {
             Tr::TextDisabled("%s", Lang::Fmt("In him: {:.2f} loads", it == g_st.end() ? 0.0f : it->second.vol).c_str());
         }
         if (!last.empty()) Tr::TextDisabled("%s", last.c_str());
+    }
+
+    // 2.6k: Testing page - a facial: spurts from just in front of his face, at it, as a finish pulled out of his mouth
+    // kind 0 a normal load, 1 a Colossal Load, 2 a light one (a few strings), 3 in a giver's colour (the one picked)
+    std::string TestFacial(RE::Actor* a, int kind, RE::Actor* giver) {
+        if (!a) return "nobody";
+        if (!Installed()) return "OStrands 0.8.0.3+ is not installed";
+        auto* root = a->Get3D(false);
+        auto* head = root ? root->GetObjectByName(RE::BSFixedString("NPC Head [Head]")) : nullptr;
+        auto* mg = root ? root->GetObjectByName(RE::BSFixedString("NPC Head MagicNode [Hmag]")) : nullptr;
+        if (!head || !mg) return "no head found";
+        RE::NiPoint3 fwd = mg->world.translate - head->world.translate;
+        const float len = fwd.Length();
+        if (len < 0.01f) return "no head found";
+        fwd = fwd / len;
+        const RE::NiPoint3 up = head->world.rotate * RE::NiPoint3{0.0f, 0.0f, 1.0f};
+        const RE::NiPoint3 side = fwd.Cross(up);
+        const RE::NiPoint3 mouth = head->world.translate + (mg->world.translate - head->world.translate) * 0.7f;
+        float rgb[3] = {0.925f, 0.914f, 0.871f};
+        if (kind == 3 && giver) Colour::CumColour(giver, rgb);
+        const int spurts = kind == 1 ? 7 : kind == 2 ? 3 : 5;
+        const int each = kind == 1 ? 34 : kind == 2 ? 8 : 18;
+        for (int i = 0; i < spurts; ++i) {   // fanned a little: some across his lips, some higher on his cheek and nose
+            const float sx = Rand(-1.0f, 1.0f), sy = Rand(-0.3f, 1.0f);
+            const RE::NiPoint3 from = mouth + fwd * 9.0f + side * (sx * 1.5f) + up * (sy * 1.5f - 1.0f);
+            const RE::NiPoint3 to = mouth + side * (sx * 2.2f) + up * (sy * 2.5f);
+            RE::NiPoint3 dir = to - from;
+            dir = dir / std::max(dir.Length(), 0.01f);
+            Out(a, g_nextStream++, from, dir * (kind == 1 ? 3.2f : 2.6f) + up * 0.4f, each, rgb);
+        }
+        Face::OnFace(a, kind == 3 ? giver : nullptr, kind == 1 ? 2.0f : kind == 2 ? 0.3f : 1.0f);   // the cum layer on his face
+        return kind == 1 ? "a Colossal facial" : kind == 2 ? "a light facial" : kind == 3 ? "a facial in that man's colour" : "a facial";
     }
 
     // 2.6j: precum from OStrands while he is taken - a little more in him, and it wets him (lube)

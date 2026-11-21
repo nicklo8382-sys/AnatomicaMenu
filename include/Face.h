@@ -17,7 +17,9 @@ namespace Face {
     struct Oral { float exp = 0.0f; std::uint32_t times = 0, gags = 0; const char* level = ""; };
     Oral OralOf(RE::FormID id);                       // his oral experience (SkyrimNet / DDF later)
     void Swallowed(RE::Actor* recv, float loads);     // OStrands: this much (in loads) was swallowed - gulps
-    void OnFace(RE::Actor* recv, RE::Actor* giver, float loads);   // 2.6j: cum on his face (a facial)
+    void OnFace(RE::Actor* recv, RE::Actor* giver, float loads);
+    void TestLayer(RE::Actor* a, int layer);   // 2.6k: Testing page - one face look on him for 20 s (-1 = all)
+    void ClearFace(RE::Actor* a);              // 2.6k: Testing page - take every face look off him   // 2.6j: cum on his face (a facial)
     void Bathed(RE::FormID id);                       // he washed: cum, tears and sweat off
     bool Wiped(RE::FormID id);                        // SkyrimNet clean-up: cum and tears off his face (true = there was some)
     // 2.6j: for DDF lines - who is sucking (or just was), how it is going

@@ -292,6 +292,29 @@ namespace {
     std::mutex g_deferMx;
     std::unordered_map<RE::FormID, Deferred> g_deferred;
     void EquipStrand(RE::FormID actorId, RE::FormID newLocal, RE::FormID oldLocal, std::string tex);
+    // 2.6k: what dresses an NPC in the middle of a scene? Every piece of armour he puts on mid-scene goes in the log,
+    // with the mod it comes from (OStim takes his clothes off at the start; something then puts them back on).
+    struct DressWatch : RE::BSTEventSink<RE::TESEquipEvent> {
+        RE::BSEventNotifyControl ProcessEvent(const RE::TESEquipEvent* e, RE::BSTEventSource<RE::TESEquipEvent>*) override {
+            if (!e || !e->equipped || !e->actor) return RE::BSEventNotifyControl::kContinue;
+            auto* a = e->actor->As<RE::Actor>();
+            if (!a || a->IsPlayerRef() || !InScene(a)) return RE::BSEventNotifyControl::kContinue;
+            auto* f = RE::TESForm::LookupByID(e->baseObject);
+            auto* arm = f ? f->As<RE::TESObjectARMO>() : nullptr;
+            if (!arm) return RE::BSEventNotifyControl::kContinue;
+            auto* file = arm->GetFile(0);
+            static int told = 0;
+            if (++told <= 60)
+                logger::info("Anatomica: {} ({:08X}) put on \"{}\" ({:08X}, {}) in the middle of a scene{}", a->GetDisplayFullName(), a->GetFormID(),
+                    arm->GetName(), arm->GetFormID(), file ? file->GetFilename() : std::string_view("?"), IsOurs(arm) ? " - Anatomica's" : "");
+            return RE::BSEventNotifyControl::kContinue;
+        }
+    };
+    void WatchDressing() {
+        static bool on = false;
+        if (on) return;
+        if (auto* h = RE::ScriptEventSourceHolder::GetSingleton()) { static DressWatch w; h->AddEventSink<RE::TESEquipEvent>(&w); on = true; }
+    }
     void FlushDeferred() {   // (from Step, under g_mx) - anyone whose scene is over gets what was held back
         std::vector<std::pair<RE::FormID, Deferred>> go;
         {
@@ -583,6 +606,7 @@ namespace {
             if (now >= it->expires || static_cast<int>(g_puddles.size()) > g.puddleMax) { DeleteRef(it->ref); it = g_puddles.erase(it); }
             else ++it;
         }
+        WatchDressing();   // 2.6k
         FlushDeferred();   // 2.6k
         for (auto wid : Fluid::WetMen()) if (!g_st.count(wid)) g_st[wid].self = wid;   // wet without cum: the sheen needs the rim armor
         for (auto it = g_st.begin(); it != g_st.end();) {

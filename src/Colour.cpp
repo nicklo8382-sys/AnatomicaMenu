@@ -15,6 +15,7 @@
 #include "UI.h"
 #include "Wink.h"
 #include "Maker.h"
+#include "Face.h"
 
 #include <SimpleIni.h>
 
@@ -3280,6 +3281,35 @@ namespace Colour {
         }
         if (OStrandsLink::Installed() && Section("Cum (OStrands)")) {   // 2.6d
             OStrandsLink::RenderTests(a);
+        }
+        if (Section("Mouth & face")) {   // 2.6k: a facial, and each face look on its own
+            static std::string faceLast;
+            if (OStrandsLink::Installed()) {
+                Tr::TextDisabled("A facial: spurts from just in front of his face (OStrands draws them) and the cum look on his face.");
+                if (Tr::Button("Facial")) faceLast = Lang::TS(OStrandsLink::TestFacial(a, 0, nullptr));
+                ImGuiMCP::SameLine();
+                if (Tr::Button("Colossal facial")) faceLast = Lang::TS(OStrandsLink::TestFacial(a, 1, nullptr));
+                ImGuiMCP::SameLine();
+                if (Tr::Button("Light facial")) faceLast = Lang::TS(OStrandsLink::TestFacial(a, 2, nullptr));
+                ImGuiMCP::SameLine();
+                if (Tr::Button("Facial in a man's colour")) {
+                    RE::Actor* giver = nullptr;
+                    if (auto* cr = RE::CrosshairPickData::GetSingleton()) if (auto r = cr->GetActiveTarget().get()) giver = r->As<RE::Actor>();
+                    if (giver == a) giver = nullptr;
+                    faceLast = giver ? Lang::TS(OStrandsLink::TestFacial(a, 3, giver)) : Lang::TS(std::string("look at the man whose colour to use (under your crosshair) first"));
+                }
+                Help("His cum colour: the man under your crosshair (his race's or skin rule's cum colour, Colours page).");
+            }
+            Tr::TextDisabled("Each face look on him for 20 s (Mouth & Face page, How his face looks):");
+            static const char* kLayers[] = {"Wet lips", "Red, swollen lips", "Flushed cheeks", "Tears", "Cum on his face", "Sweat on his face", "Sweat on his body"};
+            for (int i = 0; i < 7; ++i) {
+                if (i % 4) ImGuiMCP::SameLine();
+                if (Tr::Button((std::string(Lang::T(kLayers[i])) + "##fl" + std::to_string(i)).c_str())) { Face::TestLayer(a, i); faceLast = Lang::T(kLayers[i]); }
+            }
+            if (Tr::Button("All of them")) { Face::TestLayer(a, -1); faceLast = Lang::T("All of them"); }
+            ImGuiMCP::SameLine();
+            if (Tr::Button("Clean his face")) { Face::ClearFace(a); faceLast = Lang::T("Clean his face"); }
+            if (!faceLast.empty()) Tr::TextDisabled("%s", faceLast.c_str());
         }
         if (Section("During sex")) {
         Tr::TextDisabled("Shows the belly bulge on him for 8 s, moving up and down (During sex page sliders not needed).");

@@ -26,7 +26,8 @@ namespace OStrandsLink {
     int GiverCount(RE::FormID id);                                // 2.6j: how many men's cum he holds now
     struct Filled { RE::FormID man = 0, giver = 0; float loads = 0.0f; bool colossal = false; };
     std::vector<Filled> TakeFilled();                                   // 2.6e: the Stomach shape for what he holds (0 = none)
-    void RenderTests(RE::Actor* a);                               // 2.6d: Testing page buttons (fill, gush, squirt, ooze, empty)
+    void RenderTests(RE::Actor* a);
+    std::string TestFacial(RE::Actor* a, int kind, RE::Actor* giver);   // 2.6k: Testing page (0 normal, 1 Colossal, 2 light, 3 the giver's colour)                               // 2.6d: Testing page buttons (fill, gush, squirt, ooze, empty)
     bool RenderSection();                                         // Integrations page
     void Ini(CSimpleIniA& ini, bool save);                        // [OStrands]
 }
