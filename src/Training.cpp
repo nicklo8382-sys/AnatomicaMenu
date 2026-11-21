@@ -146,11 +146,11 @@ namespace Training {
             const double t = Now();
             if (t < next) return;
             next = t + 3.0;
-            std::vector<RE::Actor*> nearby
-            if (auto* pl = RE::PlayerCharacter::GetSingleton()) near.push_back(pl);
+            std::vector<RE::Actor*> nearby;
+            if (auto* pl = RE::PlayerCharacter::GetSingleton()) nearby.push_back(pl);
             if (auto* pl = RE::ProcessLists::GetSingleton())
-                for (auto& h : pl->highActorHandles) if (auto a = h.get(); a && a->Is3DLoaded()) near.push_back(a.get());
-            for (RE::Actor* a : near) {
+                for (auto& h : pl->highActorHandles) if (auto a = h.get(); a && a->Is3DLoaded()) nearby.push_back(a.get());
+            for (RE::Actor* a : nearby) {
                 const RE::FormID id = a->GetFormID();
                 const float want = std::round(BondOf(id) * 20.0f) / 20.0f;
                 auto it = g_glow.find(id);
