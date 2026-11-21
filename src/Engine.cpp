@@ -245,6 +245,8 @@ namespace {
         float deepRolledAt = -2.0f;              // 2.5t: the setting it was rolled with (-1 = off): rolled again when it changes
         float pulse = 0.0f, bulgeDil = 0.0f;     // thrust pulse; how worked he was while it bulged (lingering)
         float hole = 0.0f, holeSent = -100.0f;
+        float beastHole = 0.0f;                  // 2.6q: the hole opened round a beast form's schlong (Anatomica Gape, AnatomicaDuring)
+        RE::FormID beastLogged = 0; double beastLogAt = -100.0; float beastMax = 0.0f, beastR = 0.0f; bool beastGuess = false;
         double inLast = -100.0;                  // last time a schlong was found in him by the bones
         bool held = false;                       // kept in by the hold this tick
         float reachMax = 0.0f;                   // how deep the tip has been lately (the inside stays open behind it)
@@ -672,7 +674,40 @@ namespace {
                     sent = v;
                 }
             };
-            send("Anatomica Gape", 0.0f, s.holeSent);   // (2.4 test builds opened the hole with the gape shape: cleared)
+            // 2.6q: PPA leaves werewolves / Vampire Lords / werebears out of its scenes (it never tracks them as a performer),
+            // so nothing opened him round one. Anatomica opens the hole itself (the Anatomica Gape shape on its own key): as
+            // wide as his schlong is where it passes through the hole now - a knot or a thick base opens it further as it
+            // goes in - and closing as he pulls out. The gape shape moves the four rim bones out 2 units per 1.0.
+            {
+                float want = 0.0f;
+                RE::Actor* bo = partner ? partner : atMan;
+                if (dw.beastOpen && c.ok && bo && Colossal::BeastForm(bo) != 0) {
+                    float r = Fluid::GirthAt(bo, (c.h + c.a * (0.4f * c.sc)).ni(), c.a.ni());
+                    bool guess = false;
+                    if (r < 0.0f && partner) { r = 2.5f * c.sc; guess = true; }   // his mesh can't be read: a werewolf's usual thickness
+                    if (r > 0.0f) {
+                        constexpr float kRest = 0.5f;   // the closed hole's own radius (mesh units)
+                        want = std::clamp((r / c.sc * dw.beastFit - kRest) / 2.0f, 0.0f, 1.6f);
+                        s.beastMax = std::max(s.beastMax, want);
+                        s.beastR = std::max(s.beastR, r / c.sc);
+                        s.beastGuess = guess;
+                    }
+                    if (bo->GetFormID() != s.beastLogged || now - s.beastLogAt > 20.0) {
+                        if (s.beastMax > 0.0f) {
+                            const char* an = act->GetDisplayFullName();
+                            const char* bn = bo->GetDisplayFullName();
+                            logger::info("Anatomica beast open: {} round {} ({:08X}) - PPA leaves him out, so Anatomica opens the hole: "
+                                         "schlong up to {:.1f} units across at the hole{}, opened up to {:.2f} (fit {:.0f}%)",
+                                         an ? an : "?", bn ? bn : "?", bo->GetFormID(), s.beastR * 2.0f,
+                                         s.beastGuess ? " (his mesh could not be read: a usual werewolf size)" : "", s.beastMax, dw.beastFit * 100.0f);
+                            s.beastLogged = bo->GetFormID(); s.beastLogAt = now; s.beastMax = 0.0f; s.beastR = 0.0f;
+                        }
+                    }
+                }
+                ease(s.beastHole, want, 0.15f, want > 0.0f ? 0.3f : 0.5f);   // opens on the push, closes on the pull-out
+                if (s.beastHole < 0.005f && want == 0.0f) s.beastHole = 0.0f;
+            }
+            send("Anatomica Gape", s.beastHole, s.holeSent);   // 0 unless a beast form is in him (2.4 test builds used it for every man)
             send("Anatomica Canal", s.canal, s.canalSent);
             send("Anatomica Pout", s.ringPos, s.poutSent);
             for (int i = 0; i < kNB; ++i) send(BulgeNames()[i].c_str(), s.bulge[i], s.bulgeSent[i]);

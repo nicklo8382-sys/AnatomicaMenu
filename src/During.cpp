@@ -207,6 +207,7 @@ namespace During {
         g_w.bulgeShape = 0;   // 2.5p: always from his schlong (the one-shape-for-everyone choice is gone)
         F("BulgeShaftStrength", g_w.shaftK, 0.0f, 2.0f); F("BulgeHeadStrength", g_w.headK, 0.0f, 2.0f);
         F("BulgeBuildTime", g_w.buildTime, 1.0f, 60.0f); F("BulgeTravelSpeed", g_w.travelSpeed, 0.1f, 2.0f); B("BulgeHoldFull", g_w.holdFull);
+        B("BeastOpen", g_w.beastOpen); F("BeastOpenFit", g_w.beastFit, 0.5f, 1.5f);   // 2.6q
         B("BulgeHipFade", g_w.hipFade); F("BulgeHipFrom", g_w.hipFrom, 30.0f, 150.0f);
         F("BulgeStomach", g_w.belly, 0.0f, 2.0f); F("BulgeStomachTime", g_w.bellyTime, 1.0f, 180.0f); F("BulgeStomachRandom", g_w.bellyRandom, 0.0f, 1.0f);
         B("BulgeSuperDeep", g_w.deep); F("BulgeSuperDeepChance", g_w.deepChance, 0.0f, 1.0f);
@@ -493,6 +494,16 @@ namespace During {
                 if (Tr::SliderFloat("Pull-out grows as he is worked", &gr, 0.0f, 200.0f, "+%.0f%%")) { g_w.grow = gr / 100.0f; ch = true; }
                 Help("The pull-out limit grows over the scene as he is worked open, by up to this much (+100% = twice as far by the "
                      "end, +200% = three times). 0% = it never grows. It goes back with the gape after the scene.");
+            }
+            ch |= Tr::Checkbox("Open him round a werewolf, Vampire Lord or werebear", &g_w.beastOpen);
+            Help("PPA leaves werewolves, Vampire Lords and werebears out of its scenes, so nothing opens him round them. With "
+                 "this on Anatomica does it itself: his hole opens as wide as their schlong is where it passes through him, "
+                 "following every thrust, and closes as they pull out. Human partners stay with PPA.");
+            if (g_w.beastOpen) {
+                float bf = g_w.beastFit * 100.0f;
+                if (Tr::SliderFloat("How snug round them", &bf, 50.0f, 150.0f, "%.0f%%")) { g_w.beastFit = bf / 100.0f; ch = true; }
+                Help("100% = the hole exactly as wide as the schlong. Lower is tighter (the schlong sinks into the rim a little), "
+                     "higher leaves a gap round it.");
             }
             ch |= Tr::Checkbox("Belly bulge", &g_bulgeOn);
             Help("When the tip is deep in him his lower belly bulges where it is, and the bump moves up and down with each "

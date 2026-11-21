@@ -99,7 +99,7 @@ namespace {
         double vagSince = -1.0;          // when the vaginal-scene move first wanted to start (pose settles first)
         std::string alignDone;           // the scene his OStim alignment was already moved for
         RE::NiPoint3 fitSum{};           // 2.5z: measuring how he lines up with his partner's schlong over the first seconds
-        float tSum = 0.0f, latSum = 0.0f;
+        float tSum = 0.0f, latSum = 0.0f; bool fitBeast = false;   // 2.6p: measured along a beast form's penis
         int fitN = 0;
         double fitStart = -1.0;
         std::string fitScene;
@@ -214,7 +214,7 @@ namespace {
     // where his hole is along the partner's schlong (t: 0 = at the base, 1 = at the tip; lat = how far off its line), and
     // the move that puts his hole kTarget of the way along it
     constexpr float kTarget = 0.45f;
-    struct Fit { RE::Actor* partner = nullptr; RE::NiPoint3 corr{}; float t = 0.0f, lat = 0.0f; };
+    struct Fit { RE::Actor* partner = nullptr; RE::NiPoint3 corr{}; float t = 0.0f, lat = 0.0f; bool beast = false; };
     bool Measure(RE::Actor* a, bool man, const std::vector<RE::Actor*>& all, Fit& f) {
         auto* root = a->Get3D(false);
         auto* pel = root ? root->GetObjectByName(RE::BSFixedString("NPC Pelvis [Pelv]")) : nullptr;
@@ -228,7 +228,8 @@ namespace {
             RE::NiAVObject* tp = nullptr;
             // 2.6m: a werewolf / Vampire Lord / werebear's schlong hangs on its own bones (the beast skeletons carry the
             // human genital bones too, unused - measuring along those moved the bottom 15 units out of place)
-            if (orr && Colossal::BeastForm(o) != 0) {
+            const bool beastO = orr && Colossal::BeastForm(o) != 0;
+            if (beastO) {
                 static const char* kChains[][2] = { { "WWD 2", "WWD 9" }, { "VLDick02", "VLDick06" }, { "BearD 4", "BearD 9" } };
                 for (auto& c : kChains) {
                     b = orr->GetObjectByName(RE::BSFixedString(c[0]));
@@ -253,8 +254,10 @@ namespace {
             const float score = lat + (t < -0.3f ? (-0.3f - t) * L : 0.0f) + (t > 1.6f ? (t - 1.6f) * L : 0.0f);
             if (score >= best) continue;
             best = score;
-            f.partner = o; f.t = t; f.lat = lat;
-            f.corr = Sub(Add(b->world.translate, Mul(ax, kTarget * L)), hole);
+            f.partner = o; f.t = t; f.lat = lat; f.beast = beastO && b && std::string_view(b->name.c_str() ? b->name.c_str() : "").find("Genitals") == std::string_view::npos;
+            // 2.6p: a beast's penis bones are not down the middle of the mesh (they sit off its line, and the knot and
+            // sheath move the base) - only slide him along it, and leave the side-to-side to PPA
+            f.corr = f.beast ? Mul(ax, (kTarget - t) * L) : Sub(Add(b->world.translate, Mul(ax, kTarget * L)), hole);
         }
         return f.partner != nullptr && best < 40.0f;
     }
@@ -394,7 +397,7 @@ namespace Align {
                     if (s.fitScene != s.scene) { s.fitScene = s.scene; s.fitSum = {}; s.tSum = s.latSum = 0.0f; s.fitN = 0; s.fitStart = now; }
                     Fit f;
                     if (now - s.fitStart > 0.6 && Measure(a, man, all, f)) {
-                        s.fitSum = Add(s.fitSum, f.corr); s.tSum += f.t; s.latSum += f.lat; ++s.fitN;
+                        s.fitSum = Add(s.fitSum, f.corr); s.tSum += f.t; s.latSum += f.lat; ++s.fitN; s.fitBeast = f.beast;
                     }
                     if (now - s.fitStart > 2.6 && s.fitN >= 8) {
                         s.alignDone = s.scene;
@@ -402,7 +405,9 @@ namespace Align {
                         const float t = s.tSum * inv, lat = s.latSum * inv;
                         RE::NiPoint3 move = Mul(s.fitSum, inv * g.strength);
                         const char* nm = a->GetDisplayFullName();
-                        const bool off = t < 0.15f || t > 1.1f || lat > 1.5f;
+                        // 2.6p: a beast partner - only when he is clearly off it (the base past his hole, or the tip short of
+                        // it); moving him for less broke PPA's hold and the anus closed
+                        const bool off = s.fitBeast ? (t < -0.05f || t > 1.15f) : (t < 0.15f || t > 1.1f || lat > 1.5f);
                         if (!off) logger::info("Anatomica bottoms: {} - lines up already in {} (hole {:.0f}% along the schlong, {:.1f} off its line)", nm ? nm : "?", s.scene, t * 100.0f, lat);
                         else {
                             AlignLoad();

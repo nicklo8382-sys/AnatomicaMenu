@@ -1573,7 +1573,7 @@ namespace {
     using MaskWeight = std::function<float(const V3& pos, const float w[4], const float boneK[4])>;
     std::unordered_map<std::string, std::string> g_cleftTex;
     std::string MakeMask(RE::BSGeometry* geo, const std::string& keyBase, const MaskWeight& weight, const std::function<float(const char*)>& boneFactor,
-                         const std::uint8_t bgr[3], int specBase = -1, float* covered = nullptr) {
+                         const std::uint8_t bgr[3], int specBase = -1, float* covered = nullptr, std::vector<float>* outA = nullptr) {
         auto* si = geo ? geo->GetGeometryRuntimeData().skinInstance.get() : nullptr;
         RE::NiSkinPartition* sp = si ? si->skinPartition.get() : nullptr;
         if (!sp && si && si->skinData) sp = si->skinData->skinPartition.get();
@@ -1599,7 +1599,7 @@ namespace {
         }
         const std::string key = specBase >= 0 ? std::format("{}_{}_s{}", keyBase, nv, specBase) : std::format("{}_{}_{:02X}{:02X}{:02X}", keyBase, nv, bgr[2], bgr[1], bgr[0]);
         static std::unordered_map<std::string, float> s_cover;
-        if (auto it = g_cleftTex.find(key); it != g_cleftTex.end()) { if (covered) *covered = s_cover[key]; return it->second; }
+        if (auto it = g_cleftTex.find(key); it != g_cleftTex.end() && !outA) { if (covered) *covered = s_cover[key]; return it->second; }
         const std::filesystem::path path = std::filesystem::path(kGenDirF) / (key + ".dds");
         const std::string tex = std::string(kGenTexF) + key + ".dds";
         std::error_code ec;
@@ -1642,7 +1642,7 @@ namespace {
         s_cover[key] = nv ? static_cast<float>(any) / static_cast<float>(nv) : 0.0f;
         if (covered) *covered = s_cover[key];
         if (any == 0) { logger::info("Anatomica wet: nothing to cover on {} for {}", geo->name.c_str() ? geo->name.c_str() : "?", keyBase); return g_cleftTex[key] = std::string{}; }
-        if (onDisk) return g_cleftTex[key] = tex;
+        if (onDisk && !outA) return g_cleftTex[key] = tex;
         constexpr int N = 512;
         std::vector<float> A(static_cast<size_t>(N) * N, 0.0f);
         auto put = [&](int x, int y, float a) { if (x >= 0 && y >= 0 && x < N && y < N) { float& c = A[static_cast<size_t>(y) * N + x]; c = std::max(c, a); } };
@@ -1701,6 +1701,7 @@ namespace {
                 }
             A.swap(B);
         }
+        if (outA) { *outA = A; if (onDisk) return g_cleftTex[key] = tex; }   // 2.6o: the face layers are mixed into one texture
         if (!WriteMaskDds(path, N, A, bgr, specBase)) { logger::info("Anatomica wet: could not write {}", path.string()); return g_cleftTex[key] = std::string{}; }
         logger::info("Anatomica wet: {} mask made for {} ({} of {} vertices, {} triangles)", keyBase, geo->name.c_str() ? geo->name.c_str() : "?", any, nv, tris);
         return g_cleftTex[key] = tex;
@@ -1719,6 +1720,10 @@ namespace {
         Actor::Sheen sh[Fluid::kFaceLayers]; float sent[Fluid::kFaceLayers]{};
         float fitSent = -1.0f;
         Fluid::FaceFit fit; bool ownFit = false;   // his race's own fitting (else the default)
+        // 2.6o: the face layers go into ONE RaceMenu face paint slot ("Face [Ovl#]"), mixed into one texture: a copy of the
+        // face (2.6j-2.6n) was never drawn - the game only feeds the real face its moving vertices
+        std::shared_ptr<std::vector<float>> la[Fluid::kFaceLayers]; std::uint8_t lbgr[Fluid::kFaceLayers][3]{}; float ltop[Fluid::kFaceLayers]{};
+        std::string mixKey, mixTex; RE::NiPointer<RE::BSGeometry> slot; bool toldSlot = false; double askedAt = -100.0;
     };
     std::unordered_map<RE::FormID, FaceSt> g_face;
 
@@ -1832,6 +1837,124 @@ namespace {
     }
     void DropFaces(FaceSt& F) { for (int i = 0; i < Fluid::kFaceLayers; ++i) DropFace(F, i); }
 
+    // 2.6o: the face layers in one RaceMenu face paint slot. The mix is redrawn only when a layer's strength moves a step
+    // (tenths), and kept on disk under its own name, so a look seen before comes back at once.
+    bool WriteRgbaDds(const std::filesystem::path& p, int n, const std::vector<std::uint8_t>& rgba) {
+        int mips = 1; for (int s_ = n; s_ > 1; s_ /= 2) ++mips;
+        std::uint32_t h[31] = {};
+        h[0] = 124; h[1] = 0x1 | 0x2 | 0x4 | 0x1000 | 0x20000 | 0x8; h[2] = n; h[3] = n; h[4] = n * 4; h[6] = mips;
+        h[18] = 32; h[19] = 0x41; h[21] = 32; h[22] = 0x00FF0000; h[23] = 0x0000FF00; h[24] = 0x000000FF; h[25] = 0xFF000000;
+        h[26] = 0x1000 | 0x8 | 0x400000;
+        std::error_code ec;
+        std::filesystem::create_directories(p.parent_path(), ec);
+        std::ofstream f(p, std::ios::binary);
+        if (!f) return false;
+        f.write("DDS ", 4);
+        f.write(reinterpret_cast<const char*>(h), 124);
+        std::vector<std::uint8_t> cur = rgba;
+        int sz = n;
+        for (int m = 0; m < mips; ++m) {
+            f.write(reinterpret_cast<const char*>(cur.data()), static_cast<std::streamsize>(cur.size()));
+            if (sz == 1) break;
+            const int ns = sz / 2; std::vector<std::uint8_t> nx(static_cast<size_t>(ns) * ns * 4);
+            for (int y = 0; y < ns; ++y)
+                for (int x = 0; x < ns; ++x)
+                    for (int c = 0; c < 4; ++c)
+                        nx[(y * ns + x) * 4 + c] = static_cast<std::uint8_t>((cur[((2 * y) * sz + 2 * x) * 4 + c] + cur[((2 * y) * sz + 2 * x + 1) * 4 + c] +
+                                                                              cur[((2 * y + 1) * sz + 2 * x) * 4 + c] + cur[((2 * y + 1) * sz + 2 * x + 1) * 4 + c] + 2) / 4);
+            cur.swap(nx); sz = ns;
+        }
+        return static_cast<bool>(f);
+    }
+    bool SetDiffuse(RE::BSGeometry* geo, const std::string& path);
+    std::string FaceSlotTex(RE::BSGeometry* geo) {   // its diffuse texture, lower case ("" none)
+        auto* lsp = geo ? geo->lightingShaderProp_cast() : nullptr;
+        auto* m = lsp ? static_cast<RE::BSLightingShaderMaterialBase*>(lsp->material) : nullptr;
+        const char* p = (m && m->textureSet) ? m->textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse) : nullptr;
+        std::string out = p ? p : "";
+        for (auto& ch : out) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        return out;
+    }
+    constexpr const char* kOverlayDefault = "textures\\actors\\character\\overlays\\default.dds";
+    void FaceMix(FaceSt& F, RE::Actor* a, RE::NiAVObject* root, RE::FormID id) {
+        // how strong each face layer is now, in tenths (the look changes in steps you cannot see)
+        int q[Fluid::kBodySweat]{}; bool any = false, wet = false;
+        for (int i = 0; i < Fluid::kBodySweat; ++i) {
+            if (!F.la[i] || !F.frameOk) continue;
+            q[i] = static_cast<int>(std::lround(std::clamp(F.want[i], 0.0f, 1.0f) * F.ltop[i] * 10.0f));
+            any |= q[i] > 0;
+            if (q[i] > 0 && (i == Fluid::kLipWet || i == Fluid::kTears || i == Fluid::kFaceSweat || i == Fluid::kFaceCum)) wet = true;
+        }
+        // the slot: ours already, or a free one ("Face [Ovl0-2]", RaceMenu's face paint)
+        auto* slot = F.slot.get();
+        if (!slot || !slot->parent || FaceSlotTex(slot).find("ad_facemix") == std::string::npos) {
+            slot = nullptr;
+            if (any) {
+                for (int k = 0; k < 8 && !slot; ++k) {
+                    auto* o = root->GetObjectByName(RE::BSFixedString(std::format("Face [Ovl{}]", k).c_str()));
+                    auto* g = o ? o->AsGeometry() : nullptr;
+                    if (!g) continue;
+                    const std::string d = FaceSlotTex(g);
+                    if (d.empty() || d.find("default.dds") != std::string::npos || d.find("ad_facemix") != std::string::npos) slot = g;
+                }
+                if (!slot) {
+                    if (!a->IsPlayerRef() && Now() - F.askedAt > 60.0) {   // an NPC only gets RaceMenu's paint slots when asked for them
+                        F.askedAt = Now();
+                        if (auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton()) {
+                            RE::TESObjectREFR* ref = a;
+                            RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb;
+                            vm->DispatchStaticCall("NiOverride", "AddOverlays", RE::MakeFunctionArguments(std::move(ref)), cb);
+                        }
+                    }
+                    if (!F.toldSlot) { F.toldSlot = true; logger::info("Anatomica face: {:08X} has no free RaceMenu face paint slot (Face [Ovl#]) for the face looks{}", id, a->IsPlayerRef() ? " - all in use" : " - asked RaceMenu for them"); }
+                    return;
+                }
+            }
+            F.slot = RE::NiPointer<RE::BSGeometry>(slot);
+            F.mixKey.clear();
+        }
+        if (!slot) return;
+        std::string key;
+        for (int i = 0; i < Fluid::kBodySweat; ++i) key += std::format("{}", q[i]);
+        if (q[Fluid::kFaceCum] > 0) key += std::format("_{:02X}{:02X}{:02X}", F.lbgr[Fluid::kFaceCum][2], F.lbgr[Fluid::kFaceCum][1], F.lbgr[Fluid::kFaceCum][0]);
+        if (key == F.mixKey) return;
+        F.mixKey = key;
+        if (!any) {   // nothing on his face: the slot back as RaceMenu left it
+            SetDiffuse(slot, std::string(kOverlayDefault));
+            SetAlpha(slot, 0.0f);
+            Shine(slot, 0.0f, 0.0f, 0.0f);
+            F.slot.reset();
+            return;
+        }
+        const std::string name = std::format("ad_facemix_{:X}_{}", static_cast<std::uint32_t>(VertsOf(F.head)), key);
+        const std::filesystem::path path = std::filesystem::path(kGenDirF) / (name + ".dds");
+        const std::string tex = std::string(kGenTexF) + name + ".dds";
+        std::error_code ec;
+        if (!std::filesystem::exists(path, ec)) {
+            constexpr int N = 512;
+            std::vector<std::uint8_t> rgba(static_cast<size_t>(N) * N * 4, 0);
+            for (int px = 0; px < N * N; ++px) {
+                float keep = 1.0f, r = 0.0f, gg = 0.0f, b = 0.0f, wsum = 0.0f;
+                for (int i = 0; i < Fluid::kBodySweat; ++i) {
+                    if (q[i] <= 0 || !F.la[i]) continue;
+                    const float al = std::clamp((*F.la[i])[px] * static_cast<float>(q[i]) / 10.0f, 0.0f, 1.0f);
+                    if (al <= 0.0f) continue;
+                    keep *= 1.0f - al;
+                    r += F.lbgr[i][2] * al; gg += F.lbgr[i][1] * al; b += F.lbgr[i][0] * al; wsum += al;
+                }
+                const float alpha = 1.0f - keep;
+                if (wsum > 0.0f) { rgba[px * 4 + 0] = static_cast<std::uint8_t>(b / wsum); rgba[px * 4 + 1] = static_cast<std::uint8_t>(gg / wsum); rgba[px * 4 + 2] = static_cast<std::uint8_t>(r / wsum); }
+                rgba[px * 4 + 3] = static_cast<std::uint8_t>(std::clamp(alpha * 255.0f, 0.0f, 255.0f));
+            }
+            if (!WriteRgbaDds(path, N, rgba)) { logger::info("Anatomica face: could not write {}", path.string()); return; }
+        }
+        SetDiffuse(slot, tex);
+        SetAlpha(slot, 1.0f);
+        slot->GetFlags().reset(RE::NiAVObject::Flag::kHidden);
+        Shine(slot, wet ? 1.0f : 0.0f, wet ? 300.0f : 0.0f, wet ? 4.0f * g.shine : 0.0f);   // wet looks glisten
+        logger::info("Anatomica face: {:08X} looks {} in {} ({})", id, key, slot->name.c_str() ? slot->name.c_str() : "?", name);
+    }
+
     void TickFaces() {
         for (auto it = g_face.begin(); it != g_face.end();) {
             FaceSt& F = it->second;
@@ -1840,7 +1963,11 @@ namespace {
             auto* a = RE::TESForm::LookupByID<RE::Actor>(it->first);
             auto* root = a && a->Is3DLoaded() ? a->Get3D(false) : nullptr;
             if (!root || F.root3D != root) { DropFaces(F); F.root3D = root; F.head = nullptr; F.body = nullptr; F.frameOk = F.frameTried = false; }
-            if (!wantAny) { if (has) DropFaces(F); it = g_face.erase(it); continue; }
+            if (!wantAny) {
+                if (has) DropFaces(F);
+                if (auto* sl = F.slot.get(); sl && sl->parent) { SetDiffuse(sl, std::string(kOverlayDefault)); SetAlpha(sl, 0.0f); Shine(sl, 0.0f, 0.0f, 0.0f); }   // 2.6o: his face paint slot back
+                it = g_face.erase(it); continue;
+            }
             if (!root) { ++it; continue; }
             if (Colossal::BeastForm(a) != 0) { if (has) DropFaces(F); ++it; continue; }   // 2.6m: none on fur (they painted his head, chest and arms white)
             const Fluid::FaceFit& fit = F.ownFit ? F.fit : g_fit;
@@ -1877,9 +2004,23 @@ namespace {
                 if (i == Fluid::kFaceSweat) top = 0.55f;
                 if (i == Fluid::kBodySweat) top = 0.45f;
                 if (i == Fluid::kFaceCum) { for (int c = 0; c < 3; ++c) bgr[2 - c] = static_cast<std::uint8_t>(std::clamp(F.rgb[c], 0.0f, 1.0f) * 255.0f); top = 0.92f; }
-                if (!bodyL && F.tex[i].empty()) {
-                    if (F.texTried[i]) continue;
+                if (!bodyL) {   // 2.6o: its mask (kept in memory) and colour, for the mix below
+                    if (F.sh[i].obj) DropFace(F, i);
+                    std::memcpy(F.lbgr[i], bgr, 3); F.ltop[i] = top;
+                    if (F.la[i] || F.texTried[i]) continue;
                     F.texTried[i] = true;
+                    const FaceSt fr = F;
+                    const V3 m = fr.m, ff = fr.f, uu = fr.u, rr = fr.r; const float L = fr.L; const int layer = i;
+                    auto A = std::make_shared<std::vector<float>>();
+                    MakeMask(F.head, std::format("ad_face{}_{}_{}_{}_{}", i, std::lround(m.x * 2), std::lround(m.y * 2), std::lround(m.z * 2), std::lround(L * 10)),
+                             [=](const V3& p, const float*, const float*) {
+                                 const V3 d = (p - m) / L;
+                                 return FaceWeight(layer, Dot(d, rr), Dot(d, uu), Dot(d, ff));
+                             }, nullptr, bgr, -1, nullptr, A.get());
+                    if (A->size() == 512u * 512u) F.la[i] = A;
+                    continue;
+                }
+                if (false) {
                     const FaceSt fr = F;   // copy of the frame for the weight function
                     const V3 m = fr.m, ff = fr.f, uu = fr.u, rr = fr.r; const float L = fr.L; const int layer = i;
                     F.tex[i] = MakeMask(F.head, std::format("ad_face{}_{}_{}_{}_{}", i, std::lround(m.x * 2), std::lround(m.y * 2), std::lround(m.z * 2), std::lround(L * 10)),
@@ -1919,6 +2060,7 @@ namespace {
                     }
                 }
             }
+            FaceMix(F, a, root, it->first);
             ++it;
         }
     }
