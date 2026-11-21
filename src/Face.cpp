@@ -29,15 +29,22 @@ namespace Face {
         struct Settings {
             bool on = true;
             bool jaw = true;
+            bool toDeepFit = true;        // 2.6k: with SMP Head - DeepFit installed, the mouth (lips, jaw, throat) is DeepFit's alone
             float jawMax = 0.8f;          // how wide (0-1 of the "big aah" shape) for the thickest schlong
+            float jawMin = 0.6f;          // 2.6k: at least this wide for any schlong in his mouth (a slim one still needs room)
             bool throat = false;          // experimental: neck bone scale
             float throatMax = 0.10f;      // +10% neck at most
             float deepFrom = 4.0f;        // units past his lips that count as deep (in his throat)
             bool exp = true;
             bool gag = true;
             float gagChance = 0.5f;       // chance each time it goes deep (a beginner, an average schlong)
+            bool gagByForce = true;       // 2.6k: rougher (faster, deeper strokes) gags more, gentle less
+            float gagForce = 1.0f;        //   ... how much (0 = not at all, 1 = from x0.35 gentle to x1.6 rough)
+            bool gagSound = true;         // 2.6k: a gag sound (Data\Sound\Fx\Anatomica\gag, when there are files)
+            float gagVol = 1.0f;
             float gagTime = 1.4f;         // seconds a gag lasts
             bool blush = true;            // OBlush
+            bool noTongue = true;         // 2.6k: no OStim tongue (Ahegao Expressions and the like) while his mouth is full
             float blushBoost = 0.35f;     // stronger by this much (alpha)
             float blushSecs = 8.0f;
             bool gulp = true;             // a gulp when he swallows (OStrands 0.8.0.8+ tells us)
@@ -63,7 +70,7 @@ namespace Face {
         };
         std::unordered_map<RE::FormID, Look> g_look;
         RE::TESFaction* g_exciteF = nullptr;
-        double g_testUntil = 0.0; RE::FormID g_testId = 0;
+        double g_testUntil = 0.0; RE::FormID g_testId = 0; int g_testLayer = -1;   // 2.6k: -1 = every layer
         // 2.6j: each race can have its own fitting (a werewolf's muzzle, a khajiit) - "Plugin|ID" of the race
         std::map<std::string, Fluid::FaceFit> g_raceFit;
         std::string RaceKey(RE::Actor* a) {
@@ -88,7 +95,15 @@ namespace Face {
             float depth = -100.0f;
             bool deep = false, blushing = false;
             float faceSent = -1.0f;
+            double tongueAt = 0.0;        // 2.6k: when we last took a tongue out of his mouth
+            float lastDepth = -100.0f, force = 0.0f;   // 2.6k: how hard he is being used (stroke speed, eased)
         };
+        void NoTongue(RE::Actor* a) {   // OStim's "tongue" equip object off him (OActor.UnequipObject, as the mods that put it on use)
+            auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+            if (!vm || !a) return;
+            RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb;
+            vm->DispatchStaticCall("OActor", "UnequipObject", RE::MakeFunctionArguments(static_cast<RE::Actor*>(a), RE::BSFixedString("tongue")), cb);
+        }
 
         std::mutex g_mx;
         std::unordered_map<RE::FormID, State> g_st;
@@ -239,7 +254,7 @@ namespace Face {
                 bool any = false, changed = false;
                 for (int i = 0; i < Fluid::kFaceLayers; ++i) {
                     out[i] = on ? L.v[i] : 0.0f;
-                    if (now < g_testUntil && it->first == g_testId) out[i] = 1.0f;
+                    if (now < g_testUntil && it->first == g_testId && (g_testLayer < 0 || g_testLayer == i)) out[i] = 1.0f;
                     any |= out[i] > 0.01f;
                     if (std::abs(out[i] - L.sent[i]) > 0.02f || (out[i] <= 0.01f && L.sent[i] > 0.0f)) changed = true;
                 }
@@ -254,6 +269,7 @@ namespace Face {
         }
 
         // ~4 times a second: who is sucking whom, how deep, how wide his jaw should be, gags, experience
+        bool DeepFitHere() { static const bool on = REX::W32::GetModuleHandleW(L"DeepFit.dll") != nullptr; return on; }
         void Scan(float dt) {
             Factions();
             std::lock_guard lk(g_mx);
@@ -284,10 +300,21 @@ namespace Face {
                     const float side = (rel + fwd * s.depth).Length();         // off the line of his mouth
                     const float k = Thick(best);
                     const bool in = s.depth > -0.8f && side < 4.0f;
-                    s.jawTarget = (g.jaw && in) ? g.jawMax * k : 0.0f;
+                    const bool leave = g.toDeepFit && DeepFitHere();   // 2.6k: DeepFit moves the mouth (HPH heads); nobody else's mouth is moved
+                    s.jawTarget = (g.jaw && in && !leave) ? std::max(g.jawMax * k, std::min(g.jawMin, g.jawMax)) : 0.0f;
+                    if (g.noTongue && in && now - s.tongueAt > 1.5) { s.tongueAt = now; NoTongue(a); }   // 2.6k: the schlong pushed it about
                     const bool deep = in && s.depth > g.deepFrom;
-                    if (deep && !s.deep && g.gag && now > s.gagUntil + 1.0 && Rand() < g.gagChance * ExpK(a->GetFormID()) * (0.6f + 0.6f * k)) {
+                    // 2.6k: how forceful: the strokes' speed in and out (units a second), eased over a few seconds
+                    if (in && s.lastDepth > -50.0f && dt > 0.0f) {
+                        const float speed = std::abs(s.depth - s.lastDepth) / dt;
+                        const float f = std::clamp((speed - 4.0f) / 14.0f, 0.0f, 1.0f);
+                        s.force += (f - s.force) * std::min(1.0f, dt / 3.0f);
+                    }
+                    s.lastDepth = in ? s.depth : -100.0f;
+                    const float forceK = g.gagByForce ? 1.0f + g.gagForce * ((0.35f + 1.25f * s.force) - 1.0f) : 1.0f;
+                    if (deep && !s.deep && g.gag && now > s.gagUntil + 1.0 && Rand() < g.gagChance * ExpK(a->GetFormID()) * (0.6f + 0.6f * k) * forceK) {
                         s.gagUntil = now + g.gagTime;
+                        if (g.gagSound) Sounds::Play("gag", a, g.gagVol * (0.8f + 0.4f * s.force));   // (nothing when the folder is empty)
                         ++g_exp[a->GetFormID()].gags;
                         if (g.looks && g.tears) { auto& L = g_look[a->GetFormID()]; L.v[Fluid::kTears] = std::min(1.0f, L.v[Fluid::kTears] + 0.35f); }
                         if (g.blush && OBlush()) s.blushUntil = now + g.blushSecs;
@@ -302,7 +329,7 @@ namespace Face {
                     // throat bulge (experimental)
                     // 2.6j: it used to follow each stroke in and out 4 times a second, so the neck (and the head on it) jumped with
                     // every change - now it holds while he keeps going deep and eases up and down in steps too small to see
-                    if (g.throat && deep) {
+                    if (g.throat && deep && !DeepFitHere()) {   // 2.6k: SMP Head - DeepFit bulges the throat itself
                         s.deepAt = now;
                         s.throatWant = std::max(s.throatWant * 0.98f, g.throatMax * k * std::clamp((s.depth - g.deepFrom) / 4.0f + 0.4f, 0.0f, 1.0f));
                     }
@@ -355,7 +382,8 @@ namespace Face {
                 if (!fg) continue;
                 const float face = std::max(s.jaw, s.gag);
                 if (face < 0.005f && s.faceSent <= 0.0f) continue;
-                if (s.jaw > 0.005f || s.faceSent > 0.0f) fg->phenomeKeyFrame.SetValue(kPhBigAah, std::clamp(s.jaw + 0.25f * s.gag, 0.0f, 1.0f));
+                const bool leaveMouth = g.toDeepFit && DeepFitHere();   // 2.6k: the gag face keeps its eyes and brows, the mouth is DeepFit's
+                if (!leaveMouth && (s.jaw > 0.005f || s.faceSent > 0.0f)) fg->phenomeKeyFrame.SetValue(kPhBigAah, std::clamp(s.jaw + 0.25f * s.gag, 0.0f, 1.0f));
                 for (auto m : {kModSquintL, kModSquintR}) fg->modifierKeyFrame.SetValue(m, 0.85f * s.gag);
                 for (auto m : {kModBrowInL, kModBrowInR}) fg->modifierKeyFrame.SetValue(m, 0.7f * s.gag);
                 s.faceSent = face;
@@ -408,6 +436,19 @@ namespace Face {
             q.next = Now() + 0.35 + 0.3 * Rand();
             q.owed = 0.0f;
         }
+    }
+    void TestLayer(RE::Actor* a, int layer) {   // 2.6k: Testing page
+        if (!a) return;
+        std::lock_guard lk(g_mx);
+        g_testId = a->GetFormID(); g_testUntil = Now() + 20.0; g_testLayer = layer;
+        if (auto it = g_look.find(g_testId); it != g_look.end()) for (auto& sv : it->second.sent) sv = -1.0f;
+    }
+    void ClearFace(RE::Actor* a) {   // 2.6k: Testing page - everything off his face now
+        if (!a) return;
+        { std::lock_guard lk(g_mx); g_testUntil = 0.0; }
+        Bathed(a->GetFormID());
+        std::lock_guard lk(g_mx);
+        if (auto it = g_look.find(a->GetFormID()); it != g_look.end()) { for (auto& v : it->second.v) v = 0.0f; it->second.wetUntil = 0.0; }
     }
     void OnFace(RE::Actor* recv, RE::Actor* giver, float loads) {
         if (!recv || loads <= 0.0f) return;
@@ -551,9 +592,11 @@ namespace Face {
         auto B = [&](const char* k, bool& v) { if (save) ini.SetBoolValue(S, k, v); else v = ini.GetBoolValue(S, k, v); };
         auto F = [&](const char* k, float& v, float lo, float hi) { if (save) ini.SetDoubleValue(S, k, v); else v = std::clamp(static_cast<float>(ini.GetDoubleValue(S, k, v)), lo, hi); };
         std::lock_guard lk(g_mx);
-        B("On", g.on); B("Jaw", g.jaw); F("JawMax", g.jawMax, 0.1f, 1.0f);
+        B("On", g.on); B("Jaw", g.jaw); B("LeaveMouthToDeepFit", g.toDeepFit); F("JawMax", g.jawMax, 0.1f, 1.0f); F("JawMin", g.jawMin, 0.0f, 1.0f);
         B("ThroatBulge", g.throat); F("ThroatMax", g.throatMax, 0.01f, 0.3f); F("DeepFrom", g.deepFrom, 1.0f, 12.0f);
-        B("OralExperience", g.exp); B("Gag", g.gag); F("GagChance", g.gagChance, 0.0f, 1.0f); F("GagTime", g.gagTime, 0.3f, 4.0f);
+        B("OralExperience", g.exp); B("Gag", g.gag); F("GagChance", g.gagChance, 0.0f, 1.0f);
+        B("GagByForce", g.gagByForce); F("GagForce", g.gagForce, 0.0f, 2.0f); B("GagSound", g.gagSound); F("GagVolume", g.gagVol, 0.0f, 2.0f); F("GagTime", g.gagTime, 0.3f, 4.0f);
+        B("NoTongueWhileSucking", g.noTongue);
         B("OBlush", g.blush); F("OBlushBoost", g.blushBoost, 0.0f, 1.0f); F("OBlushSeconds", g.blushSecs, 1.0f, 30.0f);
         B("Gulp", g.gulp); F("GulpVolume", g.gulpVol, 0.0f, 2.0f);
         B("Looks", g.looks); B("LipWet", g.lipWet); F("LipWetSeconds", g.lipWetSecs, 5.0f, 600.0f); B("LipRed", g.lipRed); F("LipRedMinutes", g.lipRedMins, 0.2f, 30.0f);
@@ -586,11 +629,18 @@ namespace Face {
             ch |= Tr::Checkbox("Mouth & Face", &g.on);
             if (g.on) {
                 if (Tr::CollapsingHeader("Jaw###fjaw")) {
+                    if (DeepFitHere()) {
+                        ch |= Tr::Checkbox("Leave the mouth to SMP Head - DeepFit", &g.toDeepFit);
+                        Help("DeepFit is installed: it opens the lips round the schlong and bulges the throat on High Poly Heads. On: Anatomica moves no one's mouth (a head without DeepFit's mouth bones keeps its own). Gags still squeeze his eyes and brows.");
+                    }
                     ch |= Tr::Checkbox("His mouth opens as wide as the schlong is thick", &g.jaw);
                     Help("Uses his face's own open-mouth shape, on top of OStim's expression. Thickness from The New Gentleman's size (XS to XL); average when not known.");
                     if (g.jaw) {
                         float j = g.jawMax * 100.0f;
                         if (Tr::SliderFloat("Widest", &j, 10.0f, 100.0f, "%.0f%% (for the thickest)")) { g.jawMax = j / 100.0f; ch = true; }
+                        float jm = g.jawMin * 100.0f;
+                        if (Tr::SliderFloat("At least", &jm, 0.0f, 100.0f, "%.0f%% (any schlong)")) { g.jawMin = jm / 100.0f; ch = true; }
+                        Help("However slim the schlong, his mouth opens at least this wide while it is in.");
                     }
                 }
                 if (Tr::CollapsingHeader("Deep and gagging###fdeep")) {
@@ -602,10 +652,22 @@ namespace Face {
                         float c = g.gagChance * 100.0f;
                         if (Tr::SliderFloat("Chance", &c, 0.0f, 100.0f, "%.0f%% each time it goes deep (a beginner)")) { g.gagChance = c / 100.0f; ch = true; }
                         ch |= Tr::SliderFloat("Lasts", &g.gagTime, 0.3f, 4.0f, "%.1f s");
+                        ch |= Tr::Checkbox("Rougher gags more, gentler less", &g.gagByForce);
+                        Help("How forceful it is, from how fast and deep the strokes go: a slow, gentle blowjob gags him about a third as often, a rough one half again more.");
+                        if (g.gagByForce) {
+                            float f = g.gagForce * 100.0f;
+                            if (Tr::SliderFloat("How much it matters", &f, 0.0f, 200.0f, "%.0f%%")) { g.gagForce = f / 100.0f; ch = true; }
+                        }
+                        ch |= Tr::Checkbox("Gag sounds", &g.gagSound);
+                        Help("WAV files in Data\\Sound\\Fx\\Anatomica\\gag (any names; add or replace them) - one plays when he gags, louder when it is rough. None are included yet.");
+                        if (g.gagSound) {
+                            ch |= Tr::SliderFloat("Gag volume", &g.gagVol, 0.0f, 2.0f, "x%.1f");
+                            Tr::TextDisabled("%s", Lang::Fmt("{} gag sound files found", Sounds::Count("gag")).c_str());
+                        }
                     }
                     ch |= Tr::Checkbox("Throat bulge (experimental)", &g.throat);
                     Help("His neck swells as it goes deep. A test: the neck bone is scaled up (and the head back down), so the whole neck "
-                         "thickens a little - not a shaped bulge yet. Works on any head.");
+                         "thickens a little and the head can twitch - not a shaped bulge. With SMP Head - DeepFit installed this does nothing: DeepFit bulges the throat itself.");
                     if (g.throat) {
                         float t = g.throatMax * 100.0f;
                         if (Tr::SliderFloat("At most", &t, 1.0f, 30.0f, "+%.0f%% neck")) { g.throatMax = t / 100.0f; ch = true; }
@@ -626,6 +688,8 @@ namespace Face {
                         else Tr::TextDisabled(Lang::Fmt("{} gulp sounds (Data\\Sound\\Fx\\Anatomica\\gulp - add or replace WAV files there).", n).c_str());
                     }
                 }
+                ch |= Tr::Checkbox("No tongue out while his mouth is full", &g.noTongue);
+                Help("Mods such as Ahegao Expressions put OStim's tongue in his mouth as he gets excited; during a blowjob the schlong pushes it about. While he sucks, Anatomica takes it out again (every second and a half).");
                 if (Tr::CollapsingHeader("OBlush###fblush")) {
                     if (!OBlush()) Tr::TextDisabled("OBlush is not installed.");
                     ch |= Tr::Checkbox("Blush harder when he gags", &g.blush);
@@ -700,7 +764,7 @@ namespace Face {
                         if (auto sel = RE::Console::GetSelectedRef()) t = sel->As<RE::Actor>();
                         if (!t) if (auto* cr = RE::CrosshairPickData::GetSingleton()) if (auto r = cr->GetActiveTarget().get()) t = r->As<RE::Actor>();
                         if (!t) t = RE::PlayerCharacter::GetSingleton();
-                        if (t) { g_testId = t->GetFormID(); g_testUntil = Now() + 20.0; }
+                        if (t) { g_testId = t->GetFormID(); g_testUntil = Now() + 20.0; g_testLayer = -1; }
                     }
                     Help("The one clicked in the console or under your crosshair, or you. To check the fitting: lips, cheeks, tears, cum and sweat all at once.");
                     if (g_testId) { const auto info = Fluid::FaceInfo(g_testId); if (!info.empty()) Tr::TextDisabled(info.c_str()); }

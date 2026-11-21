@@ -274,11 +274,56 @@ namespace {
     void Task(std::function<void()> fn) {
         if (auto* t = SKSE::GetTaskInterface()) t->AddTask(std::move(fn));
     }
+    // 2.6k: an NPC in a scene must not have items added, equipped or removed - the game then re-checks what he wears
+    // and he dresses again in the middle of the scene (seen after a finish, when the wet sheen's rim armor went on).
+    // Those changes wait until the scene is over.
+    bool InScene(RE::Actor* a) {
+        static RE::TESFaction* ostim = nullptr; static RE::TESFaction* sexlab = nullptr; static bool looked = false;
+        if (!looked) {
+            looked = true;
+            if (auto* dh = RE::TESDataHandler::GetSingleton()) {
+                ostim = dh->LookupForm<RE::TESFaction>(0xD93, "OStim.esp");        // OStimExcitementFaction
+                sexlab = dh->LookupForm<RE::TESFaction>(0x00E50F, "SexLab.esm");   // SexLabAnimatingFaction
+            }
+        }
+        return a && ((ostim && a->IsInFaction(ostim)) || (sexlab && a->IsInFaction(sexlab)));
+    }
+    struct Deferred { RE::FormID want = 0; std::vector<RE::FormID> off; std::string tex; };
+    std::mutex g_deferMx;
+    std::unordered_map<RE::FormID, Deferred> g_deferred;
+    void EquipStrand(RE::FormID actorId, RE::FormID newLocal, RE::FormID oldLocal, std::string tex);
+    void FlushDeferred() {   // (from Step, under g_mx) - anyone whose scene is over gets what was held back
+        std::vector<std::pair<RE::FormID, Deferred>> go;
+        {
+            std::lock_guard dk(g_deferMx);
+            for (auto it = g_deferred.begin(); it != g_deferred.end();) {
+                auto* a = RE::TESForm::LookupByID<RE::Actor>(it->first);
+                if (!a || a->IsDead()) { it = g_deferred.erase(it); continue; }
+                if (InScene(a)) { ++it; continue; }
+                go.emplace_back(*it);
+                it = g_deferred.erase(it);
+            }
+        }
+        for (auto& [id, d] : go) {
+            EquipStrand(id, d.want, d.off.empty() ? 0 : d.off.front(), d.tex);
+            for (std::size_t i = 1; i < d.off.size(); ++i) EquipStrand(id, 0, d.off[i], {});
+        }
+    }
     void EquipStrand(RE::FormID actorId, RE::FormID newLocal, RE::FormID oldLocal, std::string tex) {
         Task([=]() {
             auto* a = RE::TESForm::LookupByID<RE::Actor>(actorId);
             auto* em = RE::ActorEquipManager::GetSingleton();
             if (!a || !em) return;
+            if (!a->IsPlayerRef() && InScene(a)) {   // 2.6k: later
+                std::lock_guard dk(g_deferMx);
+                Deferred& d = g_deferred[actorId];
+                if (d.want && d.want != newLocal && std::find(d.off.begin(), d.off.end(), d.want) == d.off.end()) d.off.push_back(d.want);
+                d.want = newLocal;
+                if (oldLocal && oldLocal != newLocal && std::find(d.off.begin(), d.off.end(), oldLocal) == d.off.end()) d.off.push_back(oldLocal);
+                std::erase(d.off, newLocal);
+                d.tex = tex;
+                return;
+            }
             if (newLocal) {
                 if (auto* arm = Armo(newLocal)) {
                     AllowRace(arm, a->GetRace());
@@ -302,6 +347,7 @@ namespace {
             auto* a = RE::TESForm::LookupByID<RE::Actor>(actorId);
             auto* em = RE::ActorEquipManager::GetSingleton();
             if (!a || !em) return;
+            if (!a->IsPlayerRef() && InScene(a)) return;   // 2.6k: not mid-scene (he would dress again); done again later
             auto inv = a->GetInventoryCounts([&](RE::TESBoundObject& o) {
                 auto* arm = o.As<RE::TESObjectARMO>();
                 if (!IsOurs(arm)) return false;
@@ -537,6 +583,7 @@ namespace {
             if (now >= it->expires || static_cast<int>(g_puddles.size()) > g.puddleMax) { DeleteRef(it->ref); it = g_puddles.erase(it); }
             else ++it;
         }
+        FlushDeferred();   // 2.6k
         for (auto wid : Fluid::WetMen()) if (!g_st.count(wid)) g_st[wid].self = wid;   // wet without cum: the sheen needs the rim armor
         for (auto it = g_st.begin(); it != g_st.end();) {
             const RE::FormID id = it->first;
