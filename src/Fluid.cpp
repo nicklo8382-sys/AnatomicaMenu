@@ -1885,12 +1885,14 @@ namespace {
             any |= q[i] > 0;
             if (q[i] > 0 && (i == Fluid::kLipWet || i == Fluid::kTears || i == Fluid::kFaceSweat || i == Fluid::kFaceCum)) wet = true;
         }
-        // the slot: ours already, or a free one ("Face [Ovl0-2]", RaceMenu's face paint)
+        // the slot: ours already, or a free one ("Face [Ovl#]", RaceMenu's face paint)
         auto* slot = F.slot.get();
         if (!slot || !slot->parent || FaceSlotTex(slot).find("ad_facemix") == std::string::npos) {
             slot = nullptr;
             if (any) {
-                for (int k = 0; k < 8 && !slot; ++k) {
+                // 2.6r: from the top down - blush / paint mods take the first free slot and kept painting over ours
+                // (the looks flashed and were gone); RaceMenu's skee64.ini [Overlays/Face] iNumOverlays gives more slots
+                for (int k = 11; k >= 0 && !slot; --k) {
                     auto* o = root->GetObjectByName(RE::BSFixedString(std::format("Face [Ovl{}]", k).c_str()));
                     auto* g = o ? o->AsGeometry() : nullptr;
                     if (!g) continue;
@@ -1926,7 +1928,7 @@ namespace {
             F.slot.reset();
             return;
         }
-        const std::string name = std::format("ad_facemix_{:X}_{}", static_cast<std::uint32_t>(VertsOf(F.head)), key);
+        const std::string name = std::format("ad_facemix2_{:X}_{}", static_cast<std::uint32_t>(VertsOf(F.head)), key);   // 2.6r: 2 = stronger mix
         const std::filesystem::path path = std::filesystem::path(kGenDirF) / (name + ".dds");
         const std::string tex = std::string(kGenTexF) + name + ".dds";
         std::error_code ec;
@@ -1942,7 +1944,7 @@ namespace {
                     keep *= 1.0f - al;
                     r += F.lbgr[i][2] * al; gg += F.lbgr[i][1] * al; b += F.lbgr[i][0] * al; wsum += al;
                 }
-                const float alpha = 1.0f - keep;
+                const float alpha = std::pow(std::clamp(1.0f - keep, 0.0f, 1.0f), 0.7f);   // 2.6r: stronger - room light washed the looks out
                 if (wsum > 0.0f) { rgba[px * 4 + 0] = static_cast<std::uint8_t>(b / wsum); rgba[px * 4 + 1] = static_cast<std::uint8_t>(gg / wsum); rgba[px * 4 + 2] = static_cast<std::uint8_t>(r / wsum); }
                 rgba[px * 4 + 3] = static_cast<std::uint8_t>(std::clamp(alpha * 255.0f, 0.0f, 255.0f));
             }
@@ -1951,7 +1953,7 @@ namespace {
         SetDiffuse(slot, tex);
         SetAlpha(slot, 1.0f);
         slot->GetFlags().reset(RE::NiAVObject::Flag::kHidden);
-        Shine(slot, wet ? 1.0f : 0.0f, wet ? 300.0f : 0.0f, wet ? 4.0f * g.shine : 0.0f);   // wet looks glisten
+        Shine(slot, 0.0f, 0.0f, 0.0f);   // 2.6r: no shine on the slot - it glossed the whole face (pale grey in dim light), not just the wet parts
         logger::info("Anatomica face: {:08X} looks {} in {} ({})", id, key, slot->name.c_str() ? slot->name.c_str() : "?", name);
     }
 

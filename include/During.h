@@ -66,6 +66,8 @@ namespace During {
         float linger = 4.0f;      // seconds it takes to go down after he pulls out (longer when worked hard)
         bool beastOpen = true;    // 2.6q: Anatomica opens him round a werewolf / Vampire Lord / werebear itself (PPA leaves them out)
         float beastFit = 1.0f;    // 2.6q: how snug (1 = the hole as wide as the schlong is thick where it passes)
+        bool beastGuide = true;   // 2.6s: Anatomica steers a werewolf / Vampire Lord / werebear schlong into the hole (PPA does not)
+        float beastGuideMax = 30.0f;   // 2.6s: the most it bends (degrees)
         int bulgeThrough = 0;     // shows through: 0 nothing (only when bare / revealing armour), 1 clothes, 2 clothes and armour
     };
     Want Get();

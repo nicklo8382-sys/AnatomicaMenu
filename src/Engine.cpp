@@ -192,6 +192,122 @@ namespace {
         return best;
     }
 
+    // ---- 2.6s: steering a beast form's schlong into the hole (PPA never guides werewolves / Vampire Lords / werebears)
+    // The gape tick says who is in whom (g_guide: the beast -> the man he is in, how hard to steer); every frame, right after
+    // the beast's animation has posed him (his UpdateAnimation, below), his schlong bones are turned a little - at the base,
+    // then the middle - so the shaft runs into the hole and along the canal. Only the beast's own schlong bones are touched,
+    // and the animation sets them again every frame (if it ever doesn't, the last pose we wrote is undone first).
+    struct Guide { RE::FormID bottom = 0; double until = 0.0; float maxDeg = 30.0f; };
+    std::mutex g_guideMx;
+    std::unordered_map<RE::FormID, Guide> g_guide;
+    std::atomic<int> g_guideN{0};   // how many are being steered (read every frame without the lock)
+    struct GuideMem { RE::NiMatrix3 orig[3], wrote[3]; bool have = false; float w = 0.0f; double logAt = -100.0; float worst = 0.0f; };
+    std::unordered_map<RE::FormID, GuideMem> g_guideMem;   // under g_guideMx
+    RE::NiMatrix3 AxisAngle(const V& axis, float ang) {
+        const float c = std::cos(ang), sn = std::sin(ang), t = 1.0f - c;
+        const float x = axis.x, y = axis.y, z = axis.z;
+        RE::NiMatrix3 m;
+        m.entry[0][0] = t * x * x + c;     m.entry[0][1] = t * x * y - sn * z; m.entry[0][2] = t * x * z + sn * y;
+        m.entry[1][0] = t * x * y + sn * z; m.entry[1][1] = t * y * y + c;     m.entry[1][2] = t * y * z - sn * x;
+        m.entry[2][0] = t * x * z - sn * y; m.entry[2][1] = t * y * z + sn * x; m.entry[2][2] = t * z * z + c;
+        return m;
+    }
+    bool Same(const RE::NiMatrix3& a, const RE::NiMatrix3& b) {
+        for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) if (std::abs(a.entry[i][j] - b.entry[i][j]) > 1e-5f) return false;
+        return true;
+    }
+    void SteerNow(RE::Actor* beast) {
+        Guide gd;
+        const double now = Now();
+        {
+            std::lock_guard lk(g_guideMx);
+            auto it = g_guide.find(beast->GetFormID());
+            if (it == g_guide.end()) return;
+            gd = it->second;
+        }
+        auto* root = beast->Get3D(false);
+        if (!root) return;
+        const auto chain = ShaftBones(beast, root);
+        if (chain.size() < 5 || std::strstr(chain[0], "Genitals")) return;   // only a beast's own schlong bones
+        RE::NiAVObject* n[3] = {Node(root, chain[0]), Node(root, chain[chain.size() / 3]), Node(root, chain[(chain.size() * 2) / 3])};
+        auto* tipN = Node(root, chain.back());
+        auto* preN = Node(root, chain[chain.size() - 2]);
+        if (!n[0] || !n[1] || !n[2] || !tipN || !preN || !n[0]->parent || !n[1]->parent || !n[2]->parent) return;
+        std::lock_guard lk(g_guideMx);
+        GuideMem& m = g_guideMem[beast->GetFormID()];
+        // the animation sets these bones each frame; if it didn't, put back what it last gave (no bending on top of our bend)
+        if (m.have) for (int k = 0; k < 3; ++k) if (Same(n[k]->local.rotate, m.wrote[k])) n[k]->local.rotate = m.orig[k];
+        const bool on = now < gd.until;
+        m.w = on ? std::min(1.0f, m.w + 0.08f) : std::max(0.0f, m.w - 0.06f);   // eased in / out over a few frames
+        m.have = false;
+        if (m.w <= 0.0f) { if (!on) { g_guideMem.erase(beast->GetFormID()); g_guide.erase(beast->GetFormID()); g_guideN = static_cast<int>(g_guide.size()); } return; }
+        auto* bot = RE::TESForm::LookupByID<RE::Actor>(gd.bottom);
+        if (!bot || !bot->Get3D(false)) return;
+        const Canal c = CanalOf(bot);
+        if (!c.ok) return;
+        RE::NiUpdateData ud{};
+        float worst = 0.0f;
+        for (int k = 0; k < 3; ++k) {
+            const V b(n[k]->world.translate);
+            V tip = V(tipN->world.translate);
+            {   // the real tip: a little past the last bone
+                V d = tip - V(preN->world.translate);
+                const float ld = Len(d);
+                if (ld > 1e-3f) tip = tip + d * (1.5f * c.sc / ld);
+            }
+            const float depth = Dot(tip - c.h, c.a);
+            if (depth < -9.0f * c.sc) return;   // the tip is well short of his hole: nothing to steer yet
+            // where the tip should be: on his canal's line, as deep as it is now (at least just inside)
+            const V aim = c.h + c.a * std::clamp(depth, 1.0f * c.sc, 25.0f * c.sc);
+            V u = tip - b, v = aim - b;
+            const float lu = Len(u), lv = Len(v);
+            if (lu < 1e-3f || lv < 1e-3f) continue;
+            u = u * (1.0f / lu); v = v * (1.0f / lv);
+            V ax = Cross(u, v);
+            const float la = Len(ax);
+            const float ang = std::atan2(la, Dot(u, v));
+            if (la < 1e-5f || ang < 0.002f) continue;
+            ax = ax * (1.0f / la);
+            static const float kShare[3] = {0.5f, 0.6f, 1.0f};   // the base takes half, the middle more of the rest, the last third the remainder
+            const float cap = gd.maxDeg * 0.01745329f * (k == 0 ? 0.6f : 0.4f);
+            const float turn = std::min(ang * kShare[k], cap) * m.w;
+            worst = std::max(worst, ang);
+            const RE::NiMatrix3 R = AxisAngle(ax, turn);
+            const RE::NiMatrix3& P = n[k]->parent->world.rotate;
+            m.orig[k] = n[k]->local.rotate;
+            // new world rotation R * W; local = P^T * R * W
+            n[k]->local.rotate = P.Transpose() * (R * n[k]->world.rotate);
+            m.wrote[k] = n[k]->local.rotate;
+            // the bones from here to the tip follow at once (their world positions are what the skin is drawn with)
+            for (size_t i = 0; i < chain.size(); ++i)
+                if (auto* q = Node(root, chain[i])) q->UpdateWorldData(&ud);
+        }
+        m.have = true;
+        m.worst = std::max(m.worst, worst);
+        if (now - m.logAt > 20.0 && m.worst > 0.0f) {
+            m.logAt = now;
+            const char* bn = beast->GetDisplayFullName();
+            const char* tn = bot->GetDisplayFullName();
+            logger::info("Anatomica guide: {}'s schlong steered into {} (it pointed up to {:.0f} degrees off his canal; bends at most {:.0f})",
+                         bn ? bn : "?", tn ? tn : "?", m.worst * 57.29578f, gd.maxDeg);
+            m.worst = 0.0f;
+        }
+    }
+    // the game's own call that poses an actor each frame: ours runs right after it
+    struct AnimHook {
+        static void Char(RE::Character* a, float dt) { g_charAnim(a, dt); if (a && g_guideN.load(std::memory_order_relaxed) > 0) SteerNow(a); }
+        static void Player(RE::PlayerCharacter* a, float dt) { g_playerAnim(a, dt); if (a && g_guideN.load(std::memory_order_relaxed) > 0) SteerNow(a); }
+        static inline REL::Relocation<decltype(Char)> g_charAnim;
+        static inline REL::Relocation<decltype(Player)> g_playerAnim;
+        static void Install() {
+            REL::Relocation<std::uintptr_t> vc{RE::VTABLE_Character[0]};
+            REL::Relocation<std::uintptr_t> vp{RE::VTABLE_PlayerCharacter[0]};
+            g_charAnim = vc.write_vfunc(0x7D, Char);
+            g_playerAnim = vp.write_vfunc(0x7D, Player);
+            logger::info("Anatomica guide: hooked the actor animation update (beast schlongs steered into the hole)");
+        }
+    };
+
     // the belly-bulge sliders (2.5: 56): Seg 1-6, Head 1-6, Knot, Flare 1-6, Ridge 1-6, Bead 1-6, Big 1-6, Big Head 1-6,
     // Hook 1-6, Knot 2, Tentacle 1-6
     constexpr int kSeg = 0, kHead = 6, kKnot1 = 12, kFlare = 13, kRidge = 19, kBead = 25, kBig = 31, kBigHead = 37, kHook = 43,
@@ -681,13 +797,19 @@ namespace {
             {
                 float want = 0.0f;
                 RE::Actor* bo = partner ? partner : atMan;
+                if (dw.beastGuide && c.ok && bo && Colossal::BeastForm(bo) != 0) {   // 2.6s: steer him in, for the next half second
+                    std::lock_guard gl(g_guideMx);
+                    g_guide[bo->GetFormID()] = {act->GetFormID(), now + 0.5, dw.beastGuideMax};
+                    g_guideN = static_cast<int>(g_guide.size());
+                }
                 if (dw.beastOpen && c.ok && bo && Colossal::BeastForm(bo) != 0) {
                     float r = Fluid::GirthAt(bo, (c.h + c.a * (0.4f * c.sc)).ni(), c.a.ni());
                     bool guess = false;
+                    if (r > 4.5f * c.sc) r = -1.0f;   // 2.6s: a slice across him at a slant (he was off to the side) reads far too thick
                     if (r < 0.0f && partner) { r = 2.5f * c.sc; guess = true; }   // his mesh can't be read: a werewolf's usual thickness
                     if (r > 0.0f) {
                         constexpr float kRest = 0.5f;   // the closed hole's own radius (mesh units)
-                        want = std::clamp((r / c.sc * dw.beastFit - kRest) / 2.0f, 0.0f, 1.6f);
+                        want = std::clamp((r / c.sc * dw.beastFit - kRest) / 2.0f, 0.0f, 4.0f);   // 2.6r: up to 300% fit
                         s.beastMax = std::max(s.beastMax, want);
                         s.beastR = std::max(s.beastR, r / c.sc);
                         s.beastGuess = guess;
@@ -1315,7 +1437,7 @@ namespace {
 namespace Engine {
     // the fit outline over the game (During sex page > Show the fit outline)
 
-    void Install() { std::thread(Loop).detach(); }
+    void Install() { std::thread(Loop).detach(); AnimHook::Install(); }
     void BodyMorph(RE::Actor* a, const char* name, const char* key, float v) { if (g_morph && a) g_morph->SetMorph(a, name, key, v); }
     float MorphSum(RE::Actor* a, const char* name) { return (g_morph && a) ? g_morph->GetBodyMorphs(a, name) : 0.0f; }
     void ClearMorphKey(RE::Actor* a, const char* key) { if (g_morph && a) g_morph->ClearBodyMorphKeys(a, key); }

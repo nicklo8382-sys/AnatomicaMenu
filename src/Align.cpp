@@ -255,9 +255,9 @@ namespace {
             if (score >= best) continue;
             best = score;
             f.partner = o; f.t = t; f.lat = lat; f.beast = beastO && b && std::string_view(b->name.c_str() ? b->name.c_str() : "").find("Genitals") == std::string_view::npos;
-            // 2.6p: a beast's penis bones are not down the middle of the mesh (they sit off its line, and the knot and
-            // sheath move the base) - only slide him along it, and leave the side-to-side to PPA
-            f.corr = f.beast ? Mul(ax, (kTarget - t) * L) : Sub(Add(b->world.translate, Mul(ax, kTarget * L)), hole);
+            // 2.6s: the whole move for a beast too (2.6p only slid him along it, thinking a beast's bones sat off the mesh's
+            // line - they don't: a werewolf's WWD bones run within a unit of its middle, and he was left 6 units to the side)
+            f.corr = Sub(Add(b->world.translate, Mul(ax, kTarget * L)), hole);
         }
         return f.partner != nullptr && best < 40.0f;
     }
@@ -405,9 +405,8 @@ namespace Align {
                         const float t = s.tSum * inv, lat = s.latSum * inv;
                         RE::NiPoint3 move = Mul(s.fitSum, inv * g.strength);
                         const char* nm = a->GetDisplayFullName();
-                        // 2.6p: a beast partner - only when he is clearly off it (the base past his hole, or the tip short of
-                        // it); moving him for less broke PPA's hold and the anus closed
-                        const bool off = s.fitBeast ? (t < -0.05f || t > 1.15f) : (t < 0.15f || t > 1.1f || lat > 1.5f);
+                        // 2.6s: a beast partner by the same rule, a little more room to the side (Anatomica steers his schlong in)
+                        const bool off = t < 0.15f || t > 1.1f || lat > (s.fitBeast ? 2.5f : 1.5f);
                         if (!off) logger::info("Anatomica bottoms: {} - lines up already in {} (hole {:.0f}% along the schlong, {:.1f} off its line)", nm ? nm : "?", s.scene, t * 100.0f, lat);
                         else {
                             AlignLoad();
