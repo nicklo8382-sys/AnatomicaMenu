@@ -2482,7 +2482,7 @@ namespace Colour {
                 if (Tr::SliderFloat("How much of his skin colour", &a, 5.0f, 100.0f, "%.0f%%")) { g.cumSkinAmt = a / 100.0f; changed = true; }
             }
             // 2.6i: glow
-            Tr::TextDisabled("Glow (OStrands 0.8.0.7 or newer). OStrands' own Glow switch makes everyone's glow; these make only some men's:");
+            Tr::TextDisabled("Glow (needs the OStrands from the Anatomica installer). OStrands' own Glow switch makes everyone's glow; these make only some men's:");
             changed |= Tr::Checkbox("Vampires' cum glows", &g.glowVamp);
             if (g.glowVamp) { ImGuiMCP::SameLine(); changed |= Tr::ColorEdit3("##gv", g.glowVampCol, kWheel | ImGuiMCP::ImGuiColorEditFlags_NoInputs); }
             changed |= Tr::Checkbox("Daedra's cum glows", &g.glowDaedra);

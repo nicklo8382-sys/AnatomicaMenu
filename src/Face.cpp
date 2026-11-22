@@ -1,6 +1,7 @@
 #include "Face.h"
 #include "Colour.h"
 #include "Engine.h"
+#include "During.h"
 #include "Fluid.h"
 #include "Lang.h"
 #include "Size.h"
@@ -97,6 +98,7 @@ namespace Face {
             bool deep = false, blushing = false;
             float faceSent = -1.0f;
             double tongueAt = 0.0;        // 2.6k: when we last took a tongue out of his mouth
+            double shapeSentAt = -1e9;    // 2.7a: when DeepFit was last told the shape
             float lastDepth = -100.0f, force = 0.0f;   // 2.6k: how hard he is being used (stroke speed, eased)
         };
         void NoTongue(RE::Actor* a) {   // OStim's "tongue" equip object off him (OActor.UnequipObject, as the mods that put it on use)
@@ -147,6 +149,7 @@ namespace Face {
             return true;
         }
         bool TipOf(RE::Actor* p, RE::NiPoint3& tip) {
+            if (Engine::BeastTip(p, tip)) return true;   // 2.7a: a werewolf / Vampire Lord / werebear's own schlong
             auto* g6 = Bone(p, "NPC Genitals06 [Gen06]");
             if (!g6) return false;
             tip = g6->world.translate + g6->world.rotate * RE::NiPoint3{0.0f, 1.1f * g6->world.scale, 0.0f};
@@ -269,6 +272,14 @@ namespace Face {
         }
 
         // ~4 times a second: who is sucking whom, how deep, how wide his jaw should be, gags, experience
+        // 2.7a: tell DeepFit (a mod event, sender = him): "DeepFit_Gulp" - a swallow runs down his throat; "DeepFit_Gag" - he gags
+        void ToDeepFit(const char* ev, RE::Actor* a, float v) {
+            if (!a) return;
+            if (auto* src = SKSE::GetModCallbackEventSource()) {
+                SKSE::ModCallbackEvent e{RE::BSFixedString(ev), RE::BSFixedString(""), v, a};
+                src->SendEvent(&e);
+            }
+        }
         bool DeepFitHere() { static const bool on = REX::W32::GetModuleHandleW(L"DeepFit.dll") != nullptr; return on; }
         void Scan(float dt) {
             Factions();
@@ -295,6 +306,20 @@ namespace Face {
                     s.lastSeen = now;
                     s.partner = best ? best->GetFormID() : 0;
                     if (!best) { s.jawTarget = 0.0f; s.depth = -100.0f; continue; }
+                    // 2.7a: a beast's schlong is steered in through his lips and down his throat (as into him), while it is near
+                    if (bestD < 30.0f) {
+                        RE::NiPoint3 down = -fwd;
+                        if (auto* nk = Bone(a, "NPC Neck [Neck]")) {
+                            const RE::NiPoint3 back = mouth - fwd * 2.5f;
+                            RE::NiPoint3 d = nk->world.translate - back;
+                            if (d.Unitize() > 1e-3f) down = d;
+                        }
+                        Engine::GuideMouth(best, a, mouth, -fwd, down, 2.5f, 1.0f);
+                    }
+                    if (now - s.shapeSentAt > 1.0) {   // 2.7a: tell DeepFit the shape family of the schlong in his mouth (ridged, segmented, ...)
+                        s.shapeSentAt = now;
+                        ToDeepFit("DeepFit_Shape", a, static_cast<float>(During::AutoShape(best)));
+                    }
                     const RE::NiPoint3 rel = bestTip - mouth;
                     s.depth = -rel.Dot(fwd);                                   // past his lips, into his mouth / throat
                     const float side = (rel + fwd * s.depth).Length();         // off the line of his mouth
@@ -315,6 +340,7 @@ namespace Face {
                     if (deep && !s.deep && g.gag && now > s.gagUntil + 1.0 && Rand() < g.gagChance * ExpK(a->GetFormID()) * (0.6f + 0.6f * k) * forceK) {
                         s.gagUntil = now + g.gagTime;
                         if (g.gagSound) Sounds::Play("gag", a, g.gagVol * (0.8f + 0.4f * s.force));   // (nothing when the folder is empty)
+                        ToDeepFit("DeepFit_Gag", a, 0.6f + 0.6f * s.force);
                         ++g_exp[a->GetFormID()].gags;
                         if (g.looks && g.tears) { auto& L = g_look[a->GetFormID()]; L.v[Fluid::kTears] = std::min(1.0f, L.v[Fluid::kTears] + 0.35f); }
                         if (g.blush && OBlush()) s.blushUntil = now + g.blushSecs;
@@ -344,8 +370,10 @@ namespace Face {
             for (auto it = g_gulps.begin(); it != g_gulps.end();) {
                 Gulps& q = it->second;
                 if (q.left > 0 && now >= q.next) {
-                    if (auto* a = RE::TESForm::LookupByID<RE::Actor>(it->first); a && a->Is3DLoaded() && g.gulp)
-                        Sounds::Play("gulp", a, g.gulpVol);
+                    if (auto* a = RE::TESForm::LookupByID<RE::Actor>(it->first); a && a->Is3DLoaded()) {
+                        if (g.gulp) Sounds::Play("gulp", a, g.gulpVol);
+                        ToDeepFit("DeepFit_Gulp", a, 1.0f);   // 2.7a: DeepFit shows the swallow running down his throat
+                    }
                     --q.left;
                     q.next = now + 0.75 + 0.4 * Rand();
                 }
@@ -679,7 +707,7 @@ namespace Face {
                 }
                 if (Tr::CollapsingHeader("Swallowing###fgulp")) {
                     ch |= Tr::Checkbox("A gulp when he swallows", &g.gulp);
-                    Help("OStrands 0.8.0.8 or newer tells Anatomica how much of a finish in the mouth was swallowed (its Mouth and spit settings): a gulp for about every quarter load, up to 4.");
+                    Help("The OStrands from the Anatomica installer tells Anatomica how much of a finish in the mouth was swallowed (its Mouth and spit settings): a gulp for about every quarter load, up to 4.");
                     if (g.gulp) {
                         float v = g.gulpVol * 100.0f;
                         if (Tr::SliderFloat("Gulp volume", &v, 0.0f, 200.0f, "%.0f%%")) { g.gulpVol = v / 100.0f; ch = true; }
@@ -716,7 +744,7 @@ namespace Face {
                     }
                     ch |= Tr::Checkbox("Cum on his face", &g.faceCum);
                     Help("A facial (the pull-out chance on OStrands' page) leaves cum on his face: strands of it hang from where it "
-                         "landed - cheeks, nose, lips, chin and brow - for minutes, then drip off. Needs OStrands 0.8.0.9e or newer.");
+                         "landed - cheeks, nose, lips, chin and brow - for minutes, then drip off. Needs the OStrands from the Anatomica installer.");
                     if (g.faceCum) { ImGuiMCP::SameLine(); ImGuiMCP::SetNextItemWidth(160.0f); ch |= Tr::SliderFloat("##fc", &g.faceCumHours, 0.1f, 24.0f, "%.1f game hours"); }
                     ch |= Tr::Checkbox("Sweat", &g.sweat);
                     Help("His skin itself grows glossier, face and body, the more excited he gets in a scene (any scene), up to the "
@@ -787,6 +815,10 @@ extern "C" {
     __declspec(dllexport) void Anatomica_Swallow(RE::Actor* recv, RE::Actor* giver, float loads) {
         (void)giver;
         Face::Swallowed(recv, loads);
+    }
+    // 2.7a: for DeepFit - the shape family of this man's schlong (During::BulgeShape: 6 ridged, 7 segmented, ...)
+    __declspec(dllexport) int Anatomica_ShaftShape(RE::Actor* top) {
+        return top ? During::AutoShape(top) : 0;
     }
     // 2.6j: OStrands 0.8.0.8+: a blowjob finish pulled out onto his face
     __declspec(dllexport) void Anatomica_Facial(RE::Actor* recv, RE::Actor* giver, float loads) {

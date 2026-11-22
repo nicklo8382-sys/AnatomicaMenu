@@ -200,7 +200,8 @@ namespace {
     // 2.6w: the hole is measured on the main thread (the gape tick) and kept in the beast's own frame - the frame hook runs
     // while the game poses actors on other threads, and reading the other man's bones there (while an outfit change
     // rebuilt them) could crash the game with no log
-    struct Guide { RE::FormID bottom = 0; double until = 0.0; float maxDeg = 45.0f; V hL, aL; float sc = 1.0f; };
+    struct Guide { RE::FormID bottom = 0; double until = 0.0; float maxDeg = 45.0f; V hL, aL; float sc = 1.0f;
+                   V aL2; float d1 = 1e9f; };   // 2.7a: a bent path - after d1 units along aL it goes on along aL2 (his mouth, then down his throat)
     std::mutex g_guideMx;
     std::unordered_map<RE::FormID, Guide> g_guide;
     std::atomic<int> g_guideN{0};   // how many are being steered (read every frame without the lock)
@@ -253,12 +254,18 @@ namespace {
         for (auto& d : m.did) d = false;
         const bool on = now < gd.until;
         Canal c;
+        V a2{}; float d1 = 1e9f;   // 2.7a: the second leg of a bent path (his throat)
         if (on && gd.sc > 0.0f) {   // his hole, from where the gape tick put it in our frame
             const auto& R = root->world;
             const RE::NiPoint3 h = R * gd.hL.ni();
             V a = V(R.rotate * gd.aL.ni());
             const float la = Len(a);
             if (la > 1e-4f) { c.h = V(h); c.a = a * (1.0f / la); c.sc = gd.sc; c.ok = true; }
+            if (gd.d1 < 1e8f) {
+                V b = V(R.rotate * gd.aL2.ni());
+                const float lb = Len(b);
+                if (lb > 1e-4f) { a2 = b * (1.0f / lb); d1 = gd.d1; }
+            }
         }
         if (c.ok) {   // eased (the tick only measures it a dozen times a second)
             if (!m.hasHole) { m.h = c.h; m.a = c.a; m.hasHole = true; }
@@ -276,7 +283,7 @@ namespace {
         bool gate = c.ok;
         if (gate) {   // only with the tip at his hole or in him
             V tip(tipN->world.translate);
-            if (Dot(tip - c.h, c.a) < -9.0f * c.sc) gate = false;
+            if (Dot(tip - c.h, c.a) < -14.0f * c.sc) gate = false;   // 2.7a: from a little further out (was 9)
         }
         // a world turn taking direction u to direction v, at most cap radians, as a turn in the bone's parent's frame
         auto turnTo = [&](RE::NiAVObject* nd, V u, V v, float cap, float& angOut) -> V {
@@ -318,11 +325,23 @@ namespace {
                     }
                     float ang = 0.0f;
                     want = turnTo(n[k], at - p, entry - p, maxR, ang);
-                    if (ang > 1.2f) { gate = false; want = V{}; }   // more than ~70 degrees off: not going into him
+                    if (ang > 2.4f) { gate = false; want = V{}; }   // 2.7a: more than ~140 degrees off (was 70): not going into him
+                    worst = std::max(worst, ang);
+                } else if (dp <= -0.5f * c.sc && seg > 1e-3f) {
+                    // 2.7a: still outside him - this bone helps the base: its segment turns towards the entrance as well, so
+                    // the whole outside part curves in (the base alone ran out of bend when he was well off the hole)
+                    const V entry = c.h + c.a * (0.4f * c.sc);
+                    float ang = 0.0f;
+                    want = turnTo(n[k], q - p, entry - p, maxR * 0.7f, ang);
                     worst = std::max(worst, ang);
                 } else if (dp > -0.5f * c.sc && seg > 1e-3f) {
                     // past the entrance: lie along the canal, aimed at the centre line a segment further in
-                    const V aimPt = c.h + c.a * (std::max(dp, 0.0f) + seg);
+                    // (2.7a: along a bent path when there is one - in through his mouth, then down his throat)
+                    float along = std::max(dp, 0.0f);
+                    const V bend = c.h + c.a * d1;
+                    if (along > d1) along = d1 + std::max(0.0f, Dot(p - bend, a2));
+                    const float to = along + seg;
+                    const V aimPt = to <= d1 ? c.h + c.a * to : bend + a2 * (to - d1);
                     float ang = 0.0f;
                     want = turnTo(n[k], q - p, aimPt - p, maxR, ang);   // 2.6x: each as far as the base (it barely held the centre)
                     worst = std::max(worst, ang);
@@ -1517,6 +1536,39 @@ namespace Engine {
     // the fit outline over the game (During sex page > Show the fit outline)
 
     void Install() { std::thread(Loop).detach(); AnimHook::Install(); }
+    // 2.7a: a beast's schlong in his mouth - steered in through his lips and then down his throat, the way it is into him
+    void GuideMouth(RE::Actor* beast, RE::Actor* bottom, const RE::NiPoint3& lips, const RE::NiPoint3& inward, const RE::NiPoint3& down, float d1, float sc) {
+        if (!beast || !bottom || Colossal::BeastForm(beast) == 0) return;
+        const ::During::Want dw = ::During::Get();
+        if (!dw.beastGuide) return;
+        auto* br = beast->Get3D(false);
+        if (!br) return;
+        const RE::NiTransform inv = br->world.Invert();
+        Guide g{bottom->GetFormID(), Now() + 0.5, dw.beastGuideMax};
+        g.hL = V(inv * lips);
+        g.aL = V(inv.rotate * inward);
+        g.aL2 = V(inv.rotate * down);
+        g.d1 = d1;
+        g.sc = sc;
+        std::lock_guard gl(g_guideMx);
+        g_guide[beast->GetFormID()] = g;
+        g_guideN = static_cast<int>(g_guide.size());
+    }
+    // 2.7a: the tip of a beast's own schlong (werewolf / Vampire Lord / werebear bones) - false for anyone else
+    bool BeastTip(RE::Actor* a, RE::NiPoint3& tip) {
+        if (!a || Colossal::BeastForm(a) == 0) return false;
+        auto* root = a->Get3D(false);
+        if (!root) return false;
+        const auto ch = ShaftBones(a, root);
+        if (ch.size() < 3 || std::strstr(ch[0], "Genitals")) return false;
+        auto* t = Node(root, ch.back());
+        auto* b = Node(root, ch[ch.size() - 2]);
+        if (!t || !b) return false;
+        RE::NiPoint3 d = t->world.translate - b->world.translate;
+        const float l = d.Unitize();
+        tip = t->world.translate + d * std::min(l, 3.0f);
+        return true;
+    }
     void BodyMorph(RE::Actor* a, const char* name, const char* key, float v) { if (g_morph && a) g_morph->SetMorph(a, name, key, v); }
     float MorphSum(RE::Actor* a, const char* name) { return (g_morph && a) ? g_morph->GetBodyMorphs(a, name) : 0.0f; }
     void ClearMorphKey(RE::Actor* a, const char* key) { if (g_morph && a) g_morph->ClearBodyMorphKeys(a, key); }

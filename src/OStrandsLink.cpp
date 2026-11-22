@@ -659,7 +659,7 @@ namespace OStrandsLink {
     void RenderTests(RE::Actor* a) {
         static std::string last;
         if (!a) return;
-        if (!Installed()) { Tr::TextDisabled("OStrands 0.8.0.3+ is not installed."); return; }
+        if (!Installed()) { Tr::TextDisabled("OStrands (the build from the Anatomica installer) is not installed."); return; }
         if (!Male(a)) { Tr::TextDisabled("Only men (Anatomica's anus)."); return; }
         RE::NiPoint3 hc, hd;
         if (!Fluid::HoleFrame(a, hc, hd)) { Tr::TextDisabled("No Anatomica rim found on him."); return; }
@@ -730,7 +730,7 @@ namespace OStrandsLink {
     }
     std::string TestFacial(RE::Actor* a, int kind, RE::Actor* giver) {
         if (!a) return "nobody";
-        if (!Installed()) return "OStrands 0.8.0.3+ is not installed";
+        if (!Installed()) return "OStrands (the build from the Anatomica installer) is not installed";
         auto* root = a->Get3D(false);
         auto* head = root ? root->GetObjectByName(RE::BSFixedString("NPC Head [Head]")) : nullptr;
         auto* mg = root ? root->GetObjectByName(RE::BSFixedString("NPC Head MagicNode [Hmag]")) : nullptr;
@@ -868,7 +868,7 @@ namespace OStrandsLink {
         bool ch = false;
         std::lock_guard lk(g_mx);
         if (!inst) {
-            Tr::TextColored(ImGuiMCP::ImVec4{1.0f, 0.45f, 0.4f, 1.0f}, "%s is not installed - these settings do nothing until it is (they are kept).", "OStrands 0.8.0.3+");
+            Tr::TextColored(ImGuiMCP::ImVec4{1.0f, 0.45f, 0.4f, 1.0f}, "%s is not installed - these settings do nothing until it is (they are kept).", "OStrands (the build from the Anatomica installer)");
             ImGuiMCP::BeginDisabled();
         }
         Tr::TextWrapped("OStrands draws the cum. It asks Anatomica where his hole really is (gape, wink and PPA's pull included), "
