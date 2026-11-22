@@ -1,3 +1,4 @@
+#include <unordered_set>
 #include "SKSEMenuFramework.h"
 #include "Lang.h"
 #include "OStrandsLink.h"
@@ -236,7 +237,17 @@ namespace {
         auto* root = beast->Get3D(false);
         if (!root) return;
         const auto chain = ShaftBones(beast, root);
-        if (chain.size() < 5 || std::strstr(chain[0], "Genitals")) return;   // only a beast's own schlong bones
+        // 2.7b: a beast form whose schlong hangs on the human NPC Genitals bones (some werewolf bodies are built that way)
+        // is steered too - PPA leaves beast forms out, so nothing else does it; it used to be skipped, so only the
+        // animation (or physics) bent his tip
+        if (chain.size() < 5 || (std::strstr(chain[0], "Genitals") && Colossal::BeastForm(beast) == 0)) return;
+        {
+            static std::unordered_set<RE::FormID> told;
+            static std::mutex                     toldMx;   // (the animation update runs on several threads)
+            std::lock_guard                       tl(toldMx);
+            if (std::strstr(chain[0], "Genitals") && told.insert(beast->GetFormID()).second)
+                logger::info("Anatomica guide: {:08X}'s schlong is on the NPC Genitals bones - steering those", beast->GetFormID());
+        }
         const size_t nc = chain.size();
         // 2.6w (like PPA): the base turns so the shaft goes in through the middle of his hole; every bone past the entrance
         // then lies along his canal (pulled back onto its centre line as it goes), so the part inside him follows the canal
