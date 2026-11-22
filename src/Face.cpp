@@ -35,6 +35,9 @@ namespace Face {
             bool throat = false;          // experimental: neck bone scale
             float throatMax = 0.10f;      // +10% neck at most
             float deepFrom = 4.0f;        // units past his lips that count as deep (in his throat)
+            bool throatBody = true;       // 2.6y TEST: the body's throat bulge (Anatomica Throat 1-4, only in the "(Throat Test)" BodySlide set)
+            float throatBodyMax = 1.0f;   // how strong (1 = as built), for the thickest schlong
+            float throatReach = 0.0f;     // counts the schlong this much longer (units) - for when it stops short of his neck
             bool exp = true;
             bool gag = true;
             float gagChance = 0.5f;       // chance each time it goes deep (a beginner, an average schlong)
@@ -93,6 +96,8 @@ namespace Face {
             float throatSent = 0.0f;
             float throatCur = 0.0f, throatWant = 0.0f;   // 2.6j: eased - it swells over a few strokes and goes down slowly
             double deepAt = -1e9;
+            float thrCur[4]{}, thrSent[4]{}, thrWant[4]{};   // 2.6y: the body's throat sections (0-1 x strength), eased
+            float thrReach = -100.0f;     // how far below the neck seam the schlong reaches (mesh units, for the log / menu)
             float depth = -100.0f;
             bool deep = false, blushing = false;
             float faceSent = -1.0f;
@@ -151,6 +156,59 @@ namespace Face {
             if (!g6) return false;
             tip = g6->world.translate + g6->world.rotate * RE::NiPoint3{0.0f, 1.1f * g6->world.scale, 0.0f};
             return true;
+        }
+        // 2.6y: how far the schlong reaches down the front of his neck, in his body mesh's own units (0 = the neck seam,
+        // 3 = the end of Anatomica Throat 1, 12 = the end of 4); -100 = not in his neck. The body's neck is skinned to
+        // NPC Spine2 alone, so a point taken into that bone's frame and back through its bind pose lands on the mesh as built.
+        float ThroatReach(RE::Actor* a, RE::Actor* p, float extra) {
+            auto* sp2 = Bone(a, "NPC Spine2 [Spn2]");
+            if (!sp2 || !p) return -100.0f;
+            static const char* kG[6] = {"NPC Genitals01 [Gen01]", "NPC Genitals02 [Gen02]", "NPC Genitals03 [Gen03]",
+                                        "NPC Genitals04 [Gen04]", "NPC Genitals05 [Gen05]", "NPC Genitals06 [Gen06]"};
+            std::vector<RE::NiPoint3> pts;
+            for (auto* n : kG) if (auto* b = Bone(p, n)) pts.push_back(b->world.translate);
+            RE::NiPoint3 tip;
+            if (pts.size() < 2 || !TipOf(p, tip)) return -100.0f;
+            pts.push_back(tip);
+            if (extra > 0.0f) { RE::NiPoint3 d = tip - pts[pts.size() - 2]; if (d.Unitize() > 1e-3f) pts.push_back(tip + d * extra); }
+            const RE::NiTransform inv = sp2->world.Invert();
+            // HIMBO's Spine2 bind (skin-to-bone): local = R * v + t
+            constexpr float c = 0.99103f, s_ = 0.13361f, ty = 18.07073f, tz = -89.63808f;
+            auto mesh = [&](const RE::NiPoint3& w) {
+                const RE::NiPoint3 l = inv * w;
+                const float ly = l.y - ty, lz = l.z - tz;
+                return RE::NiPoint3{l.x, c * ly + s_ * lz, -s_ * ly + c * lz};   // R transposed
+            };
+            float best = -100.0f;
+            for (std::size_t i = 0; i + 1 < pts.size(); ++i) {
+                const RE::NiPoint3 m0 = mesh(pts[i]), m1 = mesh(pts[i + 1]);
+                const int n = std::clamp(static_cast<int>((m1 - m0).Length() / 0.5f) + 1, 1, 64);
+                for (int j = 0; j <= n; ++j) {
+                    const RE::NiPoint3 m = m0 + (m1 - m0) * (static_cast<float>(j) / n);
+                    if (std::abs(m.x) > 4.0f || m.y < -7.0f || m.y > 5.0f || m.z < 94.0f || m.z > 112.0f) continue;   // in his neck / under the top of his chest
+                    best = std::max(best, 109.6f - m.z);
+                }
+            }
+            return best;
+        }
+        void ThroatBody(RE::Actor* a, State& s, float dt, bool clear) {   // the sections eased to what they want, sent when they change
+            static const char* kN[4] = {"Anatomica Throat 1", "Anatomica Throat 2", "Anatomica Throat 3", "Anatomica Throat 4"};
+            if (clear) {
+                bool any = false;
+                for (int i = 0; i < 4; ++i) { any |= s.thrSent[i] > 0.0f; s.thrCur[i] = s.thrSent[i] = s.thrWant[i] = 0.0f; }
+                if (any && a) { Engine::ClearMorphKey(a, "AnatomicaThroat"); Engine::UpdateBody(a); }
+                return;
+            }
+            bool ch = false;
+            const float k = std::min(1.0f, dt * 5.0f);
+            for (int i = 0; i < 4; ++i) {
+                s.thrCur[i] += (s.thrWant[i] - s.thrCur[i]) * k;
+                if (s.thrWant[i] <= 0.0f && s.thrCur[i] < 0.01f) s.thrCur[i] = 0.0f;
+                if (std::abs(s.thrCur[i] - s.thrSent[i]) > 0.02f || (s.thrCur[i] == 0.0f && s.thrSent[i] > 0.0f)) {
+                    Engine::BodyMorph(a, kN[i], "AnatomicaThroat", s.thrCur[i]); s.thrSent[i] = s.thrCur[i]; ch = true;
+                }
+            }
+            if (ch) Engine::UpdateBody(a);
         }
         float Thick(RE::Actor* p) {   // 0.45 (XS) .. 1 (XL)
             const int c = p ? Size::Cat(p) : Size::kUnknown;
@@ -294,7 +352,7 @@ namespace Face {
                     if (now - s.lastSeen > 60.0 && g.exp) ++g_exp[a->GetFormID()].times;   // a new time
                     s.lastSeen = now;
                     s.partner = best ? best->GetFormID() : 0;
-                    if (!best) { s.jawTarget = 0.0f; s.depth = -100.0f; continue; }
+                    if (!best) { s.jawTarget = 0.0f; s.depth = -100.0f; for (float& w : s.thrWant) w = 0.0f; s.thrReach = -100.0f; ThroatBody(a, s, dt, !g.throatBody); continue; }
                     const RE::NiPoint3 rel = bestTip - mouth;
                     s.depth = -rel.Dot(fwd);                                   // past his lips, into his mouth / throat
                     const float side = (rel + fwd * s.depth).Length();         // off the line of his mouth
@@ -338,6 +396,11 @@ namespace Face {
                     s.throatCur = th > s.throatCur ? std::min(th, s.throatCur + rate) : std::max(th, s.throatCur - rate);
                     if (th <= 0.0f && s.throatCur <= 0.0f) s.throatWant = 0.0f;
                     if (std::abs(s.throatCur - s.throatSent) > 0.003f || (s.throatCur <= 0.0f && s.throatSent > 0.0f)) { ThroatScale(a, s.throatCur); s.throatSent = s.throatCur; }
+                    // 2.6y TEST: the body's throat bulge - each section of the front of his neck fills as the schlong passes it
+                    s.thrReach = (g.throatBody && in) ? ThroatReach(a, best, g.throatReach) : -100.0f;
+                    for (int i = 0; i < 4; ++i)
+                        s.thrWant[i] = g.throatBody ? g.throatBodyMax * k * std::clamp((s.thrReach - 3.0f * i) / 3.0f, 0.0f, 1.0f) : 0.0f;
+                    ThroatBody(a, s, dt, !g.throatBody);
                 }
             }
             // gulps: one for about every quarter load swallowed, a second or so apart (at most 4 a finish)
@@ -360,6 +423,7 @@ namespace Face {
                 const bool gone = !a || !a->Is3DLoaded() || now - s.lastSeen > 0.6;
                 if (gone) { s.jawTarget = 0.0f; s.deep = false; }
                 if (gone && s.throatSent > 0.0f && a) { ThroatScale(a, 0.0f); s.throatSent = 0.0f; s.throatCur = 0.0f; s.throatWant = 0.0f; }
+                if (gone) ThroatBody(a, s, dt, true);
                 if (s.blushing && now > s.blushUntil && a) { Engine::BlushBoost(a, 0.0f); s.blushing = false; }
                 if (!s.blushing && now < s.blushUntil && a) s.blushing = Engine::BlushBoost(a, g.blushBoost);
                 if (gone && s.jaw < 0.01f && s.gag < 0.01f && !s.blushing && s.faceSent <= 0.0f) { it = g_st.erase(it); continue; }
@@ -594,6 +658,7 @@ namespace Face {
         std::lock_guard lk(g_mx);
         B("On", g.on); B("Jaw", g.jaw); B("LeaveMouthToDeepFit", g.toDeepFit); F("JawMax", g.jawMax, 0.1f, 1.0f); F("JawMin", g.jawMin, 0.0f, 1.0f);
         B("ThroatBulge", g.throat); F("ThroatMax", g.throatMax, 0.01f, 0.3f); F("DeepFrom", g.deepFrom, 1.0f, 12.0f);
+        B("ThroatBodyTest", g.throatBody); F("ThroatBodyStrength", g.throatBodyMax, 0.1f, 3.0f); F("ThroatBodyReach", g.throatReach, 0.0f, 12.0f);
         B("OralExperience", g.exp); B("Gag", g.gag); F("GagChance", g.gagChance, 0.0f, 1.0f);
         B("GagByForce", g.gagByForce); F("GagForce", g.gagForce, 0.0f, 2.0f); B("GagSound", g.gagSound); F("GagVolume", g.gagVol, 0.0f, 2.0f); F("GagTime", g.gagTime, 0.3f, 4.0f);
         B("NoTongueWhileSucking", g.noTongue);
@@ -671,6 +736,15 @@ namespace Face {
                     if (g.throat) {
                         float t = g.throatMax * 100.0f;
                         if (Tr::SliderFloat("At most", &t, 1.0f, 30.0f, "+%.0f%% neck")) { g.throatMax = t / 100.0f; ch = true; }
+                    }
+                    ch |= Tr::Checkbox("Throat bulge on the body (test)", &g.throatBody);
+                    Help("A test. The front of his neck, from the neck seam down to the top of his chest, swells along the schlong as it "
+                         "goes down past the seam (DeepFit bulges the throat inside his head). Needs the body built from the "
+                         "\"(Throat Test)\" set in BodySlide (Build Morphs ticked); the normal set leaves it out again.");
+                    if (g.throatBody) {
+                        ch |= Tr::SliderFloat("How much it swells", &g.throatBodyMax, 0.1f, 3.0f, "x%.1f");
+                        ch |= Tr::SliderFloat("Count the schlong longer by", &g.throatReach, 0.0f, 12.0f, "%.1f units");
+                        Help("If it never reaches his neck (the bulge stays flat), this makes it count as longer.");
                     }
                 }
                 if (Tr::CollapsingHeader("Oral experience###fexp")) {
@@ -775,6 +849,9 @@ namespace Face {
                     Tr::TextUnformatted(Lang::Fmt("{} - partner {}, {:.1f} units in{}, jaw {:.0f}%, oral experience: {} ({:.1f}), gagged {} times",
                         std::string(a ? a->GetName() : "?"), std::string(p ? p->GetName() : "none"), s.depth, s.deep ? " (deep)" : "",
                         s.jaw * 100.0f, std::string(Lang::T(Level(e.exp))), e.exp, e.gags).c_str());
+                    if (g.throatBody)
+                        Tr::TextDisabled("%s", Lang::Fmt("Throat on the body (test): the schlong reaches {:.1f} units below the neck seam, sections {:.0f} / {:.0f} / {:.0f} / {:.0f}%",
+                            std::max(s.thrReach, 0.0f), s.thrCur[0] * 100.0f, s.thrCur[1] * 100.0f, s.thrCur[2] * 100.0f, s.thrCur[3] * 100.0f).c_str());
                 }
             }
         }

@@ -324,7 +324,7 @@ namespace {
                     // past the entrance: lie along the canal, aimed at the centre line a segment further in
                     const V aimPt = c.h + c.a * (std::max(dp, 0.0f) + seg);
                     float ang = 0.0f;
-                    want = turnTo(n[k], q - p, aimPt - p, maxR * 0.5f, ang);
+                    want = turnTo(n[k], q - p, aimPt - p, maxR, ang);   // 2.6x: each as far as the base (it barely held the centre)
                     worst = std::max(worst, ang);
                 }
             }
@@ -866,7 +866,16 @@ namespace {
                     if (auto* br = bo->Get3D(false)) {   // his hole in the beast's own frame (the frame hook must not read our bones)
                         const RE::NiTransform inv = br->world.Invert();
                         gd2.hL = V(inv * c.h.ni());
-                        gd2.aL = V(inv.rotate * c.a.ni());
+                        // 2.6x: which way inside him: up towards his stomach (his Spine1, a little to the front), as PPA's canal
+                        // runs - the canal axis read off his rim pointed down at his pelvis (the schlong was bent low in him)
+                        V dir = c.a;
+                        if (auto* sp = Node(act->Get3D(false), "NPC Spine1 [Spn1]")) {
+                            const V target = V(sp->world.translate) + c.f * (-2.5f * c.sc);   // (f points out of his back)
+                            const V d = target - c.h;
+                            const float ld = Len(d);
+                            if (ld > 3.0f * c.sc && Dot(d, c.a) > -0.2f * ld) dir = d * (1.0f / ld);
+                        }
+                        gd2.aL = V(inv.rotate * dir.ni());
                         gd2.sc = c.sc;
                     } else gd2.sc = 0.0f;
                     g_guide[bo->GetFormID()] = gd2;
@@ -1511,6 +1520,7 @@ namespace Engine {
     void BodyMorph(RE::Actor* a, const char* name, const char* key, float v) { if (g_morph && a) g_morph->SetMorph(a, name, key, v); }
     float MorphSum(RE::Actor* a, const char* name) { return (g_morph && a) ? g_morph->GetBodyMorphs(a, name) : 0.0f; }
     void ClearMorphKey(RE::Actor* a, const char* key) { if (g_morph && a) g_morph->ClearBodyMorphKeys(a, key); }
+    void UpdateBody(RE::Actor* a) { if (g_morph && a) g_morph->UpdateModelWeight(a, false); }
     void CumOverlay(RE::Actor* a, int level, int col, float alpha) { CumOverlayOne(a, level, col, alpha); }
     // 2.6j: a Vampire Lord's thrall - a faint red glow over his skin (a RaceMenu body paint slot of its own; 0 = off)
     bool BondGlow(RE::Actor* a, float strength) {
