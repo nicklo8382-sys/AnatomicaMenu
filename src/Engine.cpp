@@ -201,7 +201,7 @@ namespace {
     std::mutex g_guideMx;
     std::unordered_map<RE::FormID, Guide> g_guide;
     std::atomic<int> g_guideN{0};   // how many are being steered (read every frame without the lock)
-    struct GuideMem { RE::NiMatrix3 orig[3], wrote[3]; bool have = false; float w = 0.0f; double logAt = -100.0; float worst = 0.0f; };
+    struct GuideMem { RE::NiMatrix3 orig[3], wrote[3]; bool have = false; V bend[3]; V h, a; bool hasHole = false; double logAt = -100.0; float worst = 0.0f; };
     std::unordered_map<RE::FormID, GuideMem> g_guideMem;   // under g_guideMx
     RE::NiMatrix3 AxisAngle(const V& axis, float ang) {
         const float c = std::cos(ang), sn = std::sin(ang), t = 1.0f - c;
@@ -216,7 +216,10 @@ namespace {
         for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) if (std::abs(a.entry[i][j] - b.entry[i][j]) > 1e-5f) return false;
         return true;
     }
-    void SteerNow(RE::Actor* beast) {
+    // 2.6t: the bend is kept per bone as a small turn in its parent's frame and eased towards what this frame wants (it
+    // was applied fresh every frame in 2.6s - with the hole read from the other actor's bones while they were being posed,
+    // and switched off and on near the limits, the schlong shook). Off = eased back to none, never cut.
+    void SteerNow(RE::Actor* beast, float dt) {
         Guide gd;
         const double now = Now();
         {
@@ -237,54 +240,83 @@ namespace {
         GuideMem& m = g_guideMem[beast->GetFormID()];
         // the animation sets these bones each frame; if it didn't, put back what it last gave (no bending on top of our bend)
         if (m.have) for (int k = 0; k < 3; ++k) if (Same(n[k]->local.rotate, m.wrote[k])) n[k]->local.rotate = m.orig[k];
-        const bool on = now < gd.until;
-        m.w = on ? std::min(1.0f, m.w + 0.08f) : std::max(0.0f, m.w - 0.06f);   // eased in / out over a few frames
         m.have = false;
-        if (m.w <= 0.0f) { if (!on) { g_guideMem.erase(beast->GetFormID()); g_guide.erase(beast->GetFormID()); g_guideN = static_cast<int>(g_guide.size()); } return; }
-        auto* bot = RE::TESForm::LookupByID<RE::Actor>(gd.bottom);
-        if (!bot || !bot->Get3D(false)) return;
-        const Canal c = CanalOf(bot);
-        if (!c.ok) return;
+        const bool on = now < gd.until;
+        auto* bot = on ? RE::TESForm::LookupByID<RE::Actor>(gd.bottom) : nullptr;
+        Canal c;
+        if (bot && bot->Get3D(false)) c = CanalOf(bot);
+        // the hole eased too (it is read from his bones while the game may be posing him on another thread)
+        if (c.ok) {
+            if (!m.hasHole) { m.h = c.h; m.a = c.a; m.hasHole = true; }
+            const float kh = 1.0f - std::exp(-std::max(dt, 0.001f) / 0.05f);
+            m.h = m.h + (c.h - m.h) * kh;
+            V a2 = m.a + (c.a - m.a) * kh;
+            const float la2 = Len(a2);
+            if (la2 > 1e-4f) m.a = a2 * (1.0f / la2);
+            c.h = m.h; c.a = m.a;
+        }
+        const float ke = 1.0f - std::exp(-std::max(dt, 0.001f) / 0.12f);   // the bend's own easing (~0.12 s)
         RE::NiUpdateData ud{};
         float worst = 0.0f;
+        bool any = false;
+        bool gate = c.ok;
         for (int k = 0; k < 3; ++k) {
-            const V b(n[k]->world.translate);
-            V tip = V(tipN->world.translate);
-            {   // the real tip: a little past the last bone
-                V d = tip - V(preN->world.translate);
-                const float ld = Len(d);
-                if (ld > 1e-3f) tip = tip + d * (1.5f * c.sc / ld);
+            V want{};   // this bone's turn (axis x angle) in its parent's frame
+            if (gate) {
+                const V b(n[k]->world.translate);
+                V tip = V(tipN->world.translate);
+                {   // the real tip: a little past the last bone
+                    V d = tip - V(preN->world.translate);
+                    const float ld = Len(d);
+                    if (ld > 1e-3f) tip = tip + d * (1.5f * c.sc / ld);
+                }
+                const float depth = Dot(tip - c.h, c.a);
+                // only with the tip at his hole or in him, and near his canal's line (not a tip off to the side)
+                if (depth < -9.0f * c.sc || (k == 0 && Len((tip - c.h) - c.a * depth) > 7.0f * c.sc)) gate = false;
+                else {
+                    const V aim = c.h + c.a * std::clamp(depth, 1.0f * c.sc, 25.0f * c.sc);
+                    V u = tip - b, v = aim - b;
+                    const float lu = Len(u), lv = Len(v);
+                    if (lu > 1e-3f && lv > 1e-3f) {
+                        u = u * (1.0f / lu); v = v * (1.0f / lv);
+                        V ax = Cross(u, v);
+                        const float la = Len(ax);
+                        const float ang = std::atan2(la, Dot(u, v));
+                        if (k == 0 && ang > 1.2f) gate = false;   // more than ~70 degrees off: not going into him
+                        else if (la > 1e-5f && ang > 0.002f) {
+                            ax = ax * (1.0f / la);
+                            static const float kShare[3] = {0.5f, 0.6f, 1.0f};   // base half, middle more of the rest, last third the remainder
+                            const float cap = gd.maxDeg * 0.01745329f * (k == 0 ? 0.6f : 0.4f);
+                            const float turn = std::min(ang * kShare[k], cap);
+                            worst = std::max(worst, ang);
+                            // the world axis in the parent's frame
+                            const RE::NiMatrix3 PT = n[k]->parent->world.rotate.Transpose();
+                            const RE::NiPoint3 axl = PT * ax.ni();
+                            want = V(axl) * turn;
+                        }
+                    }
+                }
             }
-            const float depth = Dot(tip - c.h, c.a);
-            if (depth < -9.0f * c.sc) return;   // the tip is well short of his hole: nothing to steer yet
-            // where the tip should be: on his canal's line, as deep as it is now (at least just inside)
-            const V aim = c.h + c.a * std::clamp(depth, 1.0f * c.sc, 25.0f * c.sc);
-            V u = tip - b, v = aim - b;
-            const float lu = Len(u), lv = Len(v);
-            if (lu < 1e-3f || lv < 1e-3f) continue;
-            u = u * (1.0f / lu); v = v * (1.0f / lv);
-            V ax = Cross(u, v);
-            const float la = Len(ax);
-            const float ang = std::atan2(la, Dot(u, v));
-            if (la < 1e-5f || ang < 0.002f) continue;
-            ax = ax * (1.0f / la);
-            static const float kShare[3] = {0.5f, 0.6f, 1.0f};   // the base takes half, the middle more of the rest, the last third the remainder
-            const float cap = gd.maxDeg * 0.01745329f * (k == 0 ? 0.6f : 0.4f);
-            const float turn = std::min(ang * kShare[k], cap) * m.w;
-            worst = std::max(worst, ang);
-            const RE::NiMatrix3 R = AxisAngle(ax, turn);
-            const RE::NiMatrix3& P = n[k]->parent->world.rotate;
+            m.bend[k] = m.bend[k] + (want - m.bend[k]) * ke;
+            const float bl = Len(m.bend[k]);
+            if (bl < 1e-4f) continue;
+            any = true;
             m.orig[k] = n[k]->local.rotate;
-            // new world rotation R * W; local = P^T * R * W
-            n[k]->local.rotate = P.Transpose() * (R * n[k]->world.rotate);
+            // the turn in the parent's frame, then the animated local rotation
+            n[k]->local.rotate = AxisAngle(m.bend[k] * (1.0f / bl), bl) * n[k]->local.rotate;
             m.wrote[k] = n[k]->local.rotate;
-            // the bones from here to the tip follow at once (their world positions are what the skin is drawn with)
-            for (size_t i = 0; i < chain.size(); ++i)
+            m.have = true;
+            for (size_t i = 0; i < chain.size(); ++i)   // the bones from here to the tip follow at once
                 if (auto* q = Node(root, chain[i])) q->UpdateWorldData(&ud);
         }
-        m.have = true;
+        if (!any && !on) {   // eased all the way back and no longer asked for: forget him
+            g_guideMem.erase(beast->GetFormID());
+            g_guide.erase(beast->GetFormID());
+            g_guideN = static_cast<int>(g_guide.size());
+            return;
+        }
         m.worst = std::max(m.worst, worst);
-        if (now - m.logAt > 20.0 && m.worst > 0.0f) {
+        if (now - m.logAt > 20.0 && m.worst > 0.0f && bot) {
             m.logAt = now;
             const char* bn = beast->GetDisplayFullName();
             const char* tn = bot->GetDisplayFullName();
@@ -293,10 +325,11 @@ namespace {
             m.worst = 0.0f;
         }
     }
+
     // the game's own call that poses an actor each frame: ours runs right after it
     struct AnimHook {
-        static void Char(RE::Character* a, float dt) { g_charAnim(a, dt); if (a && g_guideN.load(std::memory_order_relaxed) > 0) SteerNow(a); }
-        static void Player(RE::PlayerCharacter* a, float dt) { g_playerAnim(a, dt); if (a && g_guideN.load(std::memory_order_relaxed) > 0) SteerNow(a); }
+        static void Char(RE::Character* a, float dt) { g_charAnim(a, dt); if (a && g_guideN.load(std::memory_order_relaxed) > 0) SteerNow(a, dt); }
+        static void Player(RE::PlayerCharacter* a, float dt) { g_playerAnim(a, dt); if (a && g_guideN.load(std::memory_order_relaxed) > 0) SteerNow(a, dt); }
         static inline REL::Relocation<decltype(Char)> g_charAnim;
         static inline REL::Relocation<decltype(Player)> g_playerAnim;
         static void Install() {

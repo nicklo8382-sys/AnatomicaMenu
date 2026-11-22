@@ -709,6 +709,16 @@ namespace OStrandsLink {
 
     // 2.6k: Testing page - a facial: spurts from just in front of his face, at it, as a finish pulled out of his mouth
     // kind 0 a normal load, 1 a Colossal Load, 2 a light one (a few strings), 3 in a giver's colour (the one picked)
+    // 2.6u: drops for the face (tears, cum on his face) - OStrands' own fluid, so they run down the skin and drip
+    bool EmitAt(RE::Actor* host, const RE::NiPoint3& at, const RE::NiPoint3& vel, int count, const float rgb[3], std::uint32_t* stream) {
+        Resolve();   // (no lock: called from the face code under its own lock)
+        if (!g_api.emit || !host) return false;
+        static std::atomic<std::uint32_t> next{1};
+        std::uint32_t st = 0;
+        if (stream) { if (!*stream) *stream = 0x40000000u + (next++ & 0x0FFFFFFFu); st = *stream; }
+        const float p[3] = {at.x, at.y, at.z}, v[3] = {vel.x, vel.y, vel.z};
+        return g_api.emit(host, st, p, v, count, rgb);
+    }
     std::string TestFacial(RE::Actor* a, int kind, RE::Actor* giver) {
         if (!a) return "nobody";
         if (!Installed()) return "OStrands 0.8.0.3+ is not installed";

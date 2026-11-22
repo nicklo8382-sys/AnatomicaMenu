@@ -58,6 +58,7 @@ namespace Face {
             bool tears = true;   float tearsSecs = 120.0f;     // gagging brings tears
             bool faceCum = true; float faceCumHours = 2.0f;    // cum on his face (a messy mouth, a facial)
             bool sweat = true;   float sweatMax = 1.0f;        // he sweats as he gets excited (face and body)
+            float sweatSecs = 120.0f;                          // 2.6u: how long it takes to dry after
             float fitScale = 1.0f, fitUp = 0.0f, fitOut = 0.0f;
         } g;
         struct Look {
@@ -232,7 +233,7 @@ namespace Face {
                 L.v[Fluid::kLipRed] = std::max(0.0f, L.v[Fluid::kLipRed] - dt / (600.0f * std::max(g.lipRedMins, 0.2f)));
                 if (!exc) {
                     L.v[Fluid::kFlush] = std::max(0.0f, L.v[Fluid::kFlush] - dt / 45.0f);
-                    L.v[Fluid::kFaceSweat] = L.v[Fluid::kBodySweat] = std::max(0.0f, L.v[Fluid::kFaceSweat] - dt / 120.0f);
+                    L.v[Fluid::kFaceSweat] = L.v[Fluid::kBodySweat] = std::max(0.0f, L.v[Fluid::kFaceSweat] - dt / std::max(g.sweatSecs, 5.0f));
                 } else if (g_exciteF) {
                     const float ex = std::clamp(static_cast<float>(a->GetFactionRank(g_exciteF, a->IsPlayerRef())) / 100.0f, 0.0f, 1.0f);
                     const float fw = g.flushMax * std::clamp(ex * 1.2f - 0.1f, 0.0f, 1.0f);
@@ -602,7 +603,7 @@ namespace Face {
         B("Looks", g.looks); B("LipWet", g.lipWet); F("LipWetSeconds", g.lipWetSecs, 5.0f, 600.0f); B("LipRed", g.lipRed); F("LipRedMinutes", g.lipRedMins, 0.2f, 30.0f);
         B("Flush", g.flush); B("FlushWithOBlush", g.flushOBlush); F("FlushMax", g.flushMax, 0.1f, 1.0f);
         B("Tears", g.tears); F("TearsSeconds", g.tearsSecs, 5.0f, 900.0f); B("FaceCum", g.faceCum); F("FaceCumHours", g.faceCumHours, 0.1f, 24.0f);
-        B("Sweat", g.sweat); F("SweatMax", g.sweatMax, 0.1f, 1.0f);
+        B("Sweat", g.sweat); F("SweatMax", g.sweatMax, 0.1f, 1.0f); F("SweatSeconds", g.sweatSecs, 5.0f, 1800.0f);
         F("FitScale", g.fitScale, 0.5f, 2.0f); F("FitUp", g.fitUp, -1.0f, 1.0f); F("FitOut", g.fitOut, -1.0f, 1.0f);
         if (!save) Fluid::SetFaceFit({g.fitScale, g.fitUp, g.fitOut});
         constexpr const char* RF = "FaceFitRaces";   // race = size, up, forward
@@ -720,15 +721,20 @@ namespace Face {
                         if (Tr::SliderFloat("Flush strength", &f, 10.0f, 100.0f, "%.0f%%")) { g.flushMax = f / 100.0f; ch = true; }
                     }
                     ch |= Tr::Checkbox("Tears when he gags", &g.tears);
+                    Help("Gagging makes him cry: clear OStrands drops well up at the inner corner of his eyes and run down his cheeks, "
+                         "more often the harder he gags. Needs OStrands.");
                     if (g.tears) { ImGuiMCP::SameLine(); ImGuiMCP::SetNextItemWidth(160.0f); ch |= Tr::SliderFloat("##te", &g.tearsSecs, 5.0f, 900.0f, "dry in %.0f s"); }
                     ch |= Tr::Checkbox("Cum on his face", &g.faceCum);
-                    Help("A facial (the pull-out chance on OStrands' page) leaves cum on his face and chin; washing takes it off.");
+                    Help("A facial (the pull-out chance on OStrands' page) leaves cum on his face: OStrands drops splash onto his cheeks, "
+                         "nose, lips, chin and brow and hang there, drying as OStrands' cum does. Needs OStrands.");
                     if (g.faceCum) { ImGuiMCP::SameLine(); ImGuiMCP::SetNextItemWidth(160.0f); ch |= Tr::SliderFloat("##fc", &g.faceCumHours, 0.1f, 24.0f, "%.1f game hours"); }
                     ch |= Tr::Checkbox("Sweat", &g.sweat);
-                    Help("His face and body get a sweaty sheen as he gets excited in a scene (any scene), drying after.");
+                    Help("His skin itself grows glossier, face and body, the more excited he gets in a scene (any scene), up to the "
+                         "strength set, and dries again over the time set after.");
                     if (g.sweat) {
                         float w = g.sweatMax * 100.0f;
                         if (Tr::SliderFloat("Sweat strength", &w, 10.0f, 100.0f, "%.0f%%")) { g.sweatMax = w / 100.0f; ch = true; }
+                        ch |= Tr::SliderFloat("Dries in", &g.sweatSecs, 5.0f, 1800.0f, "%.0f s");
                     }
                     ImGuiMCP::Separator();
                     Tr::TextDisabled("Fitting (if the layers sit wrong on a head):");

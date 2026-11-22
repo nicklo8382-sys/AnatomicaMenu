@@ -24,6 +24,7 @@ namespace {
         bool move = true;          // move a male / futa bottom so his anus is where the animation aims
         float strength = 1.0f;     // of the vagina -> anus gap (0.5 - 1.5)
         float speed = 8.0f;        // units a second it eases in / out
+        float beastLift = 0.0f;    // 2.6t: with a werewolf / Vampire Lord / werebear top: raise (or lower) him this much more
         int futa = 0;              // 0 follow PPA (FutasUseAnus), 1 always, 2 never
         int bottom = 0;            // his own schlong in PPA while he is taken: 0 automatic, 1 always on, 2 always off
         std::set<std::string> letWork;   // OStim scenes where the bottom's schlong always works
@@ -405,9 +406,11 @@ namespace Align {
                         const float t = s.tSum * inv, lat = s.latSum * inv;
                         RE::NiPoint3 move = Mul(s.fitSum, inv * g.strength);
                         const char* nm = a->GetDisplayFullName();
-                        // 2.6s: a beast partner by the same rule, a little more room to the side (Anatomica steers his schlong in)
-                        const bool off = t < 0.15f || t > 1.1f || lat > (s.fitBeast ? 2.5f : 1.5f);
-                        if (!off) logger::info("Anatomica bottoms: {} - lines up already in {} (hole {:.0f}% along the schlong, {:.1f} off its line)", nm ? nm : "?", s.scene, t * 100.0f, lat);
+                        // 2.6t: a beast partner: closer to the line than a man (1 unit; 2.6s let 2.4 off pass), and his own lift
+                        if (s.fitBeast) move.z += g.beastLift;
+                        const bool off = t < 0.15f || t > 1.1f || lat > (s.fitBeast ? 1.0f : 1.5f) || (s.fitBeast && std::abs(g.beastLift) > 0.05f);
+                        if (!off) logger::info("Anatomica bottoms: {} - lines up already in {} (hole {:.0f}% along the schlong, {:.1f} off its line; the full move would be {:.1f},{:.1f},{:.1f})",
+                                               nm ? nm : "?", s.scene, t * 100.0f, lat, move.x, move.y, move.z);
                         else {
                             AlignLoad();
                             OAlign cur{};
@@ -507,6 +510,10 @@ namespace Align {
             help("100% = exactly the gap between the two. More if the schlong still lands a little in front of him, less if "
                  "it goes past.");
             ch |= Tr::SliderFloat("How fast it eases in", &g.speed, 2.0f, 30.0f, "%.0f units/s");
+            ch |= Tr::SliderFloat("Raise him for a werewolf, Vampire Lord or werebear", &g.beastLift, -6.0f, 10.0f, "%.1f units");
+            help("With a beast-form partner his OStim alignment is moved up (or down, below 0) by this much on top of the "
+                 "fit to the schlong - for when their schlong still comes in under (or over) his hole. Each scene is moved once; "
+                 "OStim keeps it.");
             static const char* fu[] = {"Like PPA (when it sends futas to the anus)", "Always", "Never"};
             ch |= Tr::Combo("Futas", &g.futa, fu, 3);
             help("A futa has a vagina, so only move her when PPA uses her anus (PPA's \"Futas use anus\").");
@@ -558,6 +565,7 @@ namespace Align {
             ini.SetBoolValue(S, "Move", g.move);
             ini.SetDoubleValue(S, "Strength", g.strength);
             ini.SetDoubleValue(S, "Speed", g.speed);
+            ini.SetDoubleValue(S, "BeastLift", g.beastLift);
             ini.SetLongValue(S, "Futa", g.futa);
             ini.SetLongValue(S, "BottomSchlong", g.bottom);
             std::string l;
@@ -567,6 +575,7 @@ namespace Align {
             g.move = ini.GetBoolValue(S, "Move", g.move);
             g.strength = std::clamp(static_cast<float>(ini.GetDoubleValue(S, "Strength", g.strength)), 0.5f, 1.5f);
             g.speed = std::clamp(static_cast<float>(ini.GetDoubleValue(S, "Speed", g.speed)), 2.0f, 30.0f);
+            g.beastLift = std::clamp(static_cast<float>(ini.GetDoubleValue(S, "BeastLift", g.beastLift)), -6.0f, 10.0f);
             g.futa = std::clamp(static_cast<int>(ini.GetLongValue(S, "Futa", g.futa)), 0, 2);
             g.bottom = std::clamp(static_cast<int>(ini.GetLongValue(S, "BottomSchlong", g.bottom)), 0, 2);
             g.letWork.clear();

@@ -1,4 +1,5 @@
 #include "Fluid.h"
+#include "OStrandsLink.h"
 #include "Colossal.h"
 #include "Lang.h"
 #include "Extras.h"
@@ -1724,6 +1725,10 @@ namespace {
         // face (2.6j-2.6n) was never drawn - the game only feeds the real face its moving vertices
         std::shared_ptr<std::vector<float>> la[Fluid::kFaceLayers]; std::uint8_t lbgr[Fluid::kFaceLayers][3]{}; float ltop[Fluid::kFaceLayers]{};
         std::string mixKey, mixTex; RE::NiPointer<RE::BSGeometry> slot; bool toldSlot = false; double askedAt = -100.0;
+        // 2.6u: tears and cum on his face are OStrands drops now (painted they never looked right); sweat is his own skin's shine
+        double tearAt = 0.0; int tearSide = 0; std::uint32_t tearStream[2]{}; float cumDone = 0.0f; double cumAt = 0.0;
+        RE::NiPointer<RE::BSGeometry> shineBody, shineHead;   // (kept alive: an outfit change frees the bare body)
+        bool lipBones = false; bool toldDrops = false;
     };
     std::unordered_map<RE::FormID, FaceSt> g_face;
 
@@ -1781,7 +1786,38 @@ namespace {
         F.u = Norm(Cross(F.r, F.f), {0, 0, 1});
         const Fluid::FaceFit& fit = F.ownFit ? F.fit : g_fit;
         F.m = Lerp(h, g_, 0.7f) + F.u * (fit.up * F.L) + F.f * (fit.out * F.L);
+        // 2.6u: SMP Head's lip bones, where there are any: the mouth is between them (the estimate from the head bone sat on
+        // his chin - the red lips and the flush were painted too low)
+        F.lipBones = false;
+        {
+            RE::NiAVObject* up = nullptr; RE::NiAVObject* lo = nullptr;
+            RE::BSVisit::TraverseScenegraphObjects(root, [&](RE::NiAVObject* o) {
+                const std::string_view n(o->name.c_str() ? o->name.c_str() : "");
+                if (!up && n.ends_with("Upper Lip Center")) up = o;
+                else if (!lo && n.ends_with("Bottom Lip Center")) lo = o;
+                return (up && lo) ? RE::BSVisit::BSVisitControl::kStop : RE::BSVisit::BSVisitControl::kContinue;
+            });
+            if (up && lo) {
+                const V3 mu = I.Apply(V3(up->world.translate)), ml = I.Apply(V3(lo->world.translate));
+                if (Len(mu - h) < 3.0f * F.L) { F.m = Lerp(mu, ml, 0.5f) + F.u * (fit.up * F.L) + F.f * (fit.out * F.L); F.lipBones = true; }
+            }
+        }
         F.L *= fit.scale;
+        return true;
+    }
+    // 2.6u: a point of his face (head mesh space) in the world, as his head is now
+    bool FaceToWorld(FaceSt& F, const V3& p, RE::NiPoint3& out, V3* fwd = nullptr, V3* upW = nullptr) {
+        auto* si = F.head ? F.head->GetGeometryRuntimeData().skinInstance.get() : nullptr;
+        if (!si || !si->skinData || !si->bones) return false;
+        const std::uint32_t nb = si->skinData->GetBoneCount();
+        int b = -1;
+        for (std::uint32_t i = 0; i < nb; ++i) if (si->bones[i] && si->bones[i]->name == "NPC Head [Head]") { b = static_cast<int>(i); break; }
+        if (b < 0) return false;
+        const Xf M = Mul(Xf(si->bones[b]->world), Xf(si->skinData->GetBoneDataSkinToBone(static_cast<std::uint32_t>(b))));
+        const V3 w = M.Apply(p);
+        out = {w.x, w.y, w.z};
+        if (fwd) *fwd = Norm(M.Rot(F.f), {0, 1, 0});
+        if (upW) *upW = Norm(M.Rot(F.u), {0, 0, 1});
         return true;
     }
     float Smooth(float w) { w = std::clamp(w, 0.0f, 1.0f); return w * w * (3.0f - 2.0f * w); }
@@ -1880,6 +1916,7 @@ namespace {
         // how strong each face layer is now, in tenths (the look changes in steps you cannot see)
         int q[Fluid::kBodySweat]{}; bool any = false, wet = false;
         for (int i = 0; i < Fluid::kBodySweat; ++i) {
+            if (i != Fluid::kLipRed && i != Fluid::kFlush) continue;   // 2.6u: only these two are painted now
             if (!F.la[i] || !F.frameOk) continue;
             q[i] = static_cast<int>(std::lround(std::clamp(F.want[i], 0.0f, 1.0f) * F.ltop[i] * 10.0f));
             any |= q[i] > 0;
@@ -1957,6 +1994,55 @@ namespace {
         logger::info("Anatomica face: {:08X} looks {} in {} ({})", id, key, slot->name.c_str() ? slot->name.c_str() : "?", name);
     }
 
+    // 2.6u: what is not painted any more. Tears: clear OStrands drops from the inner corner of each eye, now and then, more
+    // often the more he cries - they run down his cheeks. Cum on his face: as it lands (the amount rises), OStrands drops
+    // shot onto random spots (cheeks, nose, chin, lips, brow), hanging and drying as OStrands' cum does. Sweat: his own
+    // skin grows glossier (body and face), never less glossy than it already was.
+    void TickFaceDrops(FaceSt& F, RE::Actor* a, RE::NiAVObject* root, RE::FormID id) {
+        const double now = Now();
+        // sweat: his skin's own shine
+        const float sw = std::clamp(F.want[Fluid::kBodySweat], 0.0f, 1.0f), swf = std::clamp(F.want[Fluid::kFaceSweat], 0.0f, 1.0f);
+        const float sq = std::round(sw * 20.0f) / 20.0f, sqf = std::round(swf * 20.0f) / 20.0f;
+        if (F.shineBody && F.shineBody.get() != F.body) { Shine(F.shineBody.get(), 0.0f, 0.0f, 0.0f); F.shineBody.reset(); }
+        if (F.body && (sq > 0.0f || F.shineBody)) { Shine(F.body, sq, 140.0f, 5.0f * g.shine); if (sq > 0.0f) F.shineBody = RE::NiPointer<RE::BSGeometry>(F.body); else F.shineBody.reset(); }
+        if (F.shineHead && F.shineHead.get() != F.head) { Shine(F.shineHead.get(), 0.0f, 0.0f, 0.0f); F.shineHead.reset(); }
+        if (F.head && (sqf > 0.0f || F.shineHead)) { Shine(F.head, sqf * 0.8f, 110.0f, 4.0f * g.shine); if (sqf > 0.0f) F.shineHead = RE::NiPointer<RE::BSGeometry>(F.head); else F.shineHead.reset(); }
+        if (!F.frameOk || !F.head || !OStrandsLink::Installed()) return;
+        auto rnd = [](float lo, float hi) { return Rand(lo, hi); };
+        // tears
+        const float t = F.want[Fluid::kTears];
+        if (t > 0.08f && now >= F.tearAt) {
+            F.tearAt = now + rnd(2.5f, 5.0f) / std::clamp(t, 0.15f, 1.0f);
+            const int side = (F.tearSide++ & 1) ? 1 : -1;
+            const V3 corner = F.m + F.r * (0.27f * side * F.L) + F.u * (0.80f * F.L) + F.f * (0.06f * F.L);
+            RE::NiPoint3 at; V3 fw, uw;
+            if (FaceToWorld(F, corner, at, &fw, &uw)) {
+                static const float kTear[3] = {0.80f, 0.86f, 0.93f};
+                const V3 v = uw * -3.0f + fw * 1.0f;
+                OStrandsLink::EmitAt(a, at, {v.x, v.y, v.z}, t > 0.6f ? 4 : 2, kTear, &F.tearStream[side > 0 ? 1 : 0]);
+                if (!F.toldDrops) { F.toldDrops = true; logger::info("Anatomica face: {:08X} tears are OStrands drops from his eyes (mouth from {})", id, F.lipBones ? "his lip bones" : "his head bone"); }
+            }
+        } else if (t <= 0.08f) F.tearStream[0] = F.tearStream[1] = 0;
+        // cum on his face: as the amount rises, a few splashes onto random spots
+        const float c = F.want[Fluid::kFaceCum];
+        if (c < F.cumDone - 0.05f) F.cumDone = c;   // drying / washed: follow it down
+        if (c > F.cumDone + 0.08f && now >= F.cumAt) {
+            F.cumAt = now + 0.12;
+            F.cumDone = std::min(c, F.cumDone + 0.12f);
+            static const float kSpots[][3] = {   // across (+ his left), up, forward - in head sizes from his mouth
+                {0.05f, -0.35f, 0.05f}, {0.32f, -0.02f, 0.0f}, {-0.30f, -0.02f, 0.0f}, {-0.15f, 0.12f, 0.08f}, {0.46f, 0.42f, -0.12f},
+                {-0.46f, 0.40f, -0.12f}, {0.0f, 0.58f, 0.12f}, {0.18f, 0.95f, 0.0f}, {-0.2f, 0.9f, 0.0f}, {0.1f, 0.0f, 0.1f}};
+            const auto& sp = kSpots[static_cast<int>(rnd(0.0f, 9.99f))];
+            const V3 spot = F.m + F.r * ((sp[0] + rnd(-0.06f, 0.06f)) * F.L) + F.u * ((sp[1] + rnd(-0.05f, 0.05f)) * F.L) + F.f * (sp[2] * F.L);
+            RE::NiPoint3 at; V3 fw, uw;
+            if (FaceToWorld(F, spot + F.f * (0.5f * F.L), at, &fw, &uw)) {   // from just in front of his face, at it
+                const V3 v = fw * -45.0f + uw * rnd(-6.0f, 3.0f);
+                std::uint32_t st = 0;
+                OStrandsLink::EmitAt(a, at, {v.x, v.y, v.z}, static_cast<int>(rnd(6.0f, 14.0f)), F.rgb, &st);
+            }
+        }
+    }
+
     void TickFaces() {
         for (auto it = g_face.begin(); it != g_face.end();) {
             FaceSt& F = it->second;
@@ -1968,6 +2054,8 @@ namespace {
             if (!wantAny) {
                 if (has) DropFaces(F);
                 if (auto* sl = F.slot.get(); sl && sl->parent) { SetDiffuse(sl, std::string(kOverlayDefault)); SetAlpha(sl, 0.0f); Shine(sl, 0.0f, 0.0f, 0.0f); }   // 2.6o: his face paint slot back
+                if (F.shineBody) Shine(F.shineBody.get(), 0.0f, 0.0f, 0.0f);   // 2.6u: his skin's shine back
+                if (F.shineHead) Shine(F.shineHead.get(), 0.0f, 0.0f, 0.0f);
                 it = g_face.erase(it); continue;
             }
             if (!root) { ++it; continue; }
@@ -1992,7 +2080,9 @@ namespace {
             const bool dressed = !Extras::Exposed(a);
             auto* bg = dressed ? nullptr : BodyGeo(a, root);
             if (bg != F.body) { DropFace(F, Fluid::kBodySweat); F.body = bg; }
+            TickFaceDrops(F, a, root, it->first);   // 2.6u: tears, cum on his face, sweat
             for (int i = 0; i < Fluid::kFaceLayers; ++i) {
+                if (i != Fluid::kLipRed && i != Fluid::kFlush) { if (F.sh[i].obj) DropFace(F, i); continue; }   // 2.6u: not painted any more
                 const bool bodyL = i == Fluid::kBodySweat;
                 RE::BSGeometry* src = bodyL ? F.body : F.head;
                 const float w = F.want[i];
