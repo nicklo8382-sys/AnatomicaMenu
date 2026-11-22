@@ -208,7 +208,7 @@ namespace During {
         F("BulgeShaftStrength", g_w.shaftK, 0.0f, 2.0f); F("BulgeHeadStrength", g_w.headK, 0.0f, 2.0f);
         F("BulgeBuildTime", g_w.buildTime, 1.0f, 60.0f); F("BulgeTravelSpeed", g_w.travelSpeed, 0.1f, 2.0f); B("BulgeHoldFull", g_w.holdFull);
         B("BeastOpen", g_w.beastOpen); F("BeastOpenFit", g_w.beastFit, 0.5f, 3.0f);   // 2.6q
-        B("BeastGuide", g_w.beastGuide); F("BeastGuideMax", g_w.beastGuideMax, 5.0f, 60.0f);   // 2.6s
+        B("BeastGuide", g_w.beastGuide); F("BeastGuideMax", g_w.beastGuideMax, 5.0f, 90.0f);   // 2.6s
         B("BulgeHipFade", g_w.hipFade); F("BulgeHipFrom", g_w.hipFrom, 30.0f, 150.0f);
         F("BulgeStomach", g_w.belly, 0.0f, 2.0f); F("BulgeStomachTime", g_w.bellyTime, 1.0f, 180.0f); F("BulgeStomachRandom", g_w.bellyRandom, 0.0f, 1.0f);
         B("BulgeSuperDeep", g_w.deep); F("BulgeSuperDeepChance", g_w.deepChance, 0.0f, 1.0f);
@@ -507,10 +507,10 @@ namespace During {
                      "higher leaves a gap round it - up to 300% for a gaping stretch.");
             }
             ch |= Tr::Checkbox("Steer their schlong into him", &g_w.beastGuide);
-            Help("PPA does not guide a werewolf, Vampire Lord or werebear schlong. With this on Anatomica bends it a little at its base "
-                 "and middle so it goes into his hole and along his canal instead of stabbing past it, the way PPA does for human "
-                 "schlongs. It only bends while the tip is close to his hole.");
-            if (g_w.beastGuide) ch |= Tr::SliderFloat("Most it bends", &g_w.beastGuideMax, 5.0f, 60.0f, "%.0f degrees");
+            Help("PPA does not guide a werewolf, Vampire Lord or werebear schlong. With this on Anatomica does it the way PPA does for "
+                 "human schlongs: the base turns so the shaft goes in through the middle of his hole, and the part inside him lies "
+                 "along his canal. The part still outside stays as the animation has it. Only while the tip is close to his hole.");
+            if (g_w.beastGuide) ch |= Tr::SliderFloat("Most it bends", &g_w.beastGuideMax, 5.0f, 90.0f, "%.0f degrees");
             ch |= Tr::Checkbox("Belly bulge", &g_bulgeOn);
             Help("When the tip is deep in him his lower belly bulges where it is, and the bump moves up and down with each "
                  "stroke. Off by default.");

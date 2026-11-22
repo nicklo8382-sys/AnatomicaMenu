@@ -245,10 +245,9 @@ namespace Face {
                     L.v[Fluid::kFaceCum] = std::clamp(L.cumStart * left, 0.0f, 1.0f);
                     if (left <= 0.0f || gh < L.cumGameH) { L.cumGameH = -1.0; L.v[Fluid::kFaceCum] = 0.0f; }
                 }
-                if (!g.lipWet) L.v[Fluid::kLipWet] = 0.0f;
-                if (!g.lipRed) L.v[Fluid::kLipRed] = 0.0f;
+                L.v[Fluid::kLipWet] = L.v[Fluid::kLipRed] = 0.0f;   // 2.6v: gone
                 if (!g.flush || (OBlush() && !g.flushOBlush)) L.v[Fluid::kFlush] = 0.0f;
-                if (!g.tears) L.v[Fluid::kTears] = 0.0f;
+                L.v[Fluid::kTears] = 0.0f;   // 2.6v: gone
                 if (!g.faceCum) L.v[Fluid::kFaceCum] = 0.0f;
                 if (!g.sweat) L.v[Fluid::kFaceSweat] = L.v[Fluid::kBodySweat] = 0.0f;
                 float out[Fluid::kFaceLayers];
@@ -707,12 +706,7 @@ namespace Face {
                 Help("Layers drawn from his own head mesh (his head bones find his mouth, eyes and cheeks), so they fit any head. "
                      "Made once per head and kept in the textures folder.");
                 if (g.looks) {
-                    ch |= Tr::Checkbox("Wet lips", &g.lipWet);
-                    Help("Glossy lips while he sucks and for a while after.");
-                    if (g.lipWet) { ImGuiMCP::SameLine(); ImGuiMCP::SetNextItemWidth(160.0f); ch |= Tr::SliderFloat("##lw", &g.lipWetSecs, 5.0f, 600.0f, "%.0f s after"); }
-                    ch |= Tr::Checkbox("Red, swollen lips", &g.lipRed);
-                    Help("His lips redden the longer he sucks, and slowly go back.");
-                    if (g.lipRed) { ImGuiMCP::SameLine(); ImGuiMCP::SetNextItemWidth(160.0f); ch |= Tr::SliderFloat("##lr", &g.lipRedMins, 0.2f, 30.0f, "full after %.1f min"); }
+                    // 2.6v: wet lips, red lips and tears are gone (painted they never looked right)
                     ch |= Tr::Checkbox("Flushed cheeks", &g.flush);
                     Help("A flush on his cheeks and nose as he gets excited in a scene (OStim's excitement), easing after. Off while OBlush is installed unless ticked below.");
                     if (g.flush) {
@@ -720,13 +714,9 @@ namespace Face {
                         float f = g.flushMax * 100.0f;
                         if (Tr::SliderFloat("Flush strength", &f, 10.0f, 100.0f, "%.0f%%")) { g.flushMax = f / 100.0f; ch = true; }
                     }
-                    ch |= Tr::Checkbox("Tears when he gags", &g.tears);
-                    Help("Gagging makes him cry: clear OStrands drops well up at the inner corner of his eyes and run down his cheeks, "
-                         "more often the harder he gags. Needs OStrands.");
-                    if (g.tears) { ImGuiMCP::SameLine(); ImGuiMCP::SetNextItemWidth(160.0f); ch |= Tr::SliderFloat("##te", &g.tearsSecs, 5.0f, 900.0f, "dry in %.0f s"); }
                     ch |= Tr::Checkbox("Cum on his face", &g.faceCum);
-                    Help("A facial (the pull-out chance on OStrands' page) leaves cum on his face: OStrands drops splash onto his cheeks, "
-                         "nose, lips, chin and brow and hang there, drying as OStrands' cum does. Needs OStrands.");
+                    Help("A facial (the pull-out chance on OStrands' page) leaves cum on his face: strands of it hang from where it "
+                         "landed - cheeks, nose, lips, chin and brow - for minutes, then drip off. Needs OStrands 0.8.0.9e or newer.");
                     if (g.faceCum) { ImGuiMCP::SameLine(); ImGuiMCP::SetNextItemWidth(160.0f); ch |= Tr::SliderFloat("##fc", &g.faceCumHours, 0.1f, 24.0f, "%.1f game hours"); }
                     ch |= Tr::Checkbox("Sweat", &g.sweat);
                     Help("His skin itself grows glossier, face and body, the more excited he gets in a scene (any scene), up to the "

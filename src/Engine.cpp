@@ -197,11 +197,15 @@ namespace {
     // the beast's animation has posed him (his UpdateAnimation, below), his schlong bones are turned a little - at the base,
     // then the middle - so the shaft runs into the hole and along the canal. Only the beast's own schlong bones are touched,
     // and the animation sets them again every frame (if it ever doesn't, the last pose we wrote is undone first).
-    struct Guide { RE::FormID bottom = 0; double until = 0.0; float maxDeg = 30.0f; };
+    // 2.6w: the hole is measured on the main thread (the gape tick) and kept in the beast's own frame - the frame hook runs
+    // while the game poses actors on other threads, and reading the other man's bones there (while an outfit change
+    // rebuilt them) could crash the game with no log
+    struct Guide { RE::FormID bottom = 0; double until = 0.0; float maxDeg = 45.0f; V hL, aL; float sc = 1.0f; };
     std::mutex g_guideMx;
     std::unordered_map<RE::FormID, Guide> g_guide;
     std::atomic<int> g_guideN{0};   // how many are being steered (read every frame without the lock)
-    struct GuideMem { RE::NiMatrix3 orig[3], wrote[3]; bool have = false; V bend[3]; V h, a; bool hasHole = false; double logAt = -100.0; float worst = 0.0f; };
+    constexpr int kSteer = 10;  // 2.6w: the schlong bones that may be bent (a werewolf has 8)
+    struct GuideMem { RE::NiMatrix3 orig[kSteer], wrote[kSteer]; bool did[kSteer]{}; bool have = false; V bend[kSteer]; V h, a; bool hasHole = false; double logAt = -100.0; float worst = 0.0f; };
     std::unordered_map<RE::FormID, GuideMem> g_guideMem;   // under g_guideMx
     RE::NiMatrix3 AxisAngle(const V& axis, float ang) {
         const float c = std::cos(ang), sn = std::sin(ang), t = 1.0f - c;
@@ -232,23 +236,33 @@ namespace {
         if (!root) return;
         const auto chain = ShaftBones(beast, root);
         if (chain.size() < 5 || std::strstr(chain[0], "Genitals")) return;   // only a beast's own schlong bones
-        RE::NiAVObject* n[3] = {Node(root, chain[0]), Node(root, chain[chain.size() / 3]), Node(root, chain[(chain.size() * 2) / 3])};
+        const size_t nc = chain.size();
+        // 2.6w (like PPA): the base turns so the shaft goes in through the middle of his hole; every bone past the entrance
+        // then lies along his canal (pulled back onto its centre line as it goes), so the part inside him follows the canal
+        // instead of cutting across it; the part still outside stays as the animation has it
+        const int nb = static_cast<int>(std::min<size_t>(nc - 1, kSteer));   // bones with a segment after them
+        RE::NiAVObject* n[kSteer] = {};
+        for (int k = 0; k < nb; ++k) { n[k] = Node(root, chain[k]); if (!n[k] || !n[k]->parent) return; }
         auto* tipN = Node(root, chain.back());
-        auto* preN = Node(root, chain[chain.size() - 2]);
-        if (!n[0] || !n[1] || !n[2] || !tipN || !preN || !n[0]->parent || !n[1]->parent || !n[2]->parent) return;
+        if (!tipN) return;
         std::lock_guard lk(g_guideMx);
         GuideMem& m = g_guideMem[beast->GetFormID()];
         // the animation sets these bones each frame; if it didn't, put back what it last gave (no bending on top of our bend)
-        if (m.have) for (int k = 0; k < 3; ++k) if (Same(n[k]->local.rotate, m.wrote[k])) n[k]->local.rotate = m.orig[k];
+        if (m.have) for (int k = 0; k < nb; ++k) if (m.did[k] && Same(n[k]->local.rotate, m.wrote[k])) n[k]->local.rotate = m.orig[k];
         m.have = false;
+        for (auto& d : m.did) d = false;
         const bool on = now < gd.until;
-        auto* bot = on ? RE::TESForm::LookupByID<RE::Actor>(gd.bottom) : nullptr;
         Canal c;
-        if (bot && bot->Get3D(false)) c = CanalOf(bot);
-        // the hole eased too (it is read from his bones while the game may be posing him on another thread)
-        if (c.ok) {
+        if (on && gd.sc > 0.0f) {   // his hole, from where the gape tick put it in our frame
+            const auto& R = root->world;
+            const RE::NiPoint3 h = R * gd.hL.ni();
+            V a = V(R.rotate * gd.aL.ni());
+            const float la = Len(a);
+            if (la > 1e-4f) { c.h = V(h); c.a = a * (1.0f / la); c.sc = gd.sc; c.ok = true; }
+        }
+        if (c.ok) {   // eased (the tick only measures it a dozen times a second)
             if (!m.hasHole) { m.h = c.h; m.a = c.a; m.hasHole = true; }
-            const float kh = 1.0f - std::exp(-std::max(dt, 0.001f) / 0.05f);
+            const float kh = 1.0f - std::exp(-std::max(dt, 0.001f) / 0.08f);
             m.h = m.h + (c.h - m.h) * kh;
             V a2 = m.a + (c.a - m.a) * kh;
             const float la2 = Len(a2);
@@ -260,41 +274,58 @@ namespace {
         float worst = 0.0f;
         bool any = false;
         bool gate = c.ok;
-        for (int k = 0; k < 3; ++k) {
-            V want{};   // this bone's turn (axis x angle) in its parent's frame
+        if (gate) {   // only with the tip at his hole or in him
+            V tip(tipN->world.translate);
+            if (Dot(tip - c.h, c.a) < -9.0f * c.sc) gate = false;
+        }
+        // a world turn taking direction u to direction v, at most cap radians, as a turn in the bone's parent's frame
+        auto turnTo = [&](RE::NiAVObject* nd, V u, V v, float cap, float& angOut) -> V {
+            angOut = 0.0f;
+            const float lu = Len(u), lv = Len(v);
+            if (lu < 1e-3f || lv < 1e-3f) return V{};
+            u = u * (1.0f / lu); v = v * (1.0f / lv);
+            V ax = Cross(u, v);
+            const float la = Len(ax);
+            const float ang = std::atan2(la, Dot(u, v));
+            angOut = ang;
+            if (la < 1e-5f || ang < 0.002f) return V{};
+            ax = ax * (1.0f / la);
+            const RE::NiMatrix3 PT = nd->parent->world.rotate.Transpose();
+            return V(PT * ax.ni()) * std::min(ang, cap);
+        };
+        const float maxR = gd.maxDeg * 0.01745329f;
+        for (int k = 0; k < nb; ++k) {
+            V want{};
             if (gate) {
-                const V b(n[k]->world.translate);
-                V tip = V(tipN->world.translate);
-                {   // the real tip: a little past the last bone
-                    V d = tip - V(preN->world.translate);
-                    const float ld = Len(d);
-                    if (ld > 1e-3f) tip = tip + d * (1.5f * c.sc / ld);
-                }
-                const float depth = Dot(tip - c.h, c.a);
-                // only with the tip at his hole or in him, and near his canal's line (not a tip off to the side)
-                if (depth < -9.0f * c.sc || (k == 0 && Len((tip - c.h) - c.a * depth) > 7.0f * c.sc)) gate = false;
-                else {
-                    const V aim = c.h + c.a * std::clamp(depth, 1.0f * c.sc, 25.0f * c.sc);
-                    V u = tip - b, v = aim - b;
-                    const float lu = Len(u), lv = Len(v);
-                    if (lu > 1e-3f && lv > 1e-3f) {
-                        u = u * (1.0f / lu); v = v * (1.0f / lv);
-                        V ax = Cross(u, v);
-                        const float la = Len(ax);
-                        const float ang = std::atan2(la, Dot(u, v));
-                        if (k == 0 && ang > 1.2f) gate = false;   // more than ~70 degrees off: not going into him
-                        else if (la > 1e-5f && ang > 0.002f) {
-                            ax = ax * (1.0f / la);
-                            static const float kShare[3] = {0.5f, 0.6f, 1.0f};   // base half, middle more of the rest, last third the remainder
-                            const float cap = gd.maxDeg * 0.01745329f * (k == 0 ? 0.6f : 0.4f);
-                            const float turn = std::min(ang * kShare[k], cap);
-                            worst = std::max(worst, ang);
-                            // the world axis in the parent's frame
-                            const RE::NiMatrix3 PT = n[k]->parent->world.rotate.Transpose();
-                            const RE::NiPoint3 axl = PT * ax.ni();
-                            want = V(axl) * turn;
-                        }
+                const V p(n[k]->world.translate);
+                auto* nxt = (k + 1 < static_cast<int>(nc)) ? Node(root, chain[k + 1]) : nullptr;
+                const V q = nxt ? V(nxt->world.translate) : V(tipN->world.translate);
+                const float seg = Len(q - p);
+                const float dp = Dot(p - c.h, c.a);   // how far past the entrance this bone is (< 0 = still outside)
+                if (k == 0) {
+                    // the base: the point of the shaft as far from the base as the hole is, put on the hole's centre
+                    const V entry = c.h + c.a * (0.4f * c.sc);
+                    const float want_d = Len(entry - p);
+                    float acc = 0.0f; V at = q;
+                    V prevP = p;
+                    for (size_t i = 1; i < nc; ++i) {
+                        auto* ni = Node(root, chain[i]);
+                        if (!ni) break;
+                        const V pi(ni->world.translate);
+                        const float l = Len(pi - prevP);
+                        if (acc + l >= want_d && l > 1e-4f) { at = prevP + (pi - prevP) * ((want_d - acc) / l); acc = want_d; break; }
+                        acc += l; prevP = pi; at = pi;
                     }
+                    float ang = 0.0f;
+                    want = turnTo(n[k], at - p, entry - p, maxR, ang);
+                    if (ang > 1.2f) { gate = false; want = V{}; }   // more than ~70 degrees off: not going into him
+                    worst = std::max(worst, ang);
+                } else if (dp > -0.5f * c.sc && seg > 1e-3f) {
+                    // past the entrance: lie along the canal, aimed at the centre line a segment further in
+                    const V aimPt = c.h + c.a * (std::max(dp, 0.0f) + seg);
+                    float ang = 0.0f;
+                    want = turnTo(n[k], q - p, aimPt - p, maxR * 0.5f, ang);
+                    worst = std::max(worst, ang);
                 }
             }
             m.bend[k] = m.bend[k] + (want - m.bend[k]) * ke;
@@ -302,12 +333,12 @@ namespace {
             if (bl < 1e-4f) continue;
             any = true;
             m.orig[k] = n[k]->local.rotate;
-            // the turn in the parent's frame, then the animated local rotation
             n[k]->local.rotate = AxisAngle(m.bend[k] * (1.0f / bl), bl) * n[k]->local.rotate;
             m.wrote[k] = n[k]->local.rotate;
+            m.did[k] = true;
             m.have = true;
-            for (size_t i = 0; i < chain.size(); ++i)   // the bones from here to the tip follow at once
-                if (auto* q = Node(root, chain[i])) q->UpdateWorldData(&ud);
+            for (size_t i = static_cast<size_t>(k); i < nc; ++i)   // the bones from here to the tip follow at once
+                if (auto* qn = Node(root, chain[i])) qn->UpdateWorldData(&ud);
         }
         if (!any && !on) {   // eased all the way back and no longer asked for: forget him
             g_guideMem.erase(beast->GetFormID());
@@ -316,12 +347,11 @@ namespace {
             return;
         }
         m.worst = std::max(m.worst, worst);
-        if (now - m.logAt > 20.0 && m.worst > 0.0f && bot) {
+        if (now - m.logAt > 20.0 && m.worst > 0.0f) {
             m.logAt = now;
             const char* bn = beast->GetDisplayFullName();
-            const char* tn = bot->GetDisplayFullName();
-            logger::info("Anatomica guide: {}'s schlong steered into {} (it pointed up to {:.0f} degrees off his canal; bends at most {:.0f})",
-                         bn ? bn : "?", tn ? tn : "?", m.worst * 57.29578f, gd.maxDeg);
+            logger::info("Anatomica guide: {}'s schlong steered into the hole (it pointed up to {:.0f} degrees off the canal; bends at most {:.0f})",
+                         bn ? bn : "?", m.worst * 57.29578f, gd.maxDeg);
             m.worst = 0.0f;
         }
     }
@@ -832,7 +862,14 @@ namespace {
                 RE::Actor* bo = partner ? partner : atMan;
                 if (dw.beastGuide && c.ok && bo && Colossal::BeastForm(bo) != 0) {   // 2.6s: steer him in, for the next half second
                     std::lock_guard gl(g_guideMx);
-                    g_guide[bo->GetFormID()] = {act->GetFormID(), now + 0.5, dw.beastGuideMax};
+                    Guide gd2{act->GetFormID(), now + 0.5, dw.beastGuideMax};
+                    if (auto* br = bo->Get3D(false)) {   // his hole in the beast's own frame (the frame hook must not read our bones)
+                        const RE::NiTransform inv = br->world.Invert();
+                        gd2.hL = V(inv * c.h.ni());
+                        gd2.aL = V(inv.rotate * c.a.ni());
+                        gd2.sc = c.sc;
+                    } else gd2.sc = 0.0f;
+                    g_guide[bo->GetFormID()] = gd2;
                     g_guideN = static_cast<int>(g_guide.size());
                 }
                 if (dw.beastOpen && c.ok && bo && Colossal::BeastForm(bo) != 0) {

@@ -29,6 +29,7 @@ namespace OStrandsLink {
     void RenderTests(RE::Actor* a);
     std::string TestFacial(RE::Actor* a, int kind, RE::Actor* giver);   // 2.6k: Testing page (0 normal, 1 Colossal, 2 light, 3 the giver's colour)                               // 2.6d: Testing page buttons (fill, gush, squirt, ooze, empty)
     // 2.6u: OStrands drops at a world point (tears, cum on his face); stream: 0 = loose drops, else kept to link them
+    bool FaceStrand(RE::Actor* host, const RE::NiPoint3& at, float scale, float life, float maxLen, const float rgb[3]);   // 2.6v
     bool EmitAt(RE::Actor* host, const RE::NiPoint3& at, const RE::NiPoint3& vel, int count, const float rgb[3], std::uint32_t* stream = nullptr);
     bool RenderSection();                                         // Integrations page
     void Ini(CSimpleIniA& ini, bool save);                        // [OStrands]

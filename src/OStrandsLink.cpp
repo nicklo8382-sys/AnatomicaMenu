@@ -147,7 +147,8 @@ namespace {
     using EmitFn = bool (*)(RE::Actor*, std::uint32_t, const float*, const float*, int, const float*);
     using OnFn = bool (*)();
     using EmitGlowFn = bool (*)(RE::Actor*, std::uint32_t, const float*, const float*, int, const float*, const float*);
-    struct Api { bool tried = false; int version = 0; EmitFn emit = nullptr; OnFn semenOn = nullptr; EmitGlowFn emitGlow = nullptr; } g_api;
+    using FaceStrandFn = bool (*)(RE::Actor*, const float*, float, float, float, const float*);   // 2.6v: OStrands 0.8.0.9e+
+    struct Api { bool tried = false; int version = 0; EmitFn emit = nullptr; OnFn semenOn = nullptr; EmitGlowFn emitGlow = nullptr; FaceStrandFn faceStrand = nullptr; } g_api;
     void Resolve() {
         if (g_api.tried) return;
         g_api.tried = true;
@@ -158,6 +159,7 @@ namespace {
         g_api.emit = reinterpret_cast<EmitFn>(REX::W32::GetProcAddress(m, "OStrands_Emit"));
         g_api.semenOn = reinterpret_cast<OnFn>(REX::W32::GetProcAddress(m, "OStrands_SemenOn"));
         g_api.emitGlow = reinterpret_cast<EmitGlowFn>(REX::W32::GetProcAddress(m, "OStrands_EmitGlow"));
+        g_api.faceStrand = reinterpret_cast<FaceStrandFn>(REX::W32::GetProcAddress(m, "OStrands_FaceStrand"));
         if (!ver || !g_api.emit) { g_api.emit = nullptr; return; }
         g_api.version = ver();
         logger::info("Anatomica: OStrands link v{} - OStrands draws his cum", g_api.version);
@@ -709,6 +711,13 @@ namespace OStrandsLink {
 
     // 2.6k: Testing page - a facial: spurts from just in front of his face, at it, as a finish pulled out of his mouth
     // kind 0 a normal load, 1 a Colossal Load, 2 a light one (a few strings), 3 in a giver's colour (the one picked)
+    // 2.6v: a long-lasting strand of cum hanging from his face (OStrands 0.8.0.9e+); false = this OStrands can't
+    bool FaceStrand(RE::Actor* host, const RE::NiPoint3& at, float scale, float life, float maxLen, const float rgb[3]) {
+        Resolve();
+        if (!g_api.faceStrand || !host) return false;
+        const float p[3] = {at.x, at.y, at.z};
+        return g_api.faceStrand(host, p, scale, life, maxLen, rgb);
+    }
     // 2.6u: drops for the face (tears, cum on his face) - OStrands' own fluid, so they run down the skin and drip
     bool EmitAt(RE::Actor* host, const RE::NiPoint3& at, const RE::NiPoint3& vel, int count, const float rgb[3], std::uint32_t* stream) {
         Resolve();   // (no lock: called from the face code under its own lock)

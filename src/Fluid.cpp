@@ -2009,36 +2009,24 @@ namespace {
         if (F.head && (sqf > 0.0f || F.shineHead)) { Shine(F.head, sqf * 0.8f, 110.0f, 4.0f * g.shine); if (sqf > 0.0f) F.shineHead = RE::NiPointer<RE::BSGeometry>(F.head); else F.shineHead.reset(); }
         if (!F.frameOk || !F.head || !OStrandsLink::Installed()) return;
         auto rnd = [](float lo, float hi) { return Rand(lo, hi); };
-        // tears
-        const float t = F.want[Fluid::kTears];
-        if (t > 0.08f && now >= F.tearAt) {
-            F.tearAt = now + rnd(2.5f, 5.0f) / std::clamp(t, 0.15f, 1.0f);
-            const int side = (F.tearSide++ & 1) ? 1 : -1;
-            const V3 corner = F.m + F.r * (0.27f * side * F.L) + F.u * (0.80f * F.L) + F.f * (0.06f * F.L);
-            RE::NiPoint3 at; V3 fw, uw;
-            if (FaceToWorld(F, corner, at, &fw, &uw)) {
-                static const float kTear[3] = {0.80f, 0.86f, 0.93f};
-                const V3 v = uw * -3.0f + fw * 1.0f;
-                OStrandsLink::EmitAt(a, at, {v.x, v.y, v.z}, t > 0.6f ? 4 : 2, kTear, &F.tearStream[side > 0 ? 1 : 0]);
-                if (!F.toldDrops) { F.toldDrops = true; logger::info("Anatomica face: {:08X} tears are OStrands drops from his eyes (mouth from {})", id, F.lipBones ? "his lip bones" : "his head bone"); }
-            }
-        } else if (t <= 0.08f) F.tearStream[0] = F.tearStream[1] = 0;
-        // cum on his face: as the amount rises, a few splashes onto random spots
+        // 2.6v: no more tears (they could not be put on his eyes well enough) - cum on his face is OStrands strands now,
+        // hanging from where it landed (cheeks, nose, chin, lips, brow) for minutes, then dripping off
         const float c = F.want[Fluid::kFaceCum];
         if (c < F.cumDone - 0.05f) F.cumDone = c;   // drying / washed: follow it down
-        if (c > F.cumDone + 0.08f && now >= F.cumAt) {
-            F.cumAt = now + 0.12;
-            F.cumDone = std::min(c, F.cumDone + 0.12f);
+        if (c > F.cumDone + 0.1f && now >= F.cumAt) {
+            F.cumAt = now + 0.15;
+            F.cumDone = std::min(c, F.cumDone + 0.14f);
             static const float kSpots[][3] = {   // across (+ his left), up, forward - in head sizes from his mouth
-                {0.05f, -0.35f, 0.05f}, {0.32f, -0.02f, 0.0f}, {-0.30f, -0.02f, 0.0f}, {-0.15f, 0.12f, 0.08f}, {0.46f, 0.42f, -0.12f},
-                {-0.46f, 0.40f, -0.12f}, {0.0f, 0.58f, 0.12f}, {0.18f, 0.95f, 0.0f}, {-0.2f, 0.9f, 0.0f}, {0.1f, 0.0f, 0.1f}};
+                {0.05f, -0.30f, 0.06f}, {0.30f, -0.04f, 0.02f}, {-0.28f, -0.04f, 0.02f}, {0.12f, -0.10f, 0.08f}, {0.44f, 0.38f, -0.08f},
+                {-0.44f, 0.36f, -0.08f}, {0.02f, 0.52f, 0.14f}, {0.16f, 0.92f, 0.02f}, {-0.18f, 0.88f, 0.02f}, {-0.08f, 0.10f, 0.08f}};
             const auto& sp = kSpots[static_cast<int>(rnd(0.0f, 9.99f))];
-            const V3 spot = F.m + F.r * ((sp[0] + rnd(-0.06f, 0.06f)) * F.L) + F.u * ((sp[1] + rnd(-0.05f, 0.05f)) * F.L) + F.f * (sp[2] * F.L);
-            RE::NiPoint3 at; V3 fw, uw;
-            if (FaceToWorld(F, spot + F.f * (0.5f * F.L), at, &fw, &uw)) {   // from just in front of his face, at it
-                const V3 v = fw * -45.0f + uw * rnd(-6.0f, 3.0f);
-                std::uint32_t st = 0;
-                OStrandsLink::EmitAt(a, at, {v.x, v.y, v.z}, static_cast<int>(rnd(6.0f, 14.0f)), F.rgb, &st);
+            const V3 spot = F.m + F.r * ((sp[0] + rnd(-0.05f, 0.05f)) * F.L) + F.u * ((sp[1] + rnd(-0.04f, 0.04f)) * F.L) + F.f * (sp[2] * F.L);
+            RE::NiPoint3 at;
+            if (FaceToWorld(F, spot, at)) {
+                const float k = F.L / 12.0f;   // his head's size (12 = a man's)
+                if (OStrandsLink::FaceStrand(a, at, rnd(0.7f, 1.2f), rnd(240.0f, 600.0f), rnd(1.5f, 5.0f) * k, F.rgb)) {
+                    if (!F.toldDrops) { F.toldDrops = true; logger::info("Anatomica face: {:08X} cum on his face - OStrands strands (mouth from {})", id, F.lipBones ? "his lip bones" : "his head bone"); }
+                } else if (!F.toldDrops) { F.toldDrops = true; logger::info("Anatomica face: {:08X} cum on his face needs OStrands 0.8.0.9e or newer (strands)", id); }
             }
         }
     }
