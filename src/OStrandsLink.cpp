@@ -752,7 +752,19 @@ namespace OStrandsLink {
                 if (!lower && n.ends_with("Bottom Lip Center")) lower = o;
                 if (auto* nd = o->AsNode()) for (auto& c : nd->GetChildren()) walk(c.get());
             };
-            walk(head);
+            // 2.7b: the lip bones his face is skinned to first (a rebuilt face can leave old copies hung on him)
+            if (auto* fg = Fluid::FaceGeoOf(a, root)) {
+                auto* si = fg->GetGeometryRuntimeData().skinInstance.get();
+                if (si && si->skinData && si->bones)
+                    for (std::uint32_t i = 0; i < si->skinData->GetBoneCount(); ++i) {
+                        auto* o = si->bones[i];
+                        const std::string_view n = o && o->name.c_str() ? o->name.c_str() : "";
+                        if (!upper && n.ends_with("Upper Lip Center")) upper = o;
+                        if (!lower && n.ends_with("Bottom Lip Center")) lower = o;
+                    }
+                if (!(upper && lower)) upper = lower = nullptr;
+            }
+            if (!(upper && lower)) walk(head);
             if (!(upper && lower)) walk(root);
             if (upper && lower) mouth = (upper->world.translate + lower->world.translate) * 0.5f;
         }
@@ -763,7 +775,8 @@ namespace OStrandsLink {
         for (int i = 0; i < spurts; ++i) {   // fanned a little: some across his lips, some higher on his cheek and nose
             const float sx = Rand(-1.0f, 1.0f), sy = Rand(-0.3f, 1.0f);
             const RE::NiPoint3 from = mouth + fwd * 1.2f + side * (sx * 0.8f) + up * (sy * 0.8f - 0.6f);   // 2.6m: at his lips (2.6l: 3 out, 2.6k: 9)
-            const RE::NiPoint3 to = mouth + side * (sx * 2.2f) + up * (sy * 2.5f);
+            // 2.7b: aimed into his face (it was aimed up along it, and most of it flew off into the air above his head)
+            const RE::NiPoint3 to = mouth + side * (sx * 2.2f) + up * (sy * 2.5f) - fwd * 1.5f;
             RE::NiPoint3 dir = to - from;
             dir = dir / std::max(dir.Length(), 0.01f);
             Out(a, g_nextStream++, from, dir * (kind == 1 ? 3.2f : 2.6f) + up * 0.4f, each, rgb);

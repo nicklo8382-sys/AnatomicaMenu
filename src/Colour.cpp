@@ -3301,10 +3301,12 @@ namespace Colour {
                 Help("His cum colour: the man under your crosshair (his race's or skin rule's cum colour, Colours page).");
             }
             Tr::TextDisabled("Each face look on him for 20 s (Mouth & Face page, How his face looks):");
-            static const char* kLayers[] = {"Wet lips", "Red, swollen lips", "Flushed cheeks", "Tears", "Cum on his face", "Sweat on his face", "Sweat on his body"};
-            for (int i = 0; i < 7; ++i) {
-                if (i % 4) ImGuiMCP::SameLine();
-                if (Tr::Button((std::string(Lang::T(kLayers[i])) + "##fl" + std::to_string(i)).c_str())) { Face::TestLayer(a, i); faceLast = Lang::T(kLayers[i]); }
+            // 2.7b: wet lips, red swollen lips and tears are gone (2.6v) - their buttons too
+            static const char* kLayers[] = {"Flushed cheeks", "Cum on his face", "Sweat on his face", "Sweat on his body"};
+            static const int   kLayerOf[] = {2, 4, 5, 6};
+            for (int i = 0; i < 4; ++i) {
+                if (i) ImGuiMCP::SameLine();
+                if (Tr::Button((std::string(Lang::T(kLayers[i])) + "##fl" + std::to_string(kLayerOf[i])).c_str())) { Face::TestLayer(a, kLayerOf[i]); faceLast = Lang::T(kLayers[i]); }
             }
             if (Tr::Button("All of them")) { Face::TestLayer(a, -1); faceLast = Lang::T("All of them"); }
             ImGuiMCP::SameLine();

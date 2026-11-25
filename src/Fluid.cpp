@@ -1745,12 +1745,34 @@ namespace {
         if (!sp && si && si->skinData) sp = si->skinData->skinPartition.get();
         return sp ? sp->vertexCount : 0;
     }
+    // 2.7b: a face rebuilt in a scene (a face paint change) can leave his old face hung on him for a while: it no longer
+    // moves with his head, so cum put on his face from it landed in the air. Only a face skinned to his head bone counts.
+    bool OnLiveHead(RE::BSGeometry* g_, RE::NiAVObject* hb) {
+        if (!hb) return true;
+        auto* si = g_ ? g_->GetGeometryRuntimeData().skinInstance.get() : nullptr;
+        if (!si || !si->skinData || !si->bones) return false;
+        const std::uint32_t nb = si->skinData->GetBoneCount();
+        for (std::uint32_t i = 0; i < nb; ++i) if (si->bones[i] == hb) return true;
+        return false;
+    }
     RE::BSGeometry* HeadGeo(RE::Actor* a, RE::NiAVObject* root) {
+        auto* hb = root->GetObjectByName(RE::BSFixedString("NPC Head [Head]"));
+        RE::BSGeometry* named = nullptr;
         if (auto* npc = a->GetActorBase())
-            if (auto* hp = npc->GetCurrentHeadPartByType(RE::BGSHeadPart::HeadPartType::kFace); hp && !hp->formEditorID.empty())
-                if (auto* o = root->GetObjectByName(hp->formEditorID); o && o->AsGeometry() && VertsOf(o->AsGeometry())) return o->AsGeometry();
+            if (auto* hp = npc->GetCurrentHeadPartByType(RE::BGSHeadPart::HeadPartType::kFace); hp && !hp->formEditorID.empty()) {
+                if (auto* o = root->GetObjectByName(hp->formEditorID); o && o->AsGeometry() && VertsOf(o->AsGeometry())) {
+                    if (OnLiveHead(o->AsGeometry(), hb)) return o->AsGeometry();
+                    named = o->AsGeometry();
+                }
+                RE::BSGeometry* live = nullptr;   // 2.7b: another copy of it, on his head as it is now
+                RE::BSVisit::TraverseScenegraphGeometries(root, [&](RE::BSGeometry* geo) {
+                    if (geo->name == hp->formEditorID.c_str() && VertsOf(geo) && OnLiveHead(geo, hb)) { live = geo; return RE::BSVisit::BSVisitControl::kStop; }
+                    return RE::BSVisit::BSVisitControl::kContinue;
+                });
+                if (live) return live;
+            }
         auto* fn = root->GetObjectByName(RE::BSFixedString("BSFaceGenNiNodeSkinned"));
-        if (!fn) return nullptr;
+        if (!fn) return named;
         RE::BSGeometry* best = nullptr; std::uint32_t most = 0;
         RE::BSVisit::TraverseScenegraphGeometries(fn, [&](RE::BSGeometry* geo) {
             std::string n = geo->name.c_str() ? geo->name.c_str() : "";
@@ -1759,10 +1781,10 @@ namespace {
                 n.find("beard") != std::string::npos || n.find("mouth") != std::string::npos || n.find("teeth") != std::string::npos || n.find("tongue") != std::string::npos)
                 return RE::BSVisit::BSVisitControl::kContinue;
             const std::uint32_t v = VertsOf(geo);
-            if (v > most) { most = v; best = geo; }
+            if (v > most && OnLiveHead(geo, hb)) { most = v; best = geo; }
             return RE::BSVisit::BSVisitControl::kContinue;
         });
-        return best;
+        return best ? best : named;
     }
     // his mouth, forward, up and the head's size in the head mesh's own space (the mask is drawn there)
     bool FaceFrame(FaceSt& F, RE::NiAVObject* root) {
@@ -1791,7 +1813,14 @@ namespace {
         F.lipBones = false;
         {
             RE::NiAVObject* up = nullptr; RE::NiAVObject* lo = nullptr;
-            RE::BSVisit::TraverseScenegraphObjects(root, [&](RE::NiAVObject* o) {
+            for (std::uint32_t i = 0; i < nb; ++i) {   // 2.7b: the ones his face is skinned to first (old copies can hang on him)
+                auto* o = si->bones[i];
+                const std::string_view n(o && o->name.c_str() ? o->name.c_str() : "");
+                if (!up && n.ends_with("Upper Lip Center")) up = o;
+                else if (!lo && n.ends_with("Bottom Lip Center")) lo = o;
+            }
+            if (!(up && lo)) up = lo = nullptr;
+            if (!up) RE::BSVisit::TraverseScenegraphObjects(root, [&](RE::NiAVObject* o) {
                 const std::string_view n(o->name.c_str() ? o->name.c_str() : "");
                 if (!up && n.ends_with("Upper Lip Center")) up = o;
                 else if (!lo && n.ends_with("Bottom Lip Center")) lo = o;
@@ -2703,6 +2732,7 @@ namespace Fluid {
         }
     }
     void SetFaceFit(const FaceFit& f) { std::lock_guard lk(g_mx); g_fit = f; }
+    RE::BSGeometry* FaceGeoOf(RE::Actor* a, RE::NiAVObject* root) { return a && root ? HeadGeo(a, root) : nullptr; }   // 2.7b
     std::string FaceInfo(RE::FormID id) {
         std::lock_guard lk(g_mx);
         auto it = g_face.find(id);

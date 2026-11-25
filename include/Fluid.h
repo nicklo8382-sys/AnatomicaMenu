@@ -58,6 +58,7 @@ namespace Fluid {
     struct FaceFit { float scale = 1.0f, up = 0.0f, out = 0.0f; };   // the layers' size and where they sit (Mouth & Face page)
     void FaceLook(RE::FormID id, const float amount[kFaceLayers], const float cumRgb[3], const FaceFit* fit = nullptr);   // fit: his race's own (2.6j)
     void SetFaceFit(const FaceFit& f);
+    RE::BSGeometry* FaceGeoOf(RE::Actor* a, RE::NiAVObject* root);   // 2.7b: his face as it is drawn now (not an old copy)
     std::string FaceInfo(RE::FormID id);           // one line for the menu
     std::string SchlongDesc(RE::Actor* giver);
     std::string SchlongBones(RE::Actor* giver);   // testing: the bones his schlong mesh is skinned to

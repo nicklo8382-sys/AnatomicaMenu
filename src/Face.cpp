@@ -790,7 +790,7 @@ namespace Face {
                         if (!t) t = RE::PlayerCharacter::GetSingleton();
                         if (t) { g_testId = t->GetFormID(); g_testUntil = Now() + 20.0; g_testLayer = -1; }
                     }
-                    Help("The one clicked in the console or under your crosshair, or you. To check the fitting: lips, cheeks, tears, cum and sweat all at once.");
+                    Help("The one clicked in the console or under your crosshair, or you. To check the fitting: cheeks, cum and sweat all at once.");
                     if (g_testId) { const auto info = Fluid::FaceInfo(g_testId); if (!info.empty()) Tr::TextDisabled(info.c_str()); }
                 }
             }
