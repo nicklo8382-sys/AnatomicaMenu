@@ -1256,7 +1256,7 @@ const char* const kKeys[] = {
     "Quiet while SkyrimNet is running",
     "SkyrimNet writes its own lines in scenes. On: Anatomica's DDF lines stay quiet whenever SkyrimNet is installed, so they don't talk over each other.",
     "SkyrimNet is installed: Anatomica's lines are quiet.",
-    "Your own lines: write them in DDF (its Author Mode, or a .json in Data\\TMSDynamicDialogue\\Packs) using the \"AnatomicaDDF\" body morphs listed in Anatomica's README.",
+    "Your own lines: write them in DDF (its Author Mode, or a .json in Data\\TMSDynamicDialogue\\Packs) using the Anatomica factions (Anatomica.esp) listed in Anatomica's README.",
     "Men with Anatomica lines possible right now: {}",
     "Training",
     "How big he has been conditioned to take comfortably, kept with the save. It grows while he is taken (faster with a man bigger than he is used to, and going deep) and fades when he is left alone. A trained man opens faster, gets less sore and his gape closes sooner. DDF and SkyrimNet know about it.",

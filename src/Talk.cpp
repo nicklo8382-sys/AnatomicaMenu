@@ -72,6 +72,31 @@ namespace Talk {
             "AnatomicaDDF Bond", "AnatomicaDDF ScentTop", "AnatomicaDDF MoonTop"};
         using Vals = std::array<float, kN>;
 
+        // 2.7c: the values go to DDF as faction ranks (Anatomica.esp), not RaceMenu body morphs - DDF could not reach
+        // RaceMenu on some setups ("RaceMenuBodyMorph interface unavailable": every Anatomica line was rejected), and a
+        // faction rank is something every mod can read (SkyrimNet's get_faction_rank, dialogue / perk conditions, other
+        // DDF packs). Rank = value x 10 (0-127). The scene factions (Anatomica_DDF_*, 0x801.., in kNames' order) are set
+        // while he is in a scene and taken off after; the state factions (Anatomica_State_*, after them) stay on him.
+        constexpr std::uint32_t kFacBase = 0x801;
+        enum St { kSVirgin, kSExp, kSOralExp, kSTrained, kSSore, kSGape, kSFilled, kSPlugged, kSBond, kSColdSeed, kSN };
+        constexpr std::uint32_t kStateBase = kFacBase + kN;
+        std::array<RE::TESFaction*, kN> g_fac{};
+        std::array<RE::TESFaction*, kSN> g_sfac{};
+        int g_facOk = -1;   // -1 not looked yet, 0 Anatomica.esp's factions not there, 1 found
+        bool Factions() {
+            if (g_facOk >= 0) return g_facOk == 1;
+            auto* dh = RE::TESDataHandler::GetSingleton();
+            if (!dh) return false;
+            bool ok = true;
+            for (int i = 0; i < kN; ++i) ok &= (g_fac[i] = dh->LookupForm<RE::TESFaction>(kFacBase + i, "Anatomica.esp")) != nullptr;
+            for (int i = 0; i < kSN; ++i) ok &= (g_sfac[i] = dh->LookupForm<RE::TESFaction>(kStateBase + i, "Anatomica.esp")) != nullptr;
+            g_facOk = ok ? 1 : 0;
+            logger::info("Anatomica: {} (Anatomica.esp)", ok ? "DDF / state factions found" : "DDF / state factions missing - update Anatomica.esp (no DDF lines, no faction states)");
+            return ok;
+        }
+        std::int8_t Rank(float v) { return static_cast<std::int8_t>(std::clamp<long>(std::lround(v * 10.0f), 0L, 127L)); }
+        std::unordered_map<RE::FormID, std::array<int, kSN>> g_stateSent;   // what each man's state factions say now (-1 = not set)
+
         struct Man {
             double lastNow = -1e9;            // when he was last being taken
             std::array<bool, kCN> allow{};    // rolled at the start of each scene
@@ -123,14 +148,55 @@ namespace Talk {
         }
 
         void Write(RE::Actor* a, const Vals& v) {
-            if (!g_sent.contains(a->GetFormID()) && v[kTaken] > 0.0f)
+            const bool fresh = !g_sent.contains(a->GetFormID());
+            if (fresh && v[kTaken] > 0.0f)
                 logger::info("Anatomica DDF: lines possible for {} (exp {:.0f}, first {:.0f}, open {:.2f}, filled {:.2f})", a->GetName(), v[kExp], v[kFirst], v[kOpen], v[kFilled]);
+            if (!Factions()) return;
             auto& sent = g_sent[a->GetFormID()];
             for (int i = 0; i < kN; ++i) {
-                if (std::abs(sent[i] - v[i]) > 0.02f) {
-                    Engine::BodyMorph(a, kNames[i], kKey, v[i]);   // no model update: these names move nothing on the body
+                // 2.7c: every scene faction on him from the start, at rank 0 too (a "<= 0" condition needs him in it)
+                if (fresh || Rank(sent[i]) != Rank(v[i])) {
+                    a->AddToFaction(g_fac[i], Rank(v[i]));
                     sent[i] = v[i];
                 }
+            }
+        }
+        void Unwrite(RE::Actor* a) {   // 2.7c: the scene over - off the scene factions
+            if (!Factions()) return;
+            for (int i = 0; i < kN; ++i) if (a->IsInFaction(g_fac[i])) a->RemoveFromFaction(g_fac[i]);
+        }
+        // 2.7c: his lasting state as factions (also without DDF): virgin, experience, oral experience, training, soreness,
+        // gape, how full he is, a plug, a Vampire Lord's bond / cold seed. Only what changed is written.
+        void WriteState(RE::Actor* a) {
+            if (!a || !Factions()) return;
+            const RE::FormID id = a->GetFormID();
+            std::array<int, kSN> r;
+            r.fill(-1);
+            const Virgin::Info vi = Virgin::Get(id);
+            if (vi.known) {
+                r[kSVirgin] = vi.virgin ? 1 : 0;
+                const std::string lvl = vi.level ? vi.level : "";
+                r[kSExp] = lvl == "virgin" ? 0 : lvl == "inexperienced" ? 1 : lvl == "experienced" ? 2 : 3;
+            }
+            const Face::Oral o = Face::OralOf(id);
+            r[kSOralExp] = o.exp < 0.05f ? 0 : o.exp < 1.0f ? 1 : o.exp < 4.0f ? 2 : 3;
+            if (const float tl = Training::Level(id); tl >= 0.0f) r[kSTrained] = Rank(tl);
+            const Colour::Snapshot sn = Colour::SnapshotOf(a);
+            r[kSSore] = static_cast<int>(std::lround(std::clamp(std::max({sn.tender, sn.swell, sn.loose}), 0.0f, 1.0f) * 100.0f));
+            r[kSGape] = static_cast<int>(std::lround(std::clamp(Engine::GapeOf(id), 0.0f, 1.0f) * 100.0f));
+            if (OStrandsLink::Installed()) {
+                const OStrandsLink::Held h = OStrandsLink::HeldOf(id);
+                r[kSFilled] = Rank(h.vol);
+                r[kSPlugged] = h.plugged ? 1 : 0;
+            }
+            r[kSBond] = Training::Bond(id) > 0.0f ? 1 : 0;
+            r[kSColdSeed] = Training::Cold(id) ? 1 : 0;
+            auto it = g_stateSent.find(id);
+            if (it == g_stateSent.end()) { it = g_stateSent.emplace(id, std::array<int, kSN>{}).first; it->second.fill(-2); }
+            for (int i = 0; i < kSN; ++i) {
+                if (r[i] < 0 || r[i] == it->second[i]) continue;
+                a->AddToFaction(g_sfac[i], static_cast<std::int8_t>(std::min(r[i], 127)));
+                it->second[i] = r[i];
             }
         }
 
@@ -145,16 +211,22 @@ namespace Talk {
             return 0;
         }
 
-        void Tick() {
-            if (!Installed()) return;
+        void Tick(bool ddf) {
             std::lock_guard lk(g_mx);
-            if (g_sweep.exchange(false)) {   // a save keeps RaceMenu's morphs: clear ours off everyone loaded
+            if (g_sweep.exchange(false)) {   // a save keeps RaceMenu's morphs (before 2.7c) and the factions: clear ours off everyone loaded
+                auto clear = [](RE::Actor* a) { Engine::ClearMorphKey(a, kKey); Unwrite(a); };
                 if (auto* pl = RE::ProcessLists::GetSingleton()) {
-                    for (auto& h : pl->highActorHandles) if (auto a = h.get()) Engine::ClearMorphKey(a.get(), kKey);
+                    for (auto& h : pl->highActorHandles) if (auto a = h.get()) clear(a.get());
                 }
-                if (auto* p = RE::PlayerCharacter::GetSingleton()) Engine::ClearMorphKey(p, kKey);
+                if (auto* p = RE::PlayerCharacter::GetSingleton()) clear(p);
                 g_sent.clear();
+                g_stateSent.clear();
             }
+            // 2.7c: the lasting state factions - the player always, and the men in a scene
+            WriteState(RE::PlayerCharacter::GetSingleton());
+            for (RE::FormID id : Engine::DuringIds())
+                if (auto* a = RE::TESForm::LookupByID<RE::Actor>(id); a && a->Is3DLoaded() && !a->IsPlayerRef()) WriteState(a);
+            if (!ddf) return;   // (no DDF: only the state factions)
             const bool quiet = !g.on || (g.muteNet && Net());
             const double t = Now();
             std::unordered_map<RE::FormID, Vals> want;
@@ -299,7 +371,7 @@ namespace Talk {
             std::vector<RE::FormID> gone;
             for (auto& [id, s] : g_sent) if (!want.contains(id)) gone.push_back(id);
             for (RE::FormID id : gone) {
-                if (auto* a = RE::TESForm::LookupByID<RE::Actor>(id)) Engine::ClearMorphKey(a, kKey);
+                if (auto* a = RE::TESForm::LookupByID<RE::Actor>(id)) Unwrite(a);
                 g_sent.erase(id);
             }
         }
@@ -307,15 +379,16 @@ namespace Talk {
         void Loop() {
             for (;;) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(400));
-                if (!Probe()) {
-                    if (g_have == -2) return;   // not installed: nothing more runs (the thread ends)
-                    std::this_thread::sleep_for(std::chrono::seconds(5));
-                    continue;
+                const bool ddf = Probe();
+                if (!ddf) {
+                    // 2.7c: without DDF the state factions still go on (every 2 s); while it may still load, wait
+                    std::this_thread::sleep_for(std::chrono::seconds(g_have == -2 ? 2 : 5));
+                    if (g_have != -2) continue;
                 }
                 auto* ui = RE::UI::GetSingleton();
                 if (!ui || ui->GameIsPaused()) continue;
                 if (g_queued.exchange(true)) continue;
-                if (auto* tq = SKSE::GetTaskInterface()) tq->AddTask([]() { g_queued = false; Tick(); });
+                if (auto* tq = SKSE::GetTaskInterface()) tq->AddTask([ddf]() { g_queued = false; Tick(ddf); });
                 else g_queued = false;
             }
         }
@@ -369,7 +442,7 @@ namespace Talk {
             Help("SkyrimNet writes its own lines in scenes. On: Anatomica's DDF lines stay quiet whenever SkyrimNet is installed, so they don't talk over each other.");
             if (g.muteNet && Net()) Tr::TextDisabled("SkyrimNet is installed: Anatomica's lines are quiet.");
             Tr::TextDisabled("Your own lines: write them in DDF (its Author Mode, or a .json in Data\\TMSDynamicDialogue\\Packs) using the "
-                             "\"AnatomicaDDF\" body morphs listed in Anatomica's README.");
+                             "Anatomica factions (Anatomica.esp) listed in Anatomica's README.");
             ImGuiMCP::Unindent();
         }
         if (Installed()) Tr::TextDisabled(Lang::Fmt("Men with Anatomica lines possible right now: {}", g_live).c_str());
